@@ -157,13 +157,17 @@ threading.Thread(target=_auto_status_emitter, daemon=True).start()
 @app.route('/', methods=['GET'])
 def index():
     """Serve the frontend"""
-    return send_from_directory('../frontend', 'index.html')
+    return send_from_directory('../frontend-react/dist', 'index.html')
 
 
 @app.route('/<path:filename>', methods=['GET'])
 def serve_frontend(filename):
-    """Serve frontend static files"""
-    return send_from_directory('../frontend', filename)
+    """Serve frontend static files (React SPA with client-side routing)"""
+    dist_dir = os.path.join(os.path.dirname(__file__), '..', 'frontend-react', 'dist')
+    full_path = os.path.join(dist_dir, filename)
+    if os.path.isfile(full_path):
+        return send_from_directory(dist_dir, filename)
+    return send_from_directory(dist_dir, 'index.html')
 
 
 @app.route('/api/track', methods=['POST'])

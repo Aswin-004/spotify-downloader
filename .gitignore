@@ -49,6 +49,11 @@ Thumbs.db
 # Node (if applicable)
 node_modules/
 
+# Frontend build & legacy backup
+frontend-react/dist/
+frontend-react/node_modules/
+frontend-legacy/
+
 # OS
 .DS_Store
 Thumbs.db
