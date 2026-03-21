@@ -2,16 +2,67 @@
 Audio Download Service
 Handles downloading audio files using yt-dlp
 Direct, simple, and reliable YouTube download pipeline
+With duration validation and multi-stage fallback
 """
 import os
 import re
+import time
 import logging
+import threading
+from difflib import SequenceMatcher
 import yt_dlp
 from pathlib import Path
 from config import config
-from utils import build_youtube_search_query, validate_filename, setup_logging
+from utils import build_youtube_search_query, build_youtube_fallback_query, validate_filename, setup_logging
 
 logger = setup_logging(__name__)
+
+# Global download queue status (shared with app.py)
+download_queue_status = {
+    "total": 0,
+    "completed": 0,
+    "current": None,
+    "pending": [],
+    "active_workers": 0,
+}
+_queue_lock = threading.Lock()
+
+# Manual download priority flag — auto workers yield when manual is active
+# When set, it means manual download is NOT active (auto can proceed)
+_manual_idle = threading.Event()
+_manual_idle.set()  # starts idle (auto can proceed)
+
+
+def set_manual_active(active):
+    """Signal that a manual download is active (auto workers should yield)."""
+    if active:
+        _manual_idle.clear()  # block auto workers
+    else:
+        _manual_idle.set()  # unblock auto workers
+
+
+def wait_if_manual_active(timeout=60):
+    """Block until manual download finishes. Returns True if had to wait."""
+    if _manual_idle.is_set():
+        return False
+    logger.info("[auto] Waiting for manual download to finish...")
+    _manual_idle.wait(timeout=timeout)
+    return True
+
+
+def update_queue(total=None, completed=None, current=None, pending=None, active_delta=None):
+    """Thread-safe update of global queue status."""
+    with _queue_lock:
+        if total is not None:
+            download_queue_status["total"] = total
+        if completed is not None:
+            download_queue_status["completed"] = completed
+        if current is not None:
+            download_queue_status["current"] = current
+        if pending is not None:
+            download_queue_status["pending"] = pending
+        if active_delta is not None:
+            download_queue_status["active_workers"] = max(0, download_queue_status["active_workers"] + active_delta)
 
 
 def clean_filename(name):
@@ -46,6 +97,11 @@ def sanitize_filename(name):
     return clean_filename(name)
 
 
+def normalize(text):
+    """Normalize a string for consistent duplicate comparison."""
+    return " ".join(text.lower().split()).strip()
+
+
 class DownloaderService:
     """Service for downloading audio from YouTube with intelligent fallback"""
     
@@ -53,6 +109,7 @@ class DownloaderService:
         """Initialize downloader service"""
         # Use custom DOWNLOAD_PATH from config, fallback to DOWNLOAD_DIR
         self.download_dir = config.DOWNLOAD_PATH if hasattr(config, 'DOWNLOAD_PATH') else config.DOWNLOAD_DIR
+        self._last_match_quality = "exact"  # Track match quality: exact, approx, fallback
         self._ensure_download_dir()
     
     def _ensure_download_dir(self):
@@ -123,7 +180,6 @@ class DownloaderService:
             errors = []
             
             logger.info(f"Starting playlist download for {len(tracks)} tracks")
-            print(f"[playlist] Starting download of {len(tracks)} tracks")
             
             for idx, track in enumerate(tracks, 1):
                 try:
@@ -148,7 +204,6 @@ class DownloaderService:
                         downloads.append(result['filename'])
                         msg = f"Downloaded ({idx}/{len(tracks)}): {result['filename']}"
                         logger.info(msg)
-                        print(f"[playlist] ✓ {msg}")
                     
                     elif result['status'] == 'fallback':
                         # Auto-download failed, but fallback link provided
@@ -160,13 +215,11 @@ class DownloaderService:
                         })
                         msg = f"Fallback link for ({idx}/{len(tracks)}): {title}"
                         logger.info(msg)
-                        print(f"[playlist] ⚠ {msg}")
                 
                 except Exception as e:
                     error_msg = f"Track {idx} ({title}): {str(e)}"
                     logger.error(error_msg)
                     errors.append(error_msg)
-                    print(f"[playlist] ✗ {error_msg}")
             
             successful = len(downloads)
             fallback_count = len(fallback_tracks)
@@ -185,7 +238,6 @@ class DownloaderService:
                 summary = f"Downloaded {successful}/{total} tracks. {fallback_count} fallback links. {failed} track(s) failed."
             
             logger.info(f"Playlist download completed: {summary}")
-            print(f"[playlist] Result: {summary}")
             
             return {
                 "status": overall_status,
@@ -214,7 +266,7 @@ class DownloaderService:
                 "message": error_msg
             }
     
-    def download_track(self, title, artist, album=None, progress_callback=None, output_dir=None, output_filename=None):
+    def download_track(self, title, artist, album=None, progress_callback=None, output_dir=None, output_filename=None, duration_ms=None):
         """
         Download track audio from YouTube and convert to MP3
         With intelligent fallback: if auto-download fails, provide manual YouTube link
@@ -226,6 +278,7 @@ class DownloaderService:
             progress_callback (callable, optional): Called with (percent, status_text)
             output_dir (str, optional): Custom output directory (e.g. album folder)
             output_filename (str, optional): Custom filename without extension (e.g. "01 - Track")
+            duration_ms (int, optional): Expected track duration in ms for validation
         
         Returns:
             dict: Download result with status 'success' or 'fallback'
@@ -245,6 +298,33 @@ class DownloaderService:
                 clean_name = safe_title  # Clean title only, no YouTube naming
             
             os.makedirs(actual_dir, exist_ok=True)
+            
+            # Skip if file already exists (duplicate prevention)
+            expected_path = os.path.join(actual_dir, f"{clean_name}.mp3")
+            if os.path.isfile(expected_path) and os.path.getsize(expected_path) > 1000:
+                logger.info(f"Skipping duplicate: {clean_name}.mp3")
+                return {
+                    "status": "success",
+                    "filename": f"{clean_name}.mp3",
+                    "filepath": expected_path,
+                    "message": f"Already exists: {clean_name}.mp3"
+                }
+
+            # Normalized duplicate check across the target directory
+            norm_key = normalize(clean_name)
+            for existing in os.listdir(actual_dir):
+                if existing.lower().endswith(".mp3"):
+                    if normalize(existing[:-4]) == norm_key:
+                        existing_path = os.path.join(actual_dir, existing)
+                        if os.path.getsize(existing_path) > 1000:
+                            logger.info(f"Skipping normalized duplicate: {existing}")
+                            return {
+                                "status": "success",
+                                "filename": existing,
+                                "filepath": existing_path,
+                                "message": f"Already exists (normalized match): {existing}"
+                            }
+            
             logger.info(f"Target: {actual_dir}/{clean_name}.mp3")
             
             # Build search query for YouTube
@@ -253,15 +333,25 @@ class DownloaderService:
             
             # Attempt download
             try:
-                filename = self._download_from_youtube(search_query, clean_name, progress_callback, output_dir=actual_dir)
+                filename = self._download_from_youtube(search_query, clean_name, progress_callback, output_dir=actual_dir, duration_ms=duration_ms, spotify_title=title, artist=artist)
                 filepath = os.path.join(actual_dir, filename)
                 
+                # Post-download file size sanity check
+                if duration_ms and duration_ms > 0 and os.path.isfile(filepath):
+                    expected_bytes = (duration_ms / 1000.0) * (192000 / 8)  # 192kbps MP3
+                    actual_bytes = os.path.getsize(filepath)
+                    if actual_bytes > expected_bytes * 3:
+                        logger.warning(f"File too large: {actual_bytes} bytes vs ~{expected_bytes:.0f} expected")
+                        os.remove(filepath)
+                        raise Exception(f"Downloaded file too large ({actual_bytes/1024/1024:.1f}MB vs ~{expected_bytes/1024/1024:.1f}MB expected) — wrong track")
+
                 # SUCCESS - Auto download worked
                 result = {
                     "status": "success",
                     "filename": filename,
                     "filepath": filepath,
-                    "message": f"Successfully downloaded: {filename}"
+                    "message": f"Successfully downloaded: {filename}",
+                    "match_quality": self._last_match_quality,
                 }
                 logger.info(f"Track downloaded successfully: {filename}")
                 return result
@@ -316,7 +406,6 @@ class DownloaderService:
             Exception: If download fails
         """
         logger.info(f"[{source_name}] Downloading: {query}")
-        print(f"[downloader] Using source: {source_name} | Query: {query}")
 
         # Locate ffmpeg (shipped with spotdl or in PATH)
         ffmpeg_dir = self._find_ffmpeg()
@@ -341,20 +430,11 @@ class DownloaderService:
             outtmpl = os.path.join(actual_dir, '%(title)s.%(ext)s')
 
         ydl_opts = {
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
             'overwrites': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'web'],
-                    'skip': ['hls', 'dash'],
-                },
-            },
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
             'socket_timeout': 15,
             'retries': 2,
             'fragment_retries': 2,
@@ -378,11 +458,10 @@ class DownloaderService:
                 info = ydl.extract_info(query, download=True)
         except Exception as e:
             logger.warning(f"[{source_name}] Primary attempt failed: {str(e)[:120]}")
-            print(f"[downloader] [{source_name}] Primary attempt failed, retrying with fallback format...")
 
-            # Attempt 2: fallback format for restricted/age-gated videos
+            # Attempt 2: broader format — any audio stream, even from combined formats
             fallback_opts = dict(ydl_opts)
-            fallback_opts['format'] = 'worstvideo+worstaudio/worst'
+            fallback_opts['format'] = 'bestaudio*'
             with yt_dlp.YoutubeDL(fallback_opts) as ydl:
                 info = ydl.extract_info(query, download=True)
 
@@ -392,7 +471,6 @@ class DownloaderService:
             if os.path.isfile(expected_path) and os.path.getsize(expected_path) > 1000:
                 result_name = f'{output_filename}.mp3'
                 msg = f"Downloaded via {source_name}: {result_name} ({os.path.getsize(expected_path)} bytes)"
-                print(f"[downloader] ✓ {msg}")
                 logger.info(msg)
                 return result_name
         else:
@@ -401,7 +479,6 @@ class DownloaderService:
                 filepath = os.path.join(actual_dir, filename)
                 if os.path.getsize(filepath) > 1000:
                     msg = f"Downloaded via {source_name}: {filename} ({os.path.getsize(filepath)} bytes)"
-                    print(f"[downloader] ✓ {msg}")
                     logger.info(msg)
                     return filename
 
@@ -444,16 +521,20 @@ class DownloaderService:
 
         return None
     
-    def _download_from_youtube(self, search_query, output_filename, progress_callback=None, output_dir=None):
+    def _download_from_youtube(self, search_query, output_filename, progress_callback=None, output_dir=None, duration_ms=None, spotify_title=None, artist=None):
         """
-        Download audio using multi-source fallback.
-        Tries: YouTube → SoundCloud
+        Download audio using multi-stage fallback with duration validation.
+        Stage 1: YouTube filtered (ytsearch5 + duration check + title filter)
+        Stage 2: YouTube unfiltered fallback
+        Stage 3: SoundCloud
         
         Args:
-            search_query (str): What to search for
+            search_query (str): Filtered search query
             output_filename (str): Clean filename without extension
             progress_callback (callable, optional): Called with (percent, status_text)
             output_dir (str, optional): Target directory
+            duration_ms (int, optional): Expected duration in ms for validation
+            spotify_title (str, optional): Original Spotify track title for content filtering
         
         Returns:
             str: Downloaded filename
@@ -463,31 +544,242 @@ class DownloaderService:
         """
         actual_dir = output_dir or self.download_dir
         os.makedirs(actual_dir, exist_ok=True)
-        logger.info(f"Starting multi-source download: {search_query}")
-        print(f"[downloader] Starting multi-source download for: {search_query}")
+        logger.info(f"Starting multi-stage download: {search_query}")
 
-        sources = [
-            (f"ytsearch1:{search_query}", "YouTube"),
-            (f"scsearch1:{search_query}", "SoundCloud"),
-        ]
+        MAX_RETRIES = 2  # retries per stage
 
-        last_error = None
-        for source_url, source_name in sources:
+        # Stage 1: YouTube with filtered query + duration validation + title filter (ytsearch10)
+        for attempt in range(1 + MAX_RETRIES):
             try:
-                print(f"[downloader] Trying source: {source_name}")
-                filename = self._try_download_with_query(source_url, source_name, progress_callback, output_dir=actual_dir, output_filename=output_filename)
-                logger.info(f"Successfully downloaded via {source_name}: {filename}")
+                suffix = f" (retry {attempt})" if attempt > 0 else ""
+                logger.info(f"Stage 1: YouTube filtered (ytsearch10){suffix}")
+                if progress_callback and attempt > 0:
+                    progress_callback(5, f"Retrying stage 1 ({attempt}/{MAX_RETRIES})...")
+                filename = self._try_download_with_duration_check(
+                    f"ytsearch10:{search_query}", "YouTube-filtered",
+                    progress_callback, output_dir=actual_dir,
+                    output_filename=output_filename, duration_ms=duration_ms,
+                    spotify_title=spotify_title, artist=artist
+                )
+                logger.info(f"Stage 1 success: {filename}")
+                self._last_match_quality = "exact"
                 return filename
             except Exception as e:
-                last_error = e
-                logger.warning(f"{source_name} failed: {str(e)[:120]}")
-                print(f"[downloader] {source_name} failed, trying next...")
-                continue
+                logger.warning(f"Stage 1 attempt {attempt+1} failed: {str(e)[:120]}")
+                if attempt < MAX_RETRIES:
+                    logger.info(f"[downloader] Stage 1 retry {attempt+1}/{MAX_RETRIES}...")
+                    time.sleep(1)
+                else:
+                    logger.info("[downloader] Stage 1 exhausted, trying stage 2...")
 
-        error_msg = f"All sources failed. Last error: {str(last_error)}"
+        # Stage 2: YouTube with unfiltered query + duration validation
+        parts = search_query.split(" official audio")[0] if " official audio" in search_query else search_query
+        unfiltered_query = parts + " audio"
+        for attempt in range(1 + MAX_RETRIES):
+            try:
+                suffix = f" (retry {attempt})" if attempt > 0 else ""
+                logger.info(f"Stage 2: YouTube unfiltered{suffix}")
+                if progress_callback and attempt > 0:
+                    progress_callback(5, f"Retrying stage 2 ({attempt}/{MAX_RETRIES})...")
+                filename = self._try_download_with_duration_check(
+                    f"ytsearch3:{unfiltered_query}", "YouTube-unfiltered",
+                    progress_callback, output_dir=actual_dir,
+                    output_filename=output_filename, duration_ms=duration_ms,
+                    spotify_title=spotify_title, artist=artist
+                )
+                logger.info(f"Stage 2 success: {filename}")
+                self._last_match_quality = "approx"
+                return filename
+            except Exception as e:
+                logger.warning(f"Stage 2 attempt {attempt+1} failed: {str(e)[:120]}")
+                if attempt < MAX_RETRIES:
+                    logger.info(f"[downloader] Stage 2 retry {attempt+1}/{MAX_RETRIES}...")
+                    time.sleep(1)
+                else:
+                    logger.info("[downloader] Stage 2 exhausted, trying SoundCloud...")
+
+        # Stage 3: SoundCloud fallback + duration validation
+        for attempt in range(1 + MAX_RETRIES):
+            try:
+                suffix = f" (retry {attempt})" if attempt > 0 else ""
+                logger.info(f"Stage 3: SoundCloud{suffix}")
+                if progress_callback and attempt > 0:
+                    progress_callback(5, f"Retrying stage 3 ({attempt}/{MAX_RETRIES})...")
+                filename = self._try_download_with_duration_check(
+                    f"scsearch3:{search_query}", "SoundCloud",
+                    progress_callback, output_dir=actual_dir,
+                    output_filename=output_filename, duration_ms=duration_ms,
+                    spotify_title=spotify_title, artist=artist
+                )
+                logger.info(f"Stage 3 success: {filename}")
+                self._last_match_quality = "fallback"
+                return filename
+            except Exception as e:
+                logger.warning(f"Stage 3 attempt {attempt+1} failed: {str(e)[:120]}")
+                if attempt < MAX_RETRIES:
+                    logger.info(f"[downloader] Stage 3 retry {attempt+1}/{MAX_RETRIES}...")
+                    time.sleep(1)
+
+        error_msg = f"All download stages failed for: {search_query}"
         logger.error(error_msg)
-        print(f"[downloader] ERROR: {error_msg}")
         raise Exception(error_msg)
+
+    @staticmethod
+    def _title_has_unwanted_tag(yt_title, spotify_title):
+        """Check if YouTube title contains unwanted variants not in the Spotify title.
+        Returns the tag name if found, None otherwise."""
+        unwanted = ['remix', 'live', 'cover', 'karaoke', 'instrumental']
+        yt_lower = yt_title.lower()
+        sp_lower = spotify_title.lower()
+        for tag in unwanted:
+            if tag in yt_lower and tag not in sp_lower:
+                return tag
+        return None
+
+    @staticmethod
+    def _string_similarity(a, b):
+        """Compute normalized similarity between two strings (0.0–1.0)."""
+        if not a or not b:
+            return 0.0
+        return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+    @staticmethod
+    def _duration_score(actual_secs, expected_secs, tolerance=15):
+        """Score duration match: 1.0 for exact, decaying to 0.0 at tolerance boundary."""
+        if not actual_secs or not expected_secs:
+            return 0.5  # unknown duration, neutral score
+        delta = abs(actual_secs - expected_secs)
+        if delta <= tolerance:
+            return 1.0 - (delta / tolerance)
+        return 0.0
+
+    def _score_candidate(self, entry, spotify_title, artist, expected_secs):
+        """Score a YouTube candidate using fuzzy similarity.
+        Returns (score, has_unwanted_tag) where score is 0.0–1.0."""
+        yt_title = entry.get('title', '')
+        vid_duration = entry.get('duration')
+
+        title_sim = self._string_similarity(spotify_title, yt_title) if spotify_title else 0.5
+        artist_sim = self._string_similarity(artist, yt_title) if artist else 0.5
+        dur_score = self._duration_score(vid_duration, expected_secs)
+
+        # Weighted score: title 50%, artist 30%, duration 20%
+        score = title_sim * 0.5 + artist_sim * 0.3 + dur_score * 0.2
+
+        # Bonuses for audio-specific results
+        yt_lower = yt_title.lower()
+        if 'official audio' in yt_lower:
+            score += 0.08
+        elif 'audio' in yt_lower:
+            score += 0.03
+        # Penalty for video-type results
+        if 'official video' in yt_lower or 'music video' in yt_lower:
+            score -= 0.05
+        if 'lyric' in yt_lower:
+            score -= 0.02
+
+        has_unwanted = self._title_has_unwanted_tag(yt_title, spotify_title) if spotify_title else None
+
+        return max(0.0, min(1.0, score)), has_unwanted
+
+    def _try_download_with_duration_check(self, query, source_name, progress_callback=None,
+                                           output_dir=None, output_filename=None, duration_ms=None,
+                                           spotify_title=None, artist=None):
+        """
+        Search YouTube, score candidates with fuzzy similarity matching,
+        then download the best match. Uses ±15s duration tolerance.
+        Falls back to tagged (remix/live) results if no clean match exists.
+        """
+        logger.info(f"[{source_name}] Extracting info: {query}")
+        ffmpeg_dir = self._find_ffmpeg()
+        actual_dir = output_dir or self.download_dir
+
+        extract_opts = {
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'socket_timeout': 15,
+        }
+
+        with yt_dlp.YoutubeDL(extract_opts) as ydl:
+            info = ydl.extract_info(query, download=False)
+
+        entries = info.get('entries', [info]) if info else []
+        if not entries:
+            raise Exception(f"[{source_name}] No search results")
+
+        expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
+
+        # Score all candidates
+        clean_candidates = []   # no unwanted tags
+        tagged_candidates = []  # has remix/live/cover but still a match
+        for i, entry in enumerate(entries):
+            if not entry:
+                continue
+            yt_title = entry.get('title', '')
+            vid_duration = entry.get('duration')
+
+            score, unwanted_tag = self._score_candidate(entry, spotify_title, artist, expected_secs)
+
+            # Hard reject: duration way too far off (>3x or <0.3x)
+            if expected_secs and vid_duration:
+                if vid_duration > expected_secs * 3 or vid_duration < expected_secs * 0.3:
+                    logger.info(f"[{source_name}] #{i+1} REJECT '{yt_title}' — duration {vid_duration}s wildly off ({expected_secs:.0f}s expected)")
+                    continue
+
+            # Duration within ±15s is strongly preferred
+            dur_ok = True
+            if expected_secs and vid_duration:
+                dur_ok = abs(vid_duration - expected_secs) <= 15
+
+            delta_str = f"Δ{abs(vid_duration - expected_secs):.1f}s" if expected_secs and vid_duration else "no-dur"
+            log_line = f"[{source_name}] #{i+1} '{yt_title}' — {delta_str}, score={score:.3f}"
+
+            if unwanted_tag:
+                tagged_candidates.append((score, entry, i, unwanted_tag))
+                logger.info(f"{log_line} (tagged: {unwanted_tag})")
+            elif dur_ok:
+                clean_candidates.append((score, entry, i))
+                logger.info(f"{log_line} CANDIDATE")
+            else:
+                # Duration outside ±15s but within 0.3x-3x — keep as low-priority
+                clean_candidates.append((score * 0.6, entry, i))
+                logger.info(f"{log_line} RELAXED")
+
+        # Pick best clean candidate
+        best_entry = None
+        if clean_candidates:
+            clean_candidates.sort(key=lambda x: x[0], reverse=True)
+            best_score, best_entry, best_idx = clean_candidates[0]
+            logger.info(f"[{source_name}] SELECTED #{best_idx+1} '{best_entry.get('title', '')}' (score={best_score:.3f})")
+
+        # Fallback: allow tagged results (remix/live) if no clean match
+        if not best_entry and tagged_candidates:
+            tagged_candidates.sort(key=lambda x: x[0], reverse=True)
+            best_score, best_entry, best_idx, tag = tagged_candidates[0]
+            logger.info(f"[{source_name}] TAGGED FALLBACK #{best_idx+1} '{best_entry.get('title', '')}' (score={best_score:.3f}, tag={tag})")
+
+        if not best_entry:
+            if expected_secs:
+                raise Exception(f"[{source_name}] No results within acceptable duration range ({expected_secs:.0f}s expected)")
+            # No duration info — just use the first result
+            best_entry = entries[0] if entries[0] else None
+
+        if not best_entry:
+            raise Exception(f"[{source_name}] No valid candidates found")
+
+        # Download the chosen entry by URL
+        video_url = best_entry.get('webpage_url') or best_entry.get('url')
+        if not video_url:
+            raise Exception(f"[{source_name}] No URL for selected entry")
+
+        logger.info(f"[{source_name}] Downloading: {best_entry.get('title', 'Unknown')} ({video_url})")
+        return self._try_download_with_query(
+            video_url, source_name, progress_callback,
+            output_dir=actual_dir, output_filename=output_filename
+        )
     
     def get_downloads_list(self):
         """

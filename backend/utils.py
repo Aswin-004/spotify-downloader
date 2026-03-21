@@ -123,7 +123,8 @@ def extract_spotify_track_id(spotify_url):
 
 def build_youtube_search_query(title, artist, album=None):
     """
-    Build a YouTube search query from track metadata
+    Build a YouTube search query from track metadata.
+    Uses filtered query to prefer official audio and exclude unwanted variants.
     
     Args:
         title (str): Track title
@@ -140,13 +141,27 @@ def build_youtube_search_query(title, artist, album=None):
     title = str(title).strip()
     artist = str(artist).strip()
     
-    # Build query: "Title Artist" for better results
-    query = f"{title} {artist}"
-    
-    if album:
-        query += f" {str(album).strip()}"
+    # Filtered query: prefer official audio, exclude live/remix/cover
+    query = f"{title} {artist} official audio -live -remix -cover -karaoke -instrumental"
     
     return query
+
+
+def build_youtube_fallback_query(title, artist):
+    """
+    Build an unfiltered YouTube search query as fallback.
+    Used when the filtered query returns no good match.
+    
+    Args:
+        title (str): Track title
+        artist (str): Artist name
+    
+    Returns:
+        str: Unfiltered search query
+    """
+    title = str(title).strip()
+    artist = str(artist).strip()
+    return f"{title} {artist} audio"
 
 
 def validate_filename(filename):
