@@ -1,182 +1,222 @@
-# Spotify Meta Downloader
+# 🎧 Spotify-Based Intelligent Music Downloader with Auto Playlist Sync
 
-A full-stack web application that downloads music from Spotify playlists using metadata matching. Features automatic playlist syncing, real-time WebSocket updates, intelligent audio matching with fuzzy scoring, and a dark-themed dashboard UI.
+A full-stack, real-time music pipeline that converts Spotify links into high-quality MP3 downloads using intelligent source matching, multi-source fallback, and automated playlist monitoring.
 
-## Features
+---
 
-- **Manual Download** — Paste any Spotify track, album, or playlist URL to download
-- **Auto Playlist Sync** — Monitors your Spotify playlist and downloads new tracks automatically
-- **Ingest Playlist** — Sync a second public playlist for discovery downloads
-- **Fuzzy Audio Matching** — Multi-stage search (YouTube → SoundCloud) with duration-validated fuzzy scoring
-- **Smart Folder Routing** — Routes downloads by artist rules, language detection (Devanagari → Bollywood), and source type
-- **Real-time Dashboard** — WebSocket-powered progress updates, queue status, and download history
-- **Metadata Caching** — Thread-safe JSON cache reduces Spotify API calls by 90%+ (track TTL: 7 days, playlist TTL: 30 min)
-- **Rate Limit Protection** — Automatic backoff with Retry-After extraction and proactive cooldown
-- **Duplicate Detection** — File registry + normalized name matching prevents re-downloads
+## 🚀 Features
 
-## Architecture
+* 🎯 **Manual Download**
 
+  * Paste Spotify track/album/playlist links
+  * Fetch metadata (title, artist, duration)
+  * Download & convert to MP3 (192 kbps)
+
+* 🔁 **Auto Playlist Sync**
+
+  * Monitors a Spotify playlist
+  * Detects newly added tracks
+  * Downloads automatically
+
+* 📥 **Ingest System (No OAuth)**
+
+  * Copy songs into a public “Ingest Playlist”
+  * App auto-detects and downloads
+  * Works with any playlist
+
+* 🧠 **Smart Matching Engine**
+
+  * yt-dlp powered search
+  * Scoring based on title, artist, duration
+  * Cleans noisy YouTube titles for accuracy
+
+* ⚡ **Multi-Source Fallback**
+
+  * YouTube → SoundCloud → fallback
+  * Improves reliability and success rate
+
+* 📁 **Auto File Organization**
+
+  * Organizes by Artist / Playlist / Custom rules
+
+* 📊 **Real-Time Dashboard**
+
+  * Live queue, progress, activity feed (Socket.IO)
+
+* 🛡️ **Rate Limit Handling**
+
+  * Caching + reduced polling
+  * Graceful handling of Spotify API limits
+
+---
+
+## 🏗️ Architecture
+
+```text
+Frontend (React + Tailwind + Socket.IO)
+        ↓
+Flask Backend (API + WebSocket)
+        ↓
+Spotify API (Metadata)
+        ↓
+Matching Engine (yt-dlp + scoring)
+        ↓
+FFmpeg (Audio conversion)
+        ↓
+Local Storage (organized files)
 ```
-├── backend/
-│   ├── app.py                 # Flask entry point, routes, WebSocket
-│   ├── config.py              # Centralized configuration (reads from .env)
-│   ├── spotify_service.py     # Spotify API: auth, metadata, playlists
-│   ├── downloader_service.py  # yt-dlp download engine with fuzzy matching
-│   ├── auto_downloader.py     # Playlist sync daemon, ingest, OAuth setup
-│   ├── metadata_cache.py      # Thread-safe JSON metadata cache
-│   ├── utils.py               # URL parsing, search queries, logging
-│   └── requirements.txt       # Pinned Python dependencies
-├── frontend/
-│   ├── index.html             # Dashboard HTML (sidebar + tabbed content)
-│   ├── js/app.js              # WebSocket client, UI logic
-│   └── css/styles.css         # Dark theme dashboard styles
-├── scripts/
-│   ├── setup.bat              # Windows CMD setup script
-│   ├── setup.ps1              # PowerShell setup script
-│   └── install-ffmpeg.bat     # FFmpeg installation helper
-├── docs/
-│   └── QUICKSTART.md          # Step-by-step Windows setup guide
-├── .env.example               # Environment variable template
-└── .gitignore
-```
 
-## Prerequisites
+---
 
-- **Python 3.10+**
-- **FFmpeg** — Required for audio conversion (bundled with spotdl or installed separately)
-- **Spotify Developer Account** — Free at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+## 🧩 Tech Stack
 
-## Setup
+**Frontend**
 
-### 1. Clone and install
+* React (Vite)
+* Tailwind CSS
+* ShadCN UI
+* Socket.IO Client
+
+**Backend**
+
+* Flask
+* Flask-SocketIO
+* yt-dlp
+* FFmpeg
+
+**Other**
+
+* Spotify Web API (Spotipy)
+* Python (core logic)
+* Caching layer (custom)
+
+---
+
+## ⚙️ How It Works
+
+1. User provides Spotify link
+2. Backend fetches metadata via Spotify API
+3. Matching engine searches yt-dlp
+4. Best candidate selected using scoring:
+
+   * title similarity
+   * artist match
+   * duration check
+5. Audio downloaded + converted via FFmpeg
+6. File stored in organized directory
+7. UI updates in real-time via WebSocket
+
+---
+
+## 🖥️ Demo
+
+👉 Add demo video link here
+👉 Add screenshots here
+
+---
+
+## 🛠️ Setup & Installation
+
+### 1. Clone Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/spotify-meta-downloader.git
-cd spotify-meta-downloader
-python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# macOS/Linux
-source .venv/bin/activate
-
-pip install -r backend/requirements.txt
+git clone https://github.com/<your-username>/<repo-name>.git
+cd <repo-name>
 ```
 
-Or use the setup scripts:
+---
 
-```powershell
-# PowerShell
-.\scripts\setup.ps1
-
-# CMD
-scripts\setup.bat
-```
-
-### 2. Configure environment
+### 2. Backend Setup
 
 ```bash
-cp .env.example backend/.env
+cd backend
+pip install -r requirements.txt
 ```
 
-Edit `backend/.env` with your credentials:
+Create `.env`:
 
 ```env
-SPOTIFY_CLIENT_ID=your_client_id
-SPOTIFY_CLIENT_SECRET=your_client_secret
-BASE_DOWNLOAD_DIR=C:\Users\YourName\Music
-PLAYLIST_ID=your_spotify_playlist_id
+SPOTIFY_CLIENT_ID=your_id
+SPOTIFY_CLIENT_SECRET=your_secret
 ```
 
-See [.env.example](.env.example) for all available options.
-
-### 3. Authorize Spotify (one-time)
-
-Required for playlist access via OAuth:
+Run backend:
 
 ```bash
-cd backend
-python auto_downloader.py
-```
-
-This opens a browser for Spotify authorization. Add `http://127.0.0.1:8888/callback` as a Redirect URI in your [Spotify Dashboard](https://developer.spotify.com/dashboard) first.
-
-### 4. Run
-
-```bash
-cd backend
 python app.py
 ```
 
-Open [http://localhost:5000](http://localhost:5000) in your browser.
+---
 
-## How It Works
+### 3. Frontend Setup
 
-### Download Pipeline
-
-1. **Metadata Fetch** — Spotify API (cache-first) retrieves track title, artist, duration
-2. **Search** — Builds YouTube search query, fetches up to 10 candidates
-3. **Fuzzy Scoring** — Each candidate scored: title similarity (50%) + artist similarity (30%) + duration match (20%)
-4. **Duration Validation** — ±15s tolerance window, hard reject outside 0.3x–3x
-5. **Download** — Best candidate downloaded via yt-dlp, converted to MP3 via FFmpeg
-6. **Fallback** — 3 stages (YouTube filtered → YouTube unfiltered → SoundCloud), 2 retries each
-
-### Auto-Sync
-
-The playlist monitor runs in a background thread, checking for new tracks at a configurable interval (default: 500s). Uses snapshot-based delta detection to minimize API calls. Downloads run in parallel with dynamic worker count based on CPU cores.
-
-## Configuration
-
-All configuration is via environment variables in `backend/.env`:
-
-| Variable | Description | Default |
-|---|---|---|
-| `SPOTIFY_CLIENT_ID` | Spotify app client ID | *required* |
-| `SPOTIFY_CLIENT_SECRET` | Spotify app client secret | *required* |
-| `BASE_DOWNLOAD_DIR` | Root directory for all downloads | `backend/downloads` |
-| `PLAYLIST_ID` | Main playlist to auto-sync | *empty* |
-| `INGEST_PLAYLIST_ID` | Secondary playlist (optional) | *empty* |
-| `REDIRECT_URI` | OAuth callback URL | `http://127.0.0.1:8888/callback` |
-| `CHECK_INTERVAL` | Auto-sync interval in seconds | `500` |
-| `SECRET_KEY` | Flask session secret | auto-generated |
-| `FLASK_ENV` | `development` or `production` | `production` |
-
-### Folder Rules
-
-Artist-based routing is configured in `backend/config.py` via `FOLDER_RULES`:
-
-```python
-FOLDER_RULES = {
-    "sammy virji": "Sammy Virji",
-    "fred again": "Fred Again",
-}
+```bash
+cd frontend-react
+npm install
+npm run dev
 ```
 
-Tracks matching an artist pattern route to `Auto Downloads/{subfolder}/`. Titles with Devanagari script automatically route to `Bollywood/`.
+---
 
-## API Endpoints
+## 📂 Project Structure
 
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/track` | Fetch metadata for a Spotify URL |
-| POST | `/api/download` | Start download (returns 202, updates via WebSocket) |
-| GET | `/api/files` | List all downloaded MP3 files |
-| GET | `/api/auto-status` | Auto-downloader status |
-| GET | `/api/queue-status` | Download queue status |
-| GET | `/api/api-usage` | Spotify API usage stats |
-| GET | `/api/history` | Download history |
-| POST | `/api/refresh-playlist` | Force playlist refresh |
-| GET | `/api/health` | Health check |
+```text
+backend/
+  app.py
+  downloader_service.py
+  spotify_service.py
+  auto_downloader.py
+  cache/
 
-## Tech Stack
+frontend-react/
+  src/
+    components/
+    pages/
+    hooks/
+    services/
+```
 
-- **Backend:** Flask 3.0, Flask-SocketIO, Python 3.10+
-- **Frontend:** Vanilla HTML/CSS/JS, Socket.IO
-- **Download:** yt-dlp + FFmpeg
-- **Metadata:** Spotify Web API (Spotipy)
-- **Transport:** WebSocket (polling fallback)
+---
 
-## License
+## 📊 Key Engineering Highlights
 
-MIT
+* Designed **real-time pipeline** using Socket.IO
+* Built **scoring-based matching engine** for accuracy
+* Implemented **multi-source fallback system**
+* Reduced API usage via **caching + rate-limit handling**
+* Supports **scalable playlist processing (1000+ tracks)**
+
+---
+
+## 🚨 Challenges & Solutions
+
+| Challenge           | Solution                         |
+| ------------------- | -------------------------------- |
+| Spotify Rate Limits | Caching + reduced polling        |
+| Wrong Song Matches  | Scoring + title cleaning         |
+| yt-dlp Errors       | Format fallback (bestaudio/best) |
+| Over-filtering      | Switched to scoring-based system |
+
+---
+
+## 🚀 Future Improvements
+
+* Dockerization
+* Cloud deployment (Render / Vercel)
+* User authentication
+* Audio fingerprinting for duplicate detection
+* Microservices architecture
+
+---
+
+## 📜 License
+
+This project is for educational purposes.
+
+---
+
+## 🙌 Author
+
+**Aswin Abhinab Mohapatra**
+📧 [aswin.abhinab22@gmail.com](mailto:aswin.abhinab22@gmail.com)
+🔗 https://github.com/Aswin-004
