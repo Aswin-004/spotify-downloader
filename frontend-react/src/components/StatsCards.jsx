@@ -72,18 +72,24 @@ const cards = [
 ];
 
 export default function StatsCards() {
-  const { history, queueStatus } = useSocket();
+  const { history, queueStatus, downloads } = useSocket();
 
-  const total = history.length;
-  const successCount = history.filter((h) => h.status === 'success').length;
+  const ingestCompleted = Object.keys(downloads.completed).length;
+  const ingestFailed = Object.keys(downloads.failed).length;
+  const ingestDownloading = Object.keys(downloads.downloading).length;
+
+  const total = history.length + ingestCompleted;
+  const successCount = history.filter((h) => h.status === 'success').length + ingestCompleted;
   const failedCount = history.filter(
     (h) => h.status !== 'success' && h.status !== 'skipped'
-  ).length;
+  ).length + ingestFailed;
   const rate = total > 0 ? Math.round((successCount / total) * 100) : 0;
   const active =
-    queueStatus.total > 0
-      ? queueStatus.total - queueStatus.completed
-      : 0;
+    ingestDownloading > 0
+      ? ingestDownloading
+      : queueStatus.total > 0
+        ? queueStatus.total - queueStatus.completed
+        : 0;
 
   const values = { total, active, rate, failed: failedCount };
 
@@ -105,9 +111,13 @@ export default function StatsCards() {
             />
             <div className="relative p-4">
               <div className="flex items-center justify-between mb-2">
-                <div className={cn('p-2 rounded-lg', bg)}>
+                <motion.div
+                  className={cn('p-2 rounded-lg', bg)}
+                  whileHover={{ scale: 1.1, rotate: -5 }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 15 }}
+                >
                   <Icon className={cn('w-4 h-4', color)} />
-                </div>
+                </motion.div>
               </div>
               <div className="text-2xl font-bold tracking-tight">
                 <AnimatedNumber value={values[key]} />

@@ -20,8 +20,7 @@ class Config:
     SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
     SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
     
-    # Playlist configuration
-    PLAYLIST_ID = os.getenv("PLAYLIST_ID", "")
+    # Playlist configuration (single ingest playlist)
     INGEST_PLAYLIST_ID = os.getenv("INGEST_PLAYLIST_ID", "")
     
     # OAuth

@@ -1,6 +1,7 @@
 flask==3.0.0
 flask-cors==4.0.0
 flask-socketio==5.6.1
+eventlet>=0.36.0
 spotipy==2.26.0
 yt-dlp==2026.3.17
 python-dotenv==1.0.0

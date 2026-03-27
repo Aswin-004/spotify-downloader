@@ -9,6 +9,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Disc3,
+  CheckCircle2,
+  SkipForward,
+  XCircle,
+  Loader2,
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { cn, capitalize } from '@/lib/utils';
@@ -21,7 +25,14 @@ const navItems = [
 ];
 
 export default function Sidebar({ collapsed, onToggle }) {
-  const { autoStatus, queueStatus, connected } = useSocket();
+  const { autoStatus, queueStatus, connected, downloads } = useSocket();
+
+  const dlCounts = {
+    downloading: Object.keys(downloads.downloading).length,
+    completed: Object.keys(downloads.completed).length,
+    skipped: Object.keys(downloads.skipped).length,
+    failed: Object.keys(downloads.failed).length,
+  };
 
   const isAutoActive =
     autoStatus.status === 'downloading' || autoStatus.status === 'checking';
@@ -114,14 +125,39 @@ export default function Sidebar({ collapsed, onToggle }) {
           <div className="rounded-xl p-3 border border-border bg-surface-light/50">
             <div className="flex items-center gap-2 mb-2">
               <ListMusic className="w-4 h-4 text-gray-500" />
-              <span className="text-xs font-medium text-gray-300">Queue</span>
+              <span className="text-xs font-medium text-gray-300">Ingest</span>
             </div>
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <span>{queueStatus.completed}/{queueStatus.total}</span>
-              {queueStatus.active_workers > 0 && (
-                <Badge variant="default" className="text-[10px] px-1.5 py-0">
-                  {queueStatus.active_workers} active
-                </Badge>
+            <div className="grid grid-cols-2 gap-1.5">
+              {dlCounts.downloading > 0 && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />
+                  <span className="text-yellow-400 font-mono">{dlCounts.downloading}</span>
+                  <span className="text-gray-600">active</span>
+                </div>
+              )}
+              {dlCounts.completed > 0 && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                  <span className="text-emerald-400 font-mono">{dlCounts.completed}</span>
+                  <span className="text-gray-600">done</span>
+                </div>
+              )}
+              {dlCounts.skipped > 0 && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <SkipForward className="w-3 h-3 text-amber-400" />
+                  <span className="text-amber-400 font-mono">{dlCounts.skipped}</span>
+                  <span className="text-gray-600">skip</span>
+                </div>
+              )}
+              {dlCounts.failed > 0 && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <XCircle className="w-3 h-3 text-red-400" />
+                  <span className="text-red-400 font-mono">{dlCounts.failed}</span>
+                  <span className="text-gray-600">fail</span>
+                </div>
+              )}
+              {dlCounts.downloading + dlCounts.completed + dlCounts.skipped + dlCounts.failed === 0 && (
+                <div className="col-span-2 text-xs text-gray-600">No activity</div>
               )}
             </div>
           </div>

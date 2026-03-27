@@ -36,6 +36,9 @@ backend/logs/
 # Validation / debug artifacts
 backend/validation_output.txt
 
+# Backup files
+*.bak
+
 # IDE
 .vscode/
 .idea/
@@ -49,6 +52,7 @@ Thumbs.db
 
 # Node
 node_modules/
+package-lock.json
 
 # Build outputs
 dist/
@@ -56,8 +60,6 @@ build/
 
 # Old / legacy frontend
 frontend/
-
-# Logs
 *.log
 logs/
 

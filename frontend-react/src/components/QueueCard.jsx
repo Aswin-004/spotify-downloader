@@ -3,7 +3,7 @@ import { Music, CheckCircle2, XCircle, Loader2, AlertTriangle } from 'lucide-rea
 import { useSocket } from '@/hooks/useSocket';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
+import { ProgressBar } from '@/components/ProgressBar';
 import { cn } from '@/lib/utils';
 
 const statusConfig = {
@@ -17,13 +17,18 @@ const statusConfig = {
 
 export default function QueueCard() {
   const { downloadStatus } = useSocket();
-  const { status, progress, current, match_quality } = downloadStatus;
 
+  const status = downloadStatus.status;
   if (status === 'idle') return null;
 
   const config = statusConfig[status] || statusConfig.idle;
-  const StatusIcon = config.icon;
+  const Icon = config.icon;
   const isActive = status === 'downloading' || status === 'starting';
+
+  const progressColor =
+    status === 'completed' ? 'emerald' :
+    status === 'failed' ? 'red' :
+    status === 'fallback' ? 'amber' : 'primary';
 
   return (
     <AnimatePresence>
@@ -42,26 +47,18 @@ export default function QueueCard() {
           <div className="p-5">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <StatusIcon
+                <Icon
                   className={cn(
                     'w-5 h-5',
-                    isActive && 'animate-spin',
+                    isActive && 'animate-spin text-primary',
                     status === 'completed' && 'text-emerald-400',
                     status === 'failed' && 'text-red-400',
-                    status === 'fallback' && 'text-amber-400',
-                    isActive && 'text-primary'
+                    status === 'fallback' && 'text-amber-400'
                   )}
                 />
                 <h3 className="font-semibold text-sm">
                   {isActive
-                    ? current?.toLowerCase().includes('retry')
-                      ? 'Retrying...'
-                      : current?.toLowerCase().includes('fallback')
-                        ? 'Fallback source...'
-                        : current?.toLowerCase().includes('searching') ||
-                            progress <= 10
-                          ? 'Matching...'
-                          : 'Downloading...'
+                    ? 'Downloading...'
                     : status === 'completed'
                       ? 'Complete!'
                       : status === 'failed'
@@ -70,19 +67,19 @@ export default function QueueCard() {
                 </h3>
               </div>
               <div className="flex items-center gap-2">
-                {match_quality && status === 'completed' && (
+                {downloadStatus.match_quality && status === 'completed' && (
                   <Badge
                     variant={
-                      match_quality === 'exact'
+                      downloadStatus.match_quality === 'exact'
                         ? 'success'
-                        : match_quality === 'approx'
+                        : downloadStatus.match_quality === 'approx'
                           ? 'warning'
                           : 'danger'
                     }
                   >
-                    {match_quality === 'exact'
+                    {downloadStatus.match_quality === 'exact'
                       ? '✓ Exact'
-                      : match_quality === 'approx'
+                      : downloadStatus.match_quality === 'approx'
                         ? '⚠ Approx'
                         : '✗ Fallback'}
                   </Badge>
@@ -90,23 +87,14 @@ export default function QueueCard() {
                 <Badge variant={config.variant}>{config.label}</Badge>
               </div>
             </div>
-
-            {/* Progress */}
             <div className="space-y-2">
-              <Progress
-                value={progress}
-                indicatorClassName={cn(
-                  status === 'completed' && 'bg-emerald-500',
-                  status === 'failed' && 'bg-red-500',
-                  status === 'fallback' && 'bg-amber-500'
-                )}
-              />
+              <ProgressBar value={downloadStatus.progress} color={progressColor} />
               <div className="flex items-center justify-between">
                 <p className="text-xs text-gray-400 truncate max-w-[80%]">
-                  {current || status}
+                  {downloadStatus.current || status}
                 </p>
                 <span className="text-xs font-mono text-gray-500">
-                  {progress}%
+                  {downloadStatus.progress}%
                 </span>
               </div>
             </div>

@@ -20,6 +20,7 @@ from strict_matcher import (
     has_reject_keyword,
     clean_title,
     duration_match,
+    final_duration_check,
     log_rejection,
     log_acceptance,
 )
@@ -340,13 +341,11 @@ class DownloaderService:
             
             logger.info(f"Target: {actual_dir}/{clean_name}.mp3")
             
-            # Build search query for YouTube
-            search_query = build_youtube_search_query(title, artist, album)
-            logger.info(f"Searching YouTube for: {search_query}")
+            logger.info(f"Searching YouTube for: {title} by {artist}")
             
             # Attempt download
             try:
-                filename = self._download_from_youtube(search_query, clean_name, progress_callback, output_dir=actual_dir, duration_ms=duration_ms, spotify_title=title, artist=artist)
+                filename = self._download_from_youtube(None, clean_name, progress_callback, output_dir=actual_dir, duration_ms=duration_ms, spotify_title=title, artist=artist)
                 filepath = os.path.join(actual_dir, filename)
                 
                 # Post-download file size sanity check
@@ -536,104 +535,54 @@ class DownloaderService:
     
     def _download_from_youtube(self, search_query, output_filename, progress_callback=None, output_dir=None, duration_ms=None, spotify_title=None, artist=None):
         """
-        Download audio using multi-stage fallback with duration validation.
-        Stage 1: YouTube filtered (ytsearch5 + duration check + title filter)
-        Stage 2: YouTube unfiltered fallback
-        Stage 3: SoundCloud
-        
-        Args:
-            search_query (str): Filtered search query
-            output_filename (str): Clean filename without extension
-            progress_callback (callable, optional): Called with (percent, status_text)
-            output_dir (str, optional): Target directory
-            duration_ms (int, optional): Expected duration in ms for validation
-            spotify_title (str, optional): Original Spotify track title for content filtering
-        
-        Returns:
-            str: Downloaded filename
-        
-        Raises:
-            Exception: If all sources fail
+        Multi-stage YouTube search with intelligent fallback (Step 9).
+
+        Stage 1: "{title} {artist} official audio" — ytsearch10
+        Stage 2: "{title} {artist} audio"          — ytsearch5
+        Stage 3: "{title} {artist}"                 — ytsearch3
+
+        Each stage uses strict scoring + duration validation.
         """
         actual_dir = output_dir or self.download_dir
         os.makedirs(actual_dir, exist_ok=True)
-        logger.info(f"Starting multi-stage download: {search_query}")
 
-        MAX_RETRIES = 2  # retries per stage
+        title = spotify_title or ""
+        art = artist or ""
 
-        # Stage 1: YouTube with filtered query + duration validation + title filter (ytsearch10)
-        for attempt in range(1 + MAX_RETRIES):
-            try:
-                suffix = f" (retry {attempt})" if attempt > 0 else ""
-                logger.info(f"Stage 1: YouTube filtered (ytsearch10){suffix}")
-                if progress_callback and attempt > 0:
-                    progress_callback(5, f"Retrying stage 1 ({attempt}/{MAX_RETRIES})...")
-                filename = self._try_download_with_duration_check(
-                    f"ytsearch10:{search_query}", "YouTube-filtered",
-                    progress_callback, output_dir=actual_dir,
-                    output_filename=output_filename, duration_ms=duration_ms,
-                    spotify_title=spotify_title, artist=artist
-                )
-                logger.info(f"Stage 1 success: {filename}")
-                self._last_match_quality = "exact"
-                return filename
-            except Exception as e:
-                logger.warning(f"Stage 1 attempt {attempt+1} failed: {str(e)[:120]}")
-                if attempt < MAX_RETRIES:
-                    logger.info(f"[downloader] Stage 1 retry {attempt+1}/{MAX_RETRIES}...")
-                    time.sleep(1)
-                else:
-                    logger.info("[downloader] Stage 1 exhausted, trying stage 2...")
+        # Build queries for all 3 stages
+        stages = [
+            ("Stage 1", f"ytsearch10:{title} {art} official audio", "exact"),
+            ("Stage 2", f"ytsearch5:{title} {art} audio", "approx"),
+            ("Stage 3", f"ytsearch3:{title} {art}", "fallback"),
+        ]
 
-        # Stage 2: YouTube with unfiltered query + duration validation
-        parts = search_query.split(" official audio")[0] if " official audio" in search_query else search_query
-        unfiltered_query = parts + " audio"
-        for attempt in range(1 + MAX_RETRIES):
-            try:
-                suffix = f" (retry {attempt})" if attempt > 0 else ""
-                logger.info(f"Stage 2: YouTube unfiltered{suffix}")
-                if progress_callback and attempt > 0:
-                    progress_callback(5, f"Retrying stage 2 ({attempt}/{MAX_RETRIES})...")
-                filename = self._try_download_with_duration_check(
-                    f"ytsearch3:{unfiltered_query}", "YouTube-unfiltered",
-                    progress_callback, output_dir=actual_dir,
-                    output_filename=output_filename, duration_ms=duration_ms,
-                    spotify_title=spotify_title, artist=artist
-                )
-                logger.info(f"Stage 2 success: {filename}")
-                self._last_match_quality = "approx"
-                return filename
-            except Exception as e:
-                logger.warning(f"Stage 2 attempt {attempt+1} failed: {str(e)[:120]}")
-                if attempt < MAX_RETRIES:
-                    logger.info(f"[downloader] Stage 2 retry {attempt+1}/{MAX_RETRIES}...")
-                    time.sleep(1)
-                else:
-                    logger.info("[downloader] Stage 2 exhausted, trying SoundCloud...")
+        MAX_RETRIES = 2
 
-        # Stage 3: SoundCloud fallback + duration validation
-        for attempt in range(1 + MAX_RETRIES):
-            try:
-                suffix = f" (retry {attempt})" if attempt > 0 else ""
-                logger.info(f"Stage 3: SoundCloud{suffix}")
-                if progress_callback and attempt > 0:
-                    progress_callback(5, f"Retrying stage 3 ({attempt}/{MAX_RETRIES})...")
-                filename = self._try_download_with_duration_check(
-                    f"scsearch3:{search_query}", "SoundCloud",
-                    progress_callback, output_dir=actual_dir,
-                    output_filename=output_filename, duration_ms=duration_ms,
-                    spotify_title=spotify_title, artist=artist
-                )
-                logger.info(f"Stage 3 success: {filename}")
-                self._last_match_quality = "fallback"
-                return filename
-            except Exception as e:
-                logger.warning(f"Stage 3 attempt {attempt+1} failed: {str(e)[:120]}")
-                if attempt < MAX_RETRIES:
-                    logger.info(f"[downloader] Stage 3 retry {attempt+1}/{MAX_RETRIES}...")
-                    time.sleep(1)
+        for stage_name, query, quality in stages:
+            for attempt in range(1 + MAX_RETRIES):
+                try:
+                    suffix = f" (retry {attempt})" if attempt > 0 else ""
+                    logger.info(f"{stage_name}: searching{suffix} — {query}")
+                    if progress_callback and attempt > 0:
+                        progress_callback(5, f"Retrying {stage_name} ({attempt}/{MAX_RETRIES})...")
 
-        error_msg = f"All download stages failed for: {search_query}"
+                    filename = self._try_download_with_duration_check(
+                        query, stage_name,
+                        progress_callback, output_dir=actual_dir,
+                        output_filename=output_filename, duration_ms=duration_ms,
+                        spotify_title=spotify_title, artist=artist,
+                    )
+                    logger.info(f"{stage_name} success: {filename}")
+                    self._last_match_quality = quality
+                    return filename
+                except Exception as e:
+                    logger.warning(f"{stage_name} attempt {attempt+1} failed: {str(e)[:150]}")
+                    if attempt < MAX_RETRIES:
+                        time.sleep(1)
+                    else:
+                        logger.info(f"{stage_name} exhausted, moving on...")
+
+        error_msg = f"All download stages failed for: {title} — {art}"
         logger.error(error_msg)
         raise Exception(error_msg)
 
@@ -717,11 +666,21 @@ class DownloaderService:
             spotify_title=spotify_title or query,
             artist=artist or "",
             expected_duration_sec=int(expected_secs) if expected_secs else None,
-            min_score=0.4,  # SAFETY: require minimum 0.4 score (40% match confidence)
+            min_score=0.5,  # Step 7: accept candidates scoring >= 0.5
         )
         
         if not best_candidate:
             raise Exception(f"[{source_name}] No acceptable match. {selection_reason}")
+
+        # Step 10: Final duration validation before download
+        best_duration = best_candidate.get("duration")
+        if expected_secs and best_duration:
+            if not final_duration_check(best_duration, int(expected_secs)):
+                diff = abs(best_duration - int(expected_secs))
+                raise Exception(
+                    f"[{source_name}] Final validation failed: duration diff {diff}s > 30s "
+                    f"for \"{best_candidate.get('title', '')}\""
+                )
         
         # Download the selected video
         best_entry = best_candidate.get("entry")

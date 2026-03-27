@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { AlertTriangle, RefreshCw, Menu } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
@@ -6,32 +5,12 @@ import { api } from '@/services/api';
 import { Button } from '@/components/ui/button';
 
 export default function Header({ onMenuToggle }) {
-  const { connected } = useSocket();
-  const [rateLimited, setRateLimited] = useState(false);
-  const [cooldown, setCooldown] = useState('');
+  const { connected, autoStatus } = useSocket();
 
-  useEffect(() => {
-    let timer;
-    async function poll() {
-      try {
-        const data = await api.getApiUsage();
-        if (data.is_rate_limited && data.cooldown_remaining > 0) {
-          setRateLimited(true);
-          const h = Math.floor(data.cooldown_remaining / 3600);
-          const m = Math.floor((data.cooldown_remaining % 3600) / 60);
-          setCooldown(h > 0 ? `${h}h ${m}m` : `${m}m`);
-        } else {
-          setRateLimited(false);
-          setCooldown('');
-        }
-      } catch {
-        // ignore
-      }
-    }
-    poll();
-    timer = setInterval(poll, 5000);
-    return () => clearInterval(timer);
-  }, []);
+  // Rate-limit status derived from auto status (pushed via socket)
+  const rateLimited =
+    autoStatus.current?.toLowerCase().includes('rate limited') ||
+    autoStatus.status === 'idle' && autoStatus.current?.toLowerCase().includes('cooldown');
 
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between h-14 px-6 border-b border-border bg-background/80 backdrop-blur-xl">
@@ -53,7 +32,7 @@ export default function Header({ onMenuToggle }) {
           >
             <AlertTriangle className="w-4 h-4 text-amber-400" />
             <span className="text-xs text-amber-400">
-              Rate limited · {cooldown}
+              Rate limited
             </span>
           </motion.div>
         )}

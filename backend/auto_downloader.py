@@ -1,6 +1,7 @@
 """
-Automatic Spotify Playlist Sync & Download
-Monitors a playlist every 2 minutes and downloads new tracks.
+Spotify Ingest Playlist Monitor & Downloader
+Monitors a single ingest playlist and downloads new tracks with parallel workers.
+
 Uses SpotifyOAuth for playlist access (required since 2025 API changes).
 
 One-time setup:
@@ -8,7 +9,7 @@ One-time setup:
      Developer Dashboard (https://developer.spotify.com/dashboard).
   2. Run: python auto_downloader.py
   3. Authorize in the browser that opens.
-  4. After that, the server will auto-sync your playlist.
+  4. After that, the server will auto-sync your ingest playlist.
 """
 import json
 import os
@@ -33,19 +34,17 @@ try:
 except ImportError:
     logger = logging.getLogger(__name__)  # type: ignore[assignment]
 
-PLAYLIST_ID = config.PLAYLIST_ID
 INGEST_PLAYLIST_ID = config.INGEST_PLAYLIST_ID
 BASE_DOWNLOAD_DIR = config.BASE_DOWNLOAD_DIR
 INGEST_FOLDER = os.path.join(BASE_DOWNLOAD_DIR, "Ingest")
-AUTO_FOLDER = os.path.join(BASE_DOWNLOAD_DIR, "Auto Downloads")
 
 
 def resolve_folder(artist, base_dir=None, title=None):
     """Resolve download subfolder based on artist, FOLDER_RULES, and language detection.
-    Returns the full folder path (e.g. Auto Downloads/Sammy Virji/).
+    Returns the full folder path (e.g. Ingest/Sammy Virji/).
     Falls back to base_dir if no rule matches.
-    If title contains Devanagari (Hindi) script → routes to Bollywood/ subfolder."""
-    base = base_dir or AUTO_FOLDER
+    If title contains Devanagari (Hindi) script -> routes to Bollywood/ subfolder."""
+    base = base_dir or INGEST_FOLDER
     rules = config.FOLDER_RULES if hasattr(config, 'FOLDER_RULES') else {}
     artist_lower = artist.lower() if artist else ""
     for pattern, subfolder in rules.items():
@@ -53,24 +52,22 @@ def resolve_folder(artist, base_dir=None, title=None):
             folder = os.path.join(base, subfolder)
             os.makedirs(folder, exist_ok=True)
             return folder
-    # Language detection: Devanagari script → Bollywood
+    # Language detection: Devanagari script -> Bollywood
     text_to_check = f"{title or ''} {artist or ''}"
     if any('\u0900' <= ch <= '\u097F' for ch in text_to_check):
         folder = os.path.join(base, "Bollywood")
         os.makedirs(folder, exist_ok=True)
         return folder
     return base
+
+
 CHECK_INTERVAL = config.CHECK_INTERVAL
-HISTORY_FILE = os.path.join(os.path.dirname(__file__), "downloaded_tracks.json")
+INGEST_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "ingest_tracks.json")
 CACHE_PATH = os.path.join(os.path.dirname(__file__), ".spotify_cache")
 
 REDIRECT_URI = config.REDIRECT_URI
 # Dynamic workers: min(5, cpu_count), with a floor of 3
 MAX_WORKERS = min(5, max(3, os.cpu_count() or 3))
-
-# Cached playlist snapshot for delta detection
-_last_playlist_ids = set()
-_playlist_lock = threading.Lock()
 
 AUTO_STATUS = {
     "status": "idle",
@@ -86,7 +83,32 @@ AUTO_STATUS = {
 
 # Thread-safe registry of downloaded file keys
 _registry_lock = threading.Lock()
-_downloaded_registry = set()
+_downloaded_registry: set = set()
+
+
+# ── SocketIO bridge for real-time events ─────────────────────────────────────
+_socketio = None
+
+
+def set_socketio(sio):
+    """Store a reference to the Flask-SocketIO instance for real-time events."""
+    global _socketio
+    _socketio = sio
+
+
+def _emit(event, data):
+    """Emit a SocketIO event to all connected clients."""
+    if _socketio is not None:
+        try:
+            _socketio.emit(event, data)
+            _socketio.sleep(0)
+        except Exception:
+            pass
+
+
+def _emit_auto_status():
+    """Push current AUTO_STATUS to all clients immediately."""
+    _emit("auto_status_update", dict(AUTO_STATUS))
 
 
 def normalize(text):
@@ -133,138 +155,17 @@ def is_authenticated():
     return os.path.exists(CACHE_PATH)
 
 
-def load_history():
+def _load_ingest_history():
     try:
-        with open(HISTORY_FILE, "r") as f:
-            data = json.load(f)
-            return set(data.get("track_ids", []))
+        with open(INGEST_HISTORY_FILE, "r") as f:
+            return set(json.load(f).get("track_ids", []))
     except Exception:
         return set()
 
 
-def save_history(track_ids):
-    with open(HISTORY_FILE, "w") as f:
-        json.dump({
-            "track_ids": list(track_ids),
-            "last_checked": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }, f, indent=2)
-
-
-def get_playlist_tracks(sp):
-    """Fetch ALL tracks from the playlist with pagination and added_at timestamps."""
-    if sp is None:
-        raise Exception("No authenticated Spotify client. Run 'python auto_downloader.py' to authorize.")
-
-    # --- Debug: verify authenticated user ---
-    user = None
-    try:
-        user = sp.current_user()
-        logger.info(f"[auto] Logged in as: {user['display_name']} ({user['id']})")
-    except Exception as e:
-        logger.warning(f"[auto] Could not verify current user: {e}")
-
-    # --- Verify playlist access ---
-    try:
-        playlist_meta = sp.playlist(PLAYLIST_ID, fields="name,owner(display_name,id),public")
-        owner = playlist_meta["owner"]
-        logger.info(f"[auto] Playlist: {playlist_meta.get('name')} (owner: {owner['display_name']}, public: {playlist_meta.get('public')})")
-        if user and user["id"] != owner["id"] and not playlist_meta.get("public"):
-            logger.warning(f"[auto] You ({user['id']}) are not the playlist owner ({owner['id']}). "
-                  "Private playlists require owner login or a collaborative invite.")
-    except spotipy.exceptions.SpotifyException as e:
-        if e.http_status == 403:
-            raise Exception(
-                f"403 Forbidden: Cannot access playlist {PLAYLIST_ID}. "
-                "The playlist is private or your account lacks access. "
-                "Make it public or login with the correct account."
-            )
-        raise
-    except Exception:
-        pass  # non-critical
-
-    # --- Fetch tracks with 403 guard ---
-    try:
-        results = sp.playlist_items(
-            PLAYLIST_ID,
-            limit=100,
-            additional_types=["track"],
-        )
-    except spotipy.exceptions.SpotifyException as e:
-        if e.http_status == 403:
-            raise Exception(
-                f"403 Forbidden: Cannot read tracks from playlist {PLAYLIST_ID}. "
-                "Playlist is private or access denied. Make it public or login with the correct account."
-            )
-        raise
-
-    tracks = []
-    while results:
-        for item in results["items"]:
-            if not item:
-                continue
-            # Spotify API now uses "item" key; fall back to "track" for compat
-            track = item.get("item") or item.get("track")
-            if track and track.get("id") and track.get("type") == "track":
-                tracks.append({
-                    "id": track["id"],
-                    "title": track.get("name", ""),
-                    "artist": track["artists"][0]["name"] if track.get("artists") else "Unknown",
-                    "added_at": item.get("added_at", ""),
-                    "duration_ms": track.get("duration_ms"),
-                })
-        if results.get("next"):
-            results = sp.next(results)
-        else:
-            break
-    # Newest additions first
-    tracks.sort(key=lambda x: x["added_at"], reverse=True)
-    logger.info(f"[auto] Playlist fetched: {len(tracks)} track(s)")
-    return tracks
-
-
-def get_new_tracks(sp, force_refresh=False):
-    """Compare playlist against history; return only delta (new) tracks.
-    Uses metadata cache for playlist snapshots to reduce API calls.
-    Only fetches from Spotify if cache is stale (>30 min) or force_refresh=True."""
-    global _last_playlist_ids
-    cache = get_cache()
-
-    # Use cached snapshot if fresh and not forced
-    if not force_refresh and cache.is_snapshot_fresh(PLAYLIST_ID, max_age=1800):
-        cached_tracks = cache.get_playlist_snapshot(PLAYLIST_ID)
-        if cached_tracks:
-            tracks = cached_tracks
-            logger.info(f"[auto] Using cached snapshot ({len(tracks)} tracks, age={cache.get_snapshot_age(PLAYLIST_ID):.0f}s)")
-        else:
-            tracks = get_playlist_tracks(sp)
-            cache.set_playlist_snapshot(PLAYLIST_ID, tracks)
-    else:
-        tracks = get_playlist_tracks(sp)
-        cache.set_playlist_snapshot(PLAYLIST_ID, tracks)
-
-    saved_ids = load_history()
-
-    current_ids = {t["id"] for t in tracks}
-
-    # Update AUTO_STATUS with playlist totals
-    AUTO_STATUS["playlist_total"] = len(tracks)
-    AUTO_STATUS["synced_total"] = len(saved_ids & current_ids)
-    AUTO_STATUS["last_checked"] = time.strftime("%H:%M:%S")
-
-    # Delta detection: only consider tracks that weren't in the last snapshot
-    with _playlist_lock:
-        if _last_playlist_ids:
-            delta_ids = current_ids - _last_playlist_ids
-            if delta_ids:
-                logger.info(f"[auto] Delta detection: {len(delta_ids)} new since last check")
-        _last_playlist_ids = current_ids
-
-    logger.info(f"[auto] Playlist: {len(tracks)} total, {len(saved_ids)} saved")
-
-    new_tracks = [t for t in tracks if t["id"] not in saved_ids]
-
-    logger.info(f"[auto] New tracks to download: {len(new_tracks)}")
-    return new_tracks
+def _save_ingest_history(ids):
+    with open(INGEST_HISTORY_FILE, "w") as f:
+        json.dump({"track_ids": list(ids), "last_checked": time.strftime("%Y-%m-%dT%H:%M:%S")}, f, indent=2)
 
 
 def _extract_retry_seconds(*sources):
@@ -280,68 +181,62 @@ def _extract_retry_seconds(*sources):
     return None
 
 
-def auto_download_new_tracks(force_refresh=False):
-    # Skip entirely if globally rate-limited
+def ingest_download(download_dir=None):
+    """Download new tracks from the ingest playlist with parallel workers.
+
+    Args:
+        download_dir: Optional custom download directory. Falls back to INGEST_FOLDER.
+    """
+    if not INGEST_PLAYLIST_ID:
+        logger.warning("[ingest] No INGEST_PLAYLIST_ID configured. Skipping.")
+        return
+
+    # Skip if globally rate-limited
     if is_rate_limited():
-        logger.info("[auto] Skipping — Spotify API rate-limited (cooldown active)")
+        logger.info("[ingest] Skipping — Spotify API rate-limited (cooldown active)")
         AUTO_STATUS["status"] = "idle"
         AUTO_STATUS["current"] = "Rate limited — waiting for cooldown"
         return
 
-    sp = _get_user_sp(interactive=False)
-    if sp is None:
-        logger.warning("[auto] No OAuth token. Run 'python auto_downloader.py' to authorize.")
-        return
+    target_base = download_dir or INGEST_FOLDER
 
-    # Validate token before proceeding
+    from spotify_service import get_spotify_service
+    sp_service = get_spotify_service()
+
     try:
-        sp.current_user()
-    except spotipy.exceptions.SpotifyException as e:
-        if e.http_status == 429:
-            # Retry seconds will be extracted at playlist_monitor level via stderr capture
-            retry_secs = _extract_retry_seconds(e) or 600
-            set_global_rate_limit(retry_secs)
-            logger.warning(f"[auto] Spotify 429 during token validation. Blocked for {retry_secs}s.")
-            AUTO_STATUS["status"] = "idle"
-            AUTO_STATUS["current"] = f"Rate limited — blocked for {retry_secs}s"
-            return
-        logger.warning("[auto] Token expired, clearing cache for re-auth")
-        try:
-            os.remove(CACHE_PATH)
-        except OSError:
-            pass
+        tracks = sp_service.get_playlist_tracks_by_id(INGEST_PLAYLIST_ID, force_refresh=True)
+    except Exception as e:
+        logger.error(f"[ingest] Failed to fetch ingest playlist: {e}")
         AUTO_STATUS["status"] = "idle"
-        AUTO_STATUS["current"] = "Auth expired - run auto_downloader.py"
-        return
-    except Exception:
-        logger.warning("[auto] Token expired, clearing cache for re-auth")
-        try:
-            os.remove(CACHE_PATH)
-        except OSError:
-            pass
-        AUTO_STATUS["status"] = "idle"
-        AUTO_STATUS["current"] = "Auth expired - run auto_downloader.py"
+        AUTO_STATUS["current"] = f"Fetch error: {str(e)[:80]}"
         return
 
-    AUTO_STATUS["status"] = "checking"
-    AUTO_STATUS["current"] = "Checking playlist..."
-    new_tracks = get_new_tracks(sp, force_refresh=force_refresh)
+    saved_ids = _load_ingest_history()
+    new_tracks = [t for t in tracks if t["id"] not in saved_ids]
+
+    # Update status with playlist totals
+    current_ids = {t["id"] for t in tracks}
+    AUTO_STATUS["playlist_total"] = len(tracks)
+    AUTO_STATUS["synced_total"] = len(saved_ids & current_ids)
+    AUTO_STATUS["last_checked"] = time.strftime("%H:%M:%S")
 
     if not new_tracks:
-        logger.info("[auto] No new songs in playlist.")
+        logger.info("[ingest] No new tracks in ingest playlist.")
         AUTO_STATUS["status"] = "idle"
         AUTO_STATUS["current"] = ""
+        _emit_auto_status()
         return
 
+    logger.info(f"[ingest] {len(new_tracks)} new track(s) from ingest playlist")
+
     downloader = get_downloader_service()
-    os.makedirs(AUTO_FOLDER, exist_ok=True)
-    saved_ids = load_history()
+    os.makedirs(target_base, exist_ok=True)
 
     # Build file registry from existing downloads for instant duplicate skip
     global _downloaded_registry
     with _registry_lock:
-        _downloaded_registry = _build_file_registry(AUTO_FOLDER)
-    logger.info(f"[auto] Existing files in Auto Downloads: {len(_downloaded_registry)}")
+        _downloaded_registry = _build_file_registry(target_base)
+    logger.info(f"[ingest] Existing files in {os.path.basename(target_base)}: {len(_downloaded_registry)}")
 
     total = len(new_tracks)
     completed_count = [0]  # mutable counter for threads
@@ -353,30 +248,29 @@ def auto_download_new_tracks(force_refresh=False):
     AUTO_STATUS["total"] = total
     AUTO_STATUS["completed"] = 0
     AUTO_STATUS["progress"] = 0
-
-    # Metadata already included from playlist_items — no extra API calls needed
-    tracks_meta = new_tracks
-    logger.info(f"[auto] {len(tracks_meta)} tracks ready for download")
+    _emit_auto_status()
 
     def _download_single(track_info):
         """Download a single track with duplicate guard. Thread-safe."""
-        # Yield to manual downloads (priority 0 > auto priority 1)
+        # Yield to manual downloads (priority)
         if wait_if_manual_active():
-            logger.info("[auto] Yielded to manual download, resuming")
+            logger.info("[ingest] Yielded to manual download, resuming")
 
         tid = track_info["id"]
         title = track_info["title"]
         artist = track_info["artist"]
-        track_key = normalize(f"{sanitize_filename(title)}")
+        track_key = normalize(sanitize_filename(title))
 
         # Resolve target folder based on artist rules
-        target_folder = resolve_folder(artist, title=title)
+        target_folder = resolve_folder(artist, base_dir=target_base, title=title)
+        os.makedirs(target_folder, exist_ok=True)
 
         # --- Duplicate check 1: file registry ---
         with _registry_lock:
             if track_key in _downloaded_registry:
                 skip_count[0] += 1
-                logger.debug(f"[auto] Skipping (exists): {title} - {artist}")
+                logger.debug(f"[ingest] Skipping (exists): {title} - {artist}")
+                _emit("download_skipped", {"title": title, "artist": artist, "reason": "Already downloaded", "source": "ingest"})
                 saved_ids.add(tid)
                 return
 
@@ -387,12 +281,14 @@ def auto_download_new_tracks(force_refresh=False):
             with _registry_lock:
                 _downloaded_registry.add(track_key)
             skip_count[0] += 1
-            logger.debug(f"[auto] Skipping (on disk): {title} - {artist}")
+            logger.debug(f"[ingest] Skipping (on disk): {title} - {artist}")
+            _emit("download_skipped", {"title": title, "artist": artist, "reason": "File exists on disk", "source": "ingest"})
             saved_ids.add(tid)
             return
 
         try:
             AUTO_STATUS["current"] = f"{title} - {artist}"
+            _emit("download_start", {"title": title, "artist": artist, "source": "ingest"})
             result = downloader.download_track(
                 title,
                 artist,
@@ -406,208 +302,95 @@ def auto_download_new_tracks(force_refresh=False):
                     _downloaded_registry.add(track_key)
                 success_count[0] += 1
                 saved_ids.add(tid)
-                logger.info(f"[auto] Downloaded: {result['filename']}")
+                logger.info(f"[ingest] Downloaded: {result['filename']}")
+                _emit("download_complete", {"title": title, "artist": artist, "status": "completed", "filename": result.get("filename", ""), "source": "ingest"})
             else:
+                # Strict match policy — don't save to history so it retries next cycle
                 fail_count[0] += 1
-                logger.warning(f"[auto] Fallback for: {title}")
+                logger.warning(f"[ingest] SKIPPED (no strict match): {title} - {artist} | {result.get('message', '')}")
+                _emit("download_error", {"title": title, "artist": artist, "error": result.get("message", "No strict match"), "source": "ingest"})
 
         except Exception as e:
-            logger.error(f"[auto] Error downloading {title}: {e}")
+            fail_count[0] += 1
+            logger.error(f"[ingest] Error downloading {title} - {artist}: {str(e)[:150]}")
+            _emit("download_error", {"title": title, "artist": artist, "error": str(e)[:100], "source": "ingest"})
 
         finally:
             completed_count[0] += 1
             pct = int((completed_count[0] / total) * 100)
             AUTO_STATUS["completed"] = completed_count[0]
             AUTO_STATUS["progress"] = pct
-            # Update global queue status
             update_queue(completed=completed_count[0], current=f"{title} - {artist}")
-            logger.info(f"[auto] Progress: {completed_count[0]}/{total} ({pct}%)")
+            _emit("download_progress", {"title": title, "artist": artist, "current": completed_count[0], "total": total, "percent": pct, "source": "ingest"})
+            _emit_auto_status()
+            logger.info(f"[ingest] Progress: {completed_count[0]}/{total} ({pct}%)")
 
     # --- Parallel download ---
-    logger.info(f"[auto] Starting parallel download ({MAX_WORKERS} workers, {len(tracks_meta)} tracks)")
-    # Update global queue status
-    pending_names = [f"{t['title']} - {t['artist']}" for t in tracks_meta]
+    logger.info(f"[ingest] Starting parallel download ({MAX_WORKERS} workers, {total} tracks)")
+    pending_names = [f"{t['title']} - {t['artist']}" for t in new_tracks]
     update_queue(total=total, completed=0, pending=pending_names)
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(_download_single, tm): tm for tm in tracks_meta}
+        futures = {executor.submit(_download_single, t): t for t in new_tracks}
         for future in as_completed(futures):
-            # Propagate any unhandled exception for logging
             try:
                 future.result()
             except Exception as e:
-                tm = futures[future]
-                logger.error(f"[auto] Unhandled error for {tm['title']}: {e}")
+                t = futures[future]
+                logger.error(f"[ingest] Unhandled error for {t['title']}: {e}")
 
-    # Persist history — only tracks that were actually downloaded or skipped (on disk)
-    save_history(saved_ids)
+    # Persist history
+    _save_ingest_history(saved_ids)
     AUTO_STATUS["status"] = "completed"
     AUTO_STATUS["current"] = ""
     AUTO_STATUS["progress"] = 100
     AUTO_STATUS["completed"] = total
     AUTO_STATUS["last"] = (f"{success_count[0]} downloaded, {skip_count[0]} skipped, "
                            f"{fail_count[0]} failed (of {total})")
-    logger.info(f"[auto] Sync complete: {success_count[0]} downloaded, "
-          f"{skip_count[0]} skipped, {fail_count[0]} failed (total {total})")
-
-
-# ═══════════════════════ INGEST PLAYLIST ═══════════════════════
-
-INGEST_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "ingest_tracks.json")
-
-
-def _load_ingest_history():
-    try:
-        with open(INGEST_HISTORY_FILE, "r") as f:
-            return set(json.load(f).get("track_ids", []))
-    except Exception:
-        return set()
-
-
-def _save_ingest_history(ids):
-    with open(INGEST_HISTORY_FILE, "w") as f:
-        json.dump({"track_ids": list(ids), "last_checked": time.strftime("%Y-%m-%dT%H:%M:%S")}, f, indent=2)
-
-
-def ingest_download():
-    """Download new tracks from the ingest playlist (public, no OAuth needed)."""
-    if not INGEST_PLAYLIST_ID:
-        return
-
-    from spotify_service import get_spotify_service
-    sp_service = get_spotify_service()
-
-    try:
-        # Force refresh to bypass stale cache and fetch all tracks
-        tracks = sp_service.get_playlist_tracks_by_id(INGEST_PLAYLIST_ID, force_refresh=True)
-    except Exception as e:
-        logger.error(f"[ingest] Failed to fetch ingest playlist: {e}")
-        return
-
-    print(f"[DEBUG] Ingest playlist fetched: {len(tracks)} tracks")
-    saved_ids = _load_ingest_history()
-    print(f"[DEBUG] Ingest saved_ids: {len(saved_ids)} IDs")
-    new_tracks = [t for t in tracks if t["id"] not in saved_ids]
-    print(f"[DEBUG] Ingest new_tracks: {len(new_tracks)} IDs: {[t['id'] for t in new_tracks]}")
-
-    if not new_tracks:
-        logger.info("[ingest] No new tracks in ingest playlist.")
-        print("[DEBUG] No new tracks to download.")
-        return
-
-    logger.info(f"[ingest] {len(new_tracks)} new track(s) from ingest playlist")
-    downloader = get_downloader_service()
-    os.makedirs(INGEST_FOLDER, exist_ok=True)
-
-    # Build file registry from existing ingest downloads for dedup
-    ingest_registry = _build_file_registry(INGEST_FOLDER)
-    logger.info(f"[ingest] Existing files in Ingest: {len(ingest_registry)}")
-    
-    logger.info(f"[ingest] {len(new_tracks)} new track(s) to download")
-    
-    ingest_success = 0
-    ingest_skipped = 0
-    ingest_failed = 0
-    
-    for t in new_tracks:
-        title = t["title"]
-        artist = t["artist"]
-        filename = sanitize_filename(title)
-        track_key = normalize(filename)
-
-        # Dedup: skip if already downloaded
-        if track_key in ingest_registry:
-            logger.debug(f"[ingest] Skipping (already exists): {title} - {artist}")
-            ingest_skipped += 1
-            saved_ids.add(t["id"])
-            continue
-
-        target = resolve_folder(artist, base_dir=INGEST_FOLDER, title=title)
-        try:
-            logger.info(f"[ingest] Attempting download (strict match required): {title} - {artist}")
-            result = downloader.download_track(
-                title, artist,
-                output_dir=target,
-                output_filename=filename,
-                duration_ms=t.get("duration_ms"),
-            )
-            if result["status"] == "success":
-                logger.info(f"✅ [ingest] Downloaded: {title} - {artist}")
-                ingest_success += 1
-                saved_ids.add(t["id"])
-            else:
-                # Fallback status — ingest requires strict match, so we SKIP
-                logger.warning(f"❌ [ingest] SKIPPED (no strict match): {title} - {artist} | {result.get('message', 'No details')}")
-                ingest_failed += 1
-                # DO NOT add to saved_ids — retry on next cycle in case better YouTube result appears
-        except Exception as e:
-            logger.error(f"❌ [ingest] Error downloading {title} - {artist}: {str(e)[:150]}")
-            ingest_failed += 1
-            # DO NOT add to saved_ids — retry on next cycle
-
-    _save_ingest_history(saved_ids)
-    logger.info(f"[ingest] Summary: {ingest_success} downloaded, {ingest_skipped} skipped, {ingest_failed} failed (strict ingest policy applied)")
-    print(f"[DEBUG] Ingest sync complete: {ingest_success} ok, {ingest_skipped} skip, {ingest_failed} fail")
+    logger.info(f"[ingest] Sync complete: {success_count[0]} downloaded, "
+                f"{skip_count[0]} skipped, {fail_count[0]} failed (total {total})")
+    _emit_auto_status()
 
 
 def playlist_monitor():
+    """Main monitor loop — checks the ingest playlist every CHECK_INTERVAL seconds."""
     time.sleep(10)
     if not is_authenticated():
-        logger.warning("[auto] Playlist monitor SKIPPED - no OAuth token. Run 'python auto_downloader.py' to authorize.")
+        logger.warning("[ingest] Playlist monitor SKIPPED - no OAuth token. "
+                       "Run 'python auto_downloader.py' to authorize.")
         return
-    logger.info("[auto] Playlist monitor started.")
+    logger.info("[ingest] Playlist monitor started.")
     while True:
-        # Skip cycle if globally rate-limited
         if is_rate_limited():
-            logger.info("[auto] Skipping cycle — Spotify API cooldown active.")
+            logger.info("[ingest] Skipping cycle — Spotify API cooldown active.")
         else:
-            import io as _io, sys as _sys
-            _captured = _io.StringIO()
-            _old_stderr = _sys.stderr
-            _sys.stderr = _captured
             try:
-                logger.info("[auto] Checking playlist for new songs...")
-                auto_download_new_tracks()
+                logger.info("[ingest] Checking ingest playlist for new songs...")
+                ingest_download()
             except spotipy.exceptions.SpotifyException as e:
-                _sys.stderr = _old_stderr
-                stderr_out = _captured.getvalue()
-                if stderr_out:
-                    _sys.stderr.write(stderr_out)
                 if e.http_status == 429:
-                    retry_secs = _extract_retry_seconds(e, stderr_out) or 600
+                    retry_secs = _extract_retry_seconds(e) or 600
                     set_global_rate_limit(retry_secs)
-                    logger.warning(f"[auto] Spotify 429. Blocked for {retry_secs}s.")
+                    logger.warning(f"[ingest] Spotify 429. Blocked for {retry_secs}s.")
                 else:
-                    logger.error(f"[auto] Monitor error: {e}")
-                _captured = None  # prevent finally from double-restoring
-            except Exception as e:
-                logger.error(f"[auto] Monitor error: {e}")
-            finally:
-                if _captured is not None:
-                    _sys.stderr = _old_stderr
-                    stderr_text = _captured.getvalue()
-                    if stderr_text:
-                        _sys.stderr.write(stderr_text)
-
-            # Ingest playlist
-            if not is_rate_limited():
-                try:
-                    ingest_download()
-                except Exception as e:
                     logger.error(f"[ingest] Monitor error: {e}")
+            except Exception as e:
+                logger.error(f"[ingest] Monitor error: {e}")
 
         time.sleep(CHECK_INTERVAL)
 
 
-def manual_refresh():
-    """Trigger a manual playlist refresh (force-fetches from Spotify, bypasses cache)."""
+def manual_refresh(download_dir=None):
+    """Trigger a manual ingest refresh (force-fetches from Spotify, bypasses cache).
+
+    Args:
+        download_dir: Optional custom download directory.
+    """
     if is_rate_limited():
         return {"status": "rate_limited", "message": "Spotify API is rate-limited."}
     try:
-        sp = _get_user_sp(interactive=False)
-        if sp is None:
-            return {"status": "error", "message": "No OAuth token. Run auto_downloader.py to authorize."}
-        auto_download_new_tracks(force_refresh=True)
-        return {"status": "ok", "message": "Manual refresh triggered."}
+        ingest_download(download_dir=download_dir)
+        return {"status": "ok", "message": "Ingest refresh triggered."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -615,7 +398,7 @@ def manual_refresh():
 if __name__ == "__main__":
     # One-time interactive OAuth setup
     print("=" * 50)
-    print("Spotify Playlist Auto-Sync - OAuth Setup")
+    print("Spotify Ingest Playlist - OAuth Setup")
     print("=" * 50)
     print(f"\nRedirect URI: {REDIRECT_URI}")
     print("Make sure this URI is added in your Spotify Developer Dashboard.")
@@ -629,13 +412,17 @@ if __name__ == "__main__":
         user = sp.current_user()
         print(f"Logged in as: {user['display_name']}")
 
-        # Quick test: fetch playlist tracks
-        tracks = get_playlist_tracks(sp)
-        print(f"Playlist has {len(tracks)} track(s).")
-        if tracks:
-            t = sp.track(tracks[0]["id"])
-            print(f"  Latest: {t['name']} - {t['artists'][0]['name']}")
-        print("\nOAuth setup complete! The server will now auto-sync this playlist.")
+        if INGEST_PLAYLIST_ID:
+            from spotify_service import get_spotify_service
+            svc = get_spotify_service()
+            tracks = svc.get_playlist_tracks_by_id(INGEST_PLAYLIST_ID, force_refresh=True)
+            print(f"Ingest playlist has {len(tracks)} track(s).")
+            if tracks:
+                print(f"  Latest: {tracks[0]['title']} - {tracks[0]['artist']}")
+        else:
+            print("WARNING: No INGEST_PLAYLIST_ID configured in .env")
+
+        print("\nOAuth setup complete! The server will now auto-sync your ingest playlist.")
     except Exception as e:
         print(f"\nERROR: {e}")
         print("\nTroubleshooting:")

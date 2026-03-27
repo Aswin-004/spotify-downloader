@@ -1,18 +1,34 @@
+import { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, SkipForward, RotateCw, XCircle, Radio } from 'lucide-react';
+import { CheckCircle2, SkipForward, RotateCw, XCircle, Radio, Loader2, Inbox } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 const statusIcons = {
   success: { icon: CheckCircle2, color: 'text-emerald-400', label: 'Downloaded' },
-  skipped: { icon: SkipForward, color: 'text-gray-400', label: 'Skipped' },
+  completed: { icon: CheckCircle2, color: 'text-emerald-400', label: 'Downloaded' },
+  downloading: { icon: Loader2, color: 'text-yellow-400', label: 'Downloading', spin: true },
+  skipped: { icon: SkipForward, color: 'text-amber-400', label: 'Skipped' },
   failed: { icon: XCircle, color: 'text-red-400', label: 'Failed' },
   fallback: { icon: RotateCw, color: 'text-amber-400', label: 'Retry' },
 };
 
 export default function ActivityFeed() {
-  const { history, autoStatus } = useSocket();
+  const { history, autoStatus, downloads } = useSocket();
+
+  // Build live ingest feed from structured downloads state, newest first
+  const ingestEvents = useMemo(() => {
+    const events = [
+      ...Object.values(downloads.downloading).map((d) => ({ ...d, status: 'downloading' })),
+      ...Object.values(downloads.completed).map((d) => ({ ...d, status: 'success' })),
+      ...Object.values(downloads.skipped).map((d) => ({ ...d, status: 'skipped' })),
+      ...Object.values(downloads.failed).map((d) => ({ ...d, status: 'failed' })),
+    ];
+    return events;
+  }, [downloads]);
+
+  const allEvents = [...ingestEvents, ...history];
 
   return (
     <div className="flex flex-col h-full">
@@ -22,7 +38,7 @@ export default function ActivityFeed() {
           <Radio className="w-4 h-4 text-primary" />
           <h3 className="text-sm font-semibold">Activity</h3>
         </div>
-        <span className="text-xs text-gray-500">{history.length} events</span>
+        <span className="text-xs text-gray-500">{allEvents.length} events</span>
       </div>
 
       {/* Auto-downloader banner */}
@@ -39,27 +55,35 @@ export default function ActivityFeed() {
 
       {/* Feed */}
       <ScrollArea className="flex-1 p-2">
-        {history.length === 0 ? (
+        {allEvents.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-gray-600">
-            <Radio className="w-8 h-8 mb-2" />
-            <p className="text-sm">No activity yet</p>
+            <div className="w-12 h-12 rounded-2xl bg-surface-light flex items-center justify-center mb-3">
+              <Inbox className="w-6 h-6" />
+            </div>
+            <p className="text-sm font-medium text-gray-500">No activity yet</p>
+            <p className="text-xs text-gray-600 mt-1">Events will appear here in real-time</p>
           </div>
         ) : (
           <AnimatePresence initial={false}>
-            {history.map((item, i) => {
+            {allEvents.map((item, i) => {
               const config = statusIcons[item.status] || statusIcons.failed;
               const StatusIcon = config.icon;
 
               return (
                 <motion.div
-                  key={`${item.title}-${item.timestamp}-${i}`}
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.2, delay: i * 0.02 }}
+                  key={`${item.title}-${item.status}-${item.timestamp}-${i}`}
+                  layout
+                  initial={{ opacity: 0, x: 16, scale: 0.97 }}
+                  animate={{ opacity: 1, x: 0, scale: 1 }}
+                  transition={{ duration: 0.25, delay: Math.min(i * 0.02, 0.4), layout: { duration: 0.2 } }}
                   className="flex items-start gap-2.5 px-2 py-2 rounded-lg hover:bg-surface-light/50 transition-colors group"
                 >
                   <StatusIcon
-                    className={cn('w-4 h-4 mt-0.5 flex-shrink-0', config.color)}
+                    className={cn(
+                      'w-4 h-4 mt-0.5 flex-shrink-0',
+                      config.color,
+                      config.spin && 'animate-spin'
+                    )}
                   />
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-medium truncate">

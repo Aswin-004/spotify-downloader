@@ -2,6 +2,9 @@
 Spotify Meta Downloader - Flask Backend Application
 Main application entry point
 """
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
@@ -14,8 +17,7 @@ from config import config
 from spotify_service import get_spotify_service
 from downloader_service import get_downloader_service, sanitize_filename
 from downloader_service import download_queue_status, update_queue, set_manual_active
-from auto_downloader import AUTO_STATUS, BASE_DOWNLOAD_DIR
-from auto_downloader import INGEST_PLAYLIST_ID
+from auto_downloader import AUTO_STATUS, BASE_DOWNLOAD_DIR, INGEST_PLAYLIST_ID, set_socketio
 from auto_downloader import manual_refresh as _manual_refresh
 from spotify_service import get_api_usage
 from utils import setup_logging, extract_spotify_id
@@ -124,8 +126,9 @@ app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 app.config['SECRET_KEY'] = config.SECRET_KEY
 
-# SocketIO with CORS
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+# SocketIO with CORS — eventlet async mode
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
+set_socketio(socketio)
 
 # Enable CORS for all API routes
 CORS(app, resources={
@@ -153,18 +156,18 @@ def handle_request_status():
     """Client explicitly requests current status"""
     emit_status()
 
-# Background thread to periodically emit auto-downloader status and queue status
+# Background task to periodically emit auto-downloader status and queue status
 def _auto_status_emitter():
     """Emit auto-downloader status and queue status every 2 seconds"""
     while True:
-        time.sleep(2)
+        socketio.sleep(2)
         try:
             emit_status()
             socketio.emit("queue_status", download_queue_status)
         except Exception:
             pass
 
-threading.Thread(target=_auto_status_emitter, daemon=True).start()
+socketio.start_background_task(target=_auto_status_emitter)
 
 
 @app.route('/', methods=['GET'])
@@ -309,13 +312,8 @@ def download_track():
             download_status["status"] = "starting"
             download_status["progress"] = 10
         
-        # Spawn background thread for download
-        thread = threading.Thread(
-            target=_download_background,
-            args=(url,),
-            daemon=True
-        )
-        thread.start()
+        # Spawn background task for download (eventlet-safe)
+        socketio.start_background_task(target=_download_background, url=url)
         
         # Return immediately with 202 Accepted
         return jsonify({"status": "started"}), 202
@@ -720,8 +718,19 @@ def clear_history():
 
 @app.route('/api/refresh-playlist', methods=['POST'])
 def refresh_playlist():
-    """Trigger a manual playlist refresh (force-fetches from Spotify, bypasses cache)."""
-    result = _manual_refresh()
+    """Trigger a manual playlist refresh (force-fetches from Spotify, bypasses cache).
+    Accepts optional JSON body: { "download_dir": "/path/to/folder" }
+    """
+    download_dir = None
+    data = request.get_json(silent=True)
+    if data and data.get("download_dir"):
+        requested = data["download_dir"].strip()
+        # Validate: must be an absolute path under a real directory
+        if os.path.isabs(requested):
+            download_dir = requested
+        else:
+            return jsonify({"status": "error", "message": "download_dir must be an absolute path"}), 400
+    result = _manual_refresh(download_dir=download_dir)
     status_code = 200 if result["status"] == "ok" else 429 if result["status"] == "rate_limited" else 500
     return jsonify(result), status_code
 
@@ -766,12 +775,12 @@ if __name__ == '__main__':
         # Seed download history from existing files on disk
         seed_history_from_disk()
 
-        # Start playlist auto-sync monitor (guarded against duplicate threads)
+        # Start playlist auto-sync monitor (guarded against duplicate tasks)
         if not getattr(app, '_auto_thread_started', False):
             from auto_downloader import playlist_monitor
-            threading.Thread(target=playlist_monitor, daemon=True).start()
+            socketio.start_background_task(target=playlist_monitor)
             app._auto_thread_started = True
-            logger.info("Auto-downloader thread started")
+            logger.info("Auto-downloader background task started")
         
         # Run Flask app with SocketIO
         socketio.run(

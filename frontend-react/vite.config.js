@@ -18,7 +18,15 @@ export default defineConfig({
       },
       '/socket.io': {
         target: 'http://localhost:5000',
+        changeOrigin: true,
         ws: true,
+        timeout: 60000,
+        configure: (proxy) => {
+          proxy.on('error', () => {});
+          proxy.on('proxyReqWs', (_proxyReq, _req, socket) => {
+            socket.on('error', () => {});
+          });
+        },
       },
     },
   },
