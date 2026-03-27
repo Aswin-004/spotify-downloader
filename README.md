@@ -26,13 +26,13 @@ A full-stack, real-time music pipeline that converts Spotify links into high-qua
 
 * 🧠 **Smart Matching Engine**
 
-  * yt-dlp powered search
-  * Scoring based on title, artist, duration
-  * Cleans noisy YouTube titles for accuracy
+  * Multi-factor scoring (title, artist, duration, official boost)
+  * Keyword exemption system for remix/edit tracks
+  * 30s hard duration ceiling to prevent wrong downloads
 
-* ⚡ **Multi-Source Fallback**
+* ⚡ **Multi-Stage YouTube Search**
 
-  * YouTube → SoundCloud → fallback
+  * 3-stage fallback (official audio → audio → general)
   * Improves reliability and success rate
 
 * 📁 **Auto File Organization**
@@ -79,7 +79,7 @@ Local Storage (organized files)
 
 **Backend**
 
-* Flask
+* Flask + Eventlet
 * Flask-SocketIO
 * yt-dlp
 * FFmpeg
@@ -108,10 +108,16 @@ Local Storage (organized files)
 
 ---
 
-## 🖥️ Demo
+## 🖥️ Screenshots
 
-👉 Add demo video link here
-👉 Add screenshots here
+### Dashboard
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Download History
+![History](docs/screenshots/history.png)
+
+### File Browser
+![Files](docs/screenshots/files.png)
 
 ---
 
@@ -120,8 +126,8 @@ Local Storage (organized files)
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/<your-username>/<repo-name>.git
-cd <repo-name>
+git clone https://github.com/Aswin-004/spotify-downloader.git
+cd spotify-downloader
 ```
 
 ---
@@ -195,7 +201,7 @@ frontend-react/
 | Spotify Rate Limits | Caching + reduced polling        |
 | Wrong Song Matches  | Scoring + title cleaning         |
 | yt-dlp Errors       | Format fallback (bestaudio/best) |
-| Over-filtering      | Switched to scoring-based system |
+| Over-filtering      | Multi-factor scoring + keyword exemption |
 
 ---
 
