@@ -9,11 +9,8 @@ __pycache__/
 *.so
 .Python
 *.egg-info/
-dist/
-build/
 .venv/
 venv/
-*.egg
 
 # Spotify OAuth cache
 .spotify_cache
@@ -23,6 +20,7 @@ venv/
 backend/cache/
 
 # Download data & state files
+backend/downloads/
 downloads/
 *.mp3
 *.wav
@@ -32,8 +30,11 @@ ingest_tracks.json
 
 # Logs
 *.log
-debug.log
 logs/
+backend/logs/
+
+# Validation / debug artifacts
+backend/validation_output.txt
 
 # IDE
 .vscode/
@@ -43,20 +44,18 @@ logs/
 *~
 
 # OS
-Thumbs.db
 .DS_Store
+Thumbs.db
 
-# Node (if applicable)
+# Node
 node_modules/
 
-# Frontend build & legacy backup
-frontend-react/dist/
-frontend-react/node_modules/
-frontend-legacy/
+# Build outputs
+dist/
+build/
 
-# OS
-.DS_Store
-Thumbs.db
+# Old / legacy frontend
+frontend/
 
 # Logs
 *.log

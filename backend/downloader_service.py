@@ -14,8 +14,21 @@ import yt_dlp
 from pathlib import Path
 from config import config
 from utils import build_youtube_search_query, build_youtube_fallback_query, validate_filename, setup_logging
+from strict_matcher import (
+    score_candidate,
+    select_best_candidate,
+    has_reject_keyword,
+    clean_title,
+    duration_match,
+    log_rejection,
+    log_acceptance,
+)
 
-logger = setup_logging(__name__)
+# Use loguru when available, fall back to stdlib logger
+try:
+    from loguru import logger
+except ImportError:
+    logger = setup_logging(__name__)  # type: ignore[assignment]
 
 # Global download queue status (shared with app.py)
 download_queue_status = {
@@ -624,76 +637,41 @@ class DownloaderService:
         logger.error(error_msg)
         raise Exception(error_msg)
 
-    @staticmethod
-    def _title_has_unwanted_tag(yt_title, spotify_title):
-        """Check if YouTube title contains unwanted variants not in the Spotify title.
-        Returns the tag name if found, None otherwise."""
-        unwanted = ['remix', 'live', 'cover', 'karaoke', 'instrumental']
-        yt_lower = yt_title.lower()
-        sp_lower = spotify_title.lower()
-        for tag in unwanted:
-            if tag in yt_lower and tag not in sp_lower:
-                return tag
-        return None
-
-    @staticmethod
-    def _string_similarity(a, b):
-        """Compute normalized similarity between two strings (0.0–1.0)."""
-        if not a or not b:
-            return 0.0
-        return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
-
-    @staticmethod
-    def _duration_score(actual_secs, expected_secs, tolerance=15):
-        """Score duration match: 1.0 for exact, decaying to 0.0 at tolerance boundary."""
-        if not actual_secs or not expected_secs:
-            return 0.5  # unknown duration, neutral score
-        delta = abs(actual_secs - expected_secs)
-        if delta <= tolerance:
-            return 1.0 - (delta / tolerance)
-        return 0.0
-
-    def _score_candidate(self, entry, spotify_title, artist, expected_secs):
-        """Score a YouTube candidate using fuzzy similarity.
-        Returns (score, has_unwanted_tag) where score is 0.0–1.0."""
-        yt_title = entry.get('title', '')
-        vid_duration = entry.get('duration')
-
-        title_sim = self._string_similarity(spotify_title, yt_title) if spotify_title else 0.5
-        artist_sim = self._string_similarity(artist, yt_title) if artist else 0.5
-        dur_score = self._duration_score(vid_duration, expected_secs)
-
-        # Weighted score: title 50%, artist 30%, duration 20%
-        score = title_sim * 0.5 + artist_sim * 0.3 + dur_score * 0.2
-
-        # Bonuses for audio-specific results
-        yt_lower = yt_title.lower()
-        if 'official audio' in yt_lower:
-            score += 0.08
-        elif 'audio' in yt_lower:
-            score += 0.03
-        # Penalty for video-type results
-        if 'official video' in yt_lower or 'music video' in yt_lower:
-            score -= 0.05
-        if 'lyric' in yt_lower:
-            score -= 0.02
-
-        has_unwanted = self._title_has_unwanted_tag(yt_title, spotify_title) if spotify_title else None
-
-        return max(0.0, min(1.0, score)), has_unwanted
-
     def _try_download_with_duration_check(self, query, source_name, progress_callback=None,
                                            output_dir=None, output_filename=None, duration_ms=None,
                                            spotify_title=None, artist=None):
         """
-        Search YouTube, score candidates with fuzzy similarity matching,
-        then download the best match. Uses ±15s duration tolerance.
-        Falls back to tagged (remix/live) results if no clean match exists.
+        STRICT YouTube matching with hard rejection of wrong videos.
+        Uses rigid filtering: rejects remixes, karaoke, instrumentals, covers, clips.
+        
+        1. Extract search results from YouTube query
+        2. Apply strict filters (keywords, duration bounds, title similarity)
+        3. Select best candidate or SKIP if no good match
+        4. Download with safety threshold enforcement
+        
+        Args:
+            query: ytsearch or scsearch query string
+            source_name: "YouTube-filtered", "YouTube-unfiltered", "SoundCloud"
+            progress_callback: progress callback function
+            output_dir: download directory
+            output_filename: target filename
+            duration_ms: expected duration in milliseconds
+            spotify_title: original Spotify track title
+            artist: artist name
+            
+        Returns:
+            str: downloaded filename
+            
+        Raises:
+            Exception: if no acceptable match found or download fails
         """
-        logger.info(f"[{source_name}] Extracting info: {query}")
+        logger.info(f"[{source_name}] STRICT matching starting: {query}")
+        
+        # Extract search results
         ffmpeg_dir = self._find_ffmpeg()
         actual_dir = output_dir or self.download_dir
-
+        os.makedirs(actual_dir, exist_ok=True)
+        
         extract_opts = {
             'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'noplaylist': True,
@@ -702,80 +680,58 @@ class DownloaderService:
             'extract_flat': False,
             'socket_timeout': 15,
         }
-
-        with yt_dlp.YoutubeDL(extract_opts) as ydl:
-            info = ydl.extract_info(query, download=False)
-
+        
+        logger.info(f"[{source_name}] Fetching search results...")
+        try:
+            with yt_dlp.YoutubeDL(extract_opts) as ydl:
+                info = ydl.extract_info(query, download=False)
+        except Exception as e:
+            raise Exception(f"[{source_name}] Failed to fetch search results: {str(e)[:120]}")
+        
         entries = info.get('entries', [info]) if info else []
         if not entries:
             raise Exception(f"[{source_name}] No search results")
-
+        
+        logger.info(f"[{source_name}] Got {len(entries)} result(s), applying STRICT filters...")
+        
         expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
-
-        # Score all candidates
-        clean_candidates = []   # no unwanted tags
-        tagged_candidates = []  # has remix/live/cover but still a match
+        
+        # Convert entries to candidate format for strict matcher
+        candidates = []
         for i, entry in enumerate(entries):
             if not entry:
                 continue
-            yt_title = entry.get('title', '')
-            vid_duration = entry.get('duration')
-
-            score, unwanted_tag = self._score_candidate(entry, spotify_title, artist, expected_secs)
-
-            # Hard reject: duration way too far off (>3x or <0.3x)
-            if expected_secs and vid_duration:
-                if vid_duration > expected_secs * 3 or vid_duration < expected_secs * 0.3:
-                    logger.info(f"[{source_name}] #{i+1} REJECT '{yt_title}' — duration {vid_duration}s wildly off ({expected_secs:.0f}s expected)")
-                    continue
-
-            # Duration within ±15s is strongly preferred
-            dur_ok = True
-            if expected_secs and vid_duration:
-                dur_ok = abs(vid_duration - expected_secs) <= 15
-
-            delta_str = f"Δ{abs(vid_duration - expected_secs):.1f}s" if expected_secs and vid_duration else "no-dur"
-            log_line = f"[{source_name}] #{i+1} '{yt_title}' — {delta_str}, score={score:.3f}"
-
-            if unwanted_tag:
-                tagged_candidates.append((score, entry, i, unwanted_tag))
-                logger.info(f"{log_line} (tagged: {unwanted_tag})")
-            elif dur_ok:
-                clean_candidates.append((score, entry, i))
-                logger.info(f"{log_line} CANDIDATE")
-            else:
-                # Duration outside ±15s but within 0.3x-3x — keep as low-priority
-                clean_candidates.append((score * 0.6, entry, i))
-                logger.info(f"{log_line} RELAXED")
-
-        # Pick best clean candidate
-        best_entry = None
-        if clean_candidates:
-            clean_candidates.sort(key=lambda x: x[0], reverse=True)
-            best_score, best_entry, best_idx = clean_candidates[0]
-            logger.info(f"[{source_name}] SELECTED #{best_idx+1} '{best_entry.get('title', '')}' (score={best_score:.3f})")
-
-        # Fallback: allow tagged results (remix/live) if no clean match
-        if not best_entry and tagged_candidates:
-            tagged_candidates.sort(key=lambda x: x[0], reverse=True)
-            best_score, best_entry, best_idx, tag = tagged_candidates[0]
-            logger.info(f"[{source_name}] TAGGED FALLBACK #{best_idx+1} '{best_entry.get('title', '')}' (score={best_score:.3f}, tag={tag})")
-
-        if not best_entry:
-            if expected_secs:
-                raise Exception(f"[{source_name}] No results within acceptable duration range ({expected_secs:.0f}s expected)")
-            # No duration info — just use the first result
-            best_entry = entries[0] if entries[0] else None
-
-        if not best_entry:
-            raise Exception(f"[{source_name}] No valid candidates found")
-
-        # Download the chosen entry by URL
-        video_url = best_entry.get('webpage_url') or best_entry.get('url')
-        if not video_url:
-            raise Exception(f"[{source_name}] No URL for selected entry")
-
-        logger.info(f"[{source_name}] Downloading: {best_entry.get('title', 'Unknown')} ({video_url})")
+            
+            candidates.append({
+                "title": entry.get("title", ""),
+                "duration": entry.get("duration"),
+                "url": entry.get("webpage_url") or entry.get("url"),
+                "uploader": entry.get("uploader", "") or entry.get("channel", "") or "",
+                "entry": entry,  # Keep original entry for download
+                "index": i,
+            })
+        
+        # Use strict matcher to select best candidate
+        best_candidate, selection_reason = select_best_candidate(
+            candidates=candidates,
+            spotify_title=spotify_title or query,
+            artist=artist or "",
+            expected_duration_sec=int(expected_secs) if expected_secs else None,
+            min_score=0.4,  # SAFETY: require minimum 0.4 score (40% match confidence)
+        )
+        
+        if not best_candidate:
+            raise Exception(f"[{source_name}] No acceptable match. {selection_reason}")
+        
+        # Download the selected video
+        best_entry = best_candidate.get("entry")
+        video_url = best_candidate.get("url")
+        
+        if not video_url or not best_entry:
+            raise Exception(f"[{source_name}] Selected candidate missing URL or entry data")
+        
+        logger.info(f"[{source_name}] ✅ Selected: \"{best_candidate.get('title', '')}\" — Downloading...")
+        
         return self._try_download_with_query(
             video_url, source_name, progress_callback,
             output_dir=actual_dir, output_filename=output_filename

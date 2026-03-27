@@ -27,7 +27,11 @@ from downloader_service import download_queue_status, update_queue, wait_if_manu
 from spotify_service import is_rate_limited, set_global_rate_limit
 from metadata_cache import get_cache
 
-logger = logging.getLogger(__name__)
+# Use loguru when available, fall back to stdlib logger
+try:
+    from loguru import logger
+except ImportError:
+    logger = logging.getLogger(__name__)  # type: ignore[assignment]
 
 PLAYLIST_ID = config.PLAYLIST_ID
 INGEST_PLAYLIST_ID = config.INGEST_PLAYLIST_ID
@@ -473,16 +477,21 @@ def ingest_download():
     sp_service = get_spotify_service()
 
     try:
-        tracks = sp_service.get_playlist_tracks_by_id(INGEST_PLAYLIST_ID)
+        # Force refresh to bypass stale cache and fetch all tracks
+        tracks = sp_service.get_playlist_tracks_by_id(INGEST_PLAYLIST_ID, force_refresh=True)
     except Exception as e:
         logger.error(f"[ingest] Failed to fetch ingest playlist: {e}")
         return
 
+    print(f"[DEBUG] Ingest playlist fetched: {len(tracks)} tracks")
     saved_ids = _load_ingest_history()
+    print(f"[DEBUG] Ingest saved_ids: {len(saved_ids)} IDs")
     new_tracks = [t for t in tracks if t["id"] not in saved_ids]
+    print(f"[DEBUG] Ingest new_tracks: {len(new_tracks)} IDs: {[t['id'] for t in new_tracks]}")
 
     if not new_tracks:
         logger.info("[ingest] No new tracks in ingest playlist.")
+        print("[DEBUG] No new tracks to download.")
         return
 
     logger.info(f"[ingest] {len(new_tracks)} new track(s) from ingest playlist")
@@ -492,7 +501,13 @@ def ingest_download():
     # Build file registry from existing ingest downloads for dedup
     ingest_registry = _build_file_registry(INGEST_FOLDER)
     logger.info(f"[ingest] Existing files in Ingest: {len(ingest_registry)}")
-
+    
+    logger.info(f"[ingest] {len(new_tracks)} new track(s) to download")
+    
+    ingest_success = 0
+    ingest_skipped = 0
+    ingest_failed = 0
+    
     for t in new_tracks:
         title = t["title"]
         artist = t["artist"]
@@ -501,12 +516,14 @@ def ingest_download():
 
         # Dedup: skip if already downloaded
         if track_key in ingest_registry:
-            logger.debug(f"[ingest] Skipping (exists): {title} - {artist}")
+            logger.debug(f"[ingest] Skipping (already exists): {title} - {artist}")
+            ingest_skipped += 1
             saved_ids.add(t["id"])
             continue
 
         target = resolve_folder(artist, base_dir=INGEST_FOLDER, title=title)
         try:
+            logger.info(f"[ingest] Attempting download (strict match required): {title} - {artist}")
             result = downloader.download_track(
                 title, artist,
                 output_dir=target,
@@ -514,15 +531,22 @@ def ingest_download():
                 duration_ms=t.get("duration_ms"),
             )
             if result["status"] == "success":
-                logger.info(f"[ingest] Downloaded: {title} - {artist}")
+                logger.info(f"✅ [ingest] Downloaded: {title} - {artist}")
+                ingest_success += 1
                 saved_ids.add(t["id"])
             else:
-                logger.warning(f"[ingest] Failed (will retry next cycle): {title} - {artist}")
+                # Fallback status — ingest requires strict match, so we SKIP
+                logger.warning(f"❌ [ingest] SKIPPED (no strict match): {title} - {artist} | {result.get('message', 'No details')}")
+                ingest_failed += 1
+                # DO NOT add to saved_ids — retry on next cycle in case better YouTube result appears
         except Exception as e:
-            logger.error(f"[ingest] Error: {title} - {e}")
+            logger.error(f"❌ [ingest] Error downloading {title} - {artist}: {str(e)[:150]}")
+            ingest_failed += 1
+            # DO NOT add to saved_ids — retry on next cycle
 
     _save_ingest_history(saved_ids)
-    logger.info("[ingest] Ingest sync complete.")
+    logger.info(f"[ingest] Summary: {ingest_success} downloaded, {ingest_skipped} skipped, {ingest_failed} failed (strict ingest policy applied)")
+    print(f"[DEBUG] Ingest sync complete: {ingest_success} ok, {ingest_skipped} skip, {ingest_failed} fail")
 
 
 def playlist_monitor():

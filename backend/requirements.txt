@@ -4,3 +4,5 @@ flask-socketio==5.6.1
 spotipy==2.26.0
 yt-dlp==2026.3.17
 python-dotenv==1.0.0
+loguru>=0.7.0
+thefuzz[speedup]>=0.22.0

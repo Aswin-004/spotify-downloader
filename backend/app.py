@@ -20,8 +20,21 @@ from auto_downloader import manual_refresh as _manual_refresh
 from spotify_service import get_api_usage
 from utils import setup_logging, extract_spotify_id
 
-# Setup logging
-logger = setup_logging(__name__, level=logging.INFO)
+# ── Loguru: structured file logging ──────────────────────────────────────────
+try:
+    from loguru import logger
+
+    _log_dir = Path(__file__).parent / "logs"
+    _log_dir.mkdir(exist_ok=True)
+    logger.add(
+        str(_log_dir / "app.log"),
+        rotation="5 MB",
+        retention="7 days",
+        level="INFO",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name} | {message}",
+    )
+except ImportError:
+    logger = setup_logging(__name__, level=logging.INFO)  # type: ignore[assignment]
 
 # Download status tracking
 download_status = {

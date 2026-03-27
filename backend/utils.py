@@ -123,16 +123,17 @@ def extract_spotify_track_id(spotify_url):
 
 def build_youtube_search_query(title, artist, album=None):
     """
-    Build a YouTube search query from track metadata.
-    Uses filtered query to prefer official audio and exclude unwanted variants.
+    Build a clean YouTube search query from track metadata.
+    IMPORTANT: Uses STRICT query without negative filters.
+    Filtering is now handled by strict_matcher for better accuracy.
     
     Args:
         title (str): Track title
         artist (str): Artist name
-        album (str, optional): Album name
+        album (str, optional): Album name (unused in strict query)
     
     Returns:
-        str: Search query for YouTube
+        str: Clean search query for YouTube
     """
     if not title or not artist:
         raise ValueError("Title and artist are required")
@@ -141,16 +142,17 @@ def build_youtube_search_query(title, artist, album=None):
     title = str(title).strip()
     artist = str(artist).strip()
     
-    # Filtered query: prefer official audio, exclude live/remix/cover
-    query = f"{title} {artist} official audio -live -remix -cover -karaoke -instrumental"
+    # STRICT query: prefer official audio, let filtering handle rejection
+    # No negative filters (-remix, -live, etc) as they often backfire
+    query = f"{title} {artist} official audio"
     
     return query
 
 
 def build_youtube_fallback_query(title, artist):
     """
-    Build an unfiltered YouTube search query as fallback.
-    Used when the filtered query returns no good match.
+    Build a fallback YouTube search query for Stage 2 unfiltered search.
+    Used when Stage 1 (official audio) returns no good match.
     
     Args:
         title (str): Track title
@@ -161,6 +163,7 @@ def build_youtube_fallback_query(title, artist):
     """
     title = str(title).strip()
     artist = str(artist).strip()
+    # Simpler query without negative filters — strict_matcher will filter results
     return f"{title} {artist} audio"
 
 
