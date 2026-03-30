@@ -22,6 +22,12 @@ from downloader_service import set_socketio as set_downloader_socketio
 from auto_downloader import AUTO_STATUS, BASE_DOWNLOAD_DIR, INGEST_PLAYLIST_ID, set_socketio
 from auto_downloader import manual_refresh as _manual_refresh
 from spotify_service import get_api_usage
+from analytics_service import (  # ANALYTICS
+    get_overview_stats, get_downloads_per_day,  # ANALYTICS
+    get_top_artists, get_source_breakdown,  # ANALYTICS
+    get_tagging_breakdown, get_recent_downloads,  # ANALYTICS
+    get_failed_downloads,  # ANALYTICS
+)  # ANALYTICS
 from utils import setup_logging, extract_spotify_id
 
 # MUSICBRAINZ — import tagger service
@@ -1075,6 +1081,55 @@ def retag_status():  # MUSICBRAINZ
     """Return current retag progress or last summary."""  # MUSICBRAINZ
     with _retag_lock:  # MUSICBRAINZ
         return jsonify(dict(_retag_state)), 200  # MUSICBRAINZ
+
+
+# ═══════════════════════════════════════════════════════════════════  # ANALYTICS
+# ANALYTICS — Dashboard aggregation routes  # ANALYTICS
+# ═══════════════════════════════════════════════════════════════════  # ANALYTICS
+
+
+@app.route('/api/analytics/overview')  # ANALYTICS
+def analytics_overview():  # ANALYTICS
+    """Return high-level analytics stats."""  # ANALYTICS
+    return jsonify(get_overview_stats())  # ANALYTICS
+
+
+@app.route('/api/analytics/downloads-per-day')  # ANALYTICS
+def analytics_downloads_per_day():  # ANALYTICS
+    """Return download counts grouped by day."""  # ANALYTICS
+    days = request.args.get('days', 30, type=int)  # ANALYTICS
+    return jsonify(get_downloads_per_day(days))  # ANALYTICS
+
+
+@app.route('/api/analytics/top-artists')  # ANALYTICS
+def analytics_top_artists():  # ANALYTICS
+    """Return top artists by download count."""  # ANALYTICS
+    limit = request.args.get('limit', 10, type=int)  # ANALYTICS
+    return jsonify(get_top_artists(limit))  # ANALYTICS
+
+
+@app.route('/api/analytics/source-breakdown')  # ANALYTICS
+def analytics_source_breakdown():  # ANALYTICS
+    """Return download counts by source platform."""  # ANALYTICS
+    return jsonify(get_source_breakdown())  # ANALYTICS
+
+
+@app.route('/api/analytics/tagging-breakdown')  # ANALYTICS
+def analytics_tagging_breakdown():  # ANALYTICS
+    """Return tagging source breakdown."""  # ANALYTICS
+    return jsonify(get_tagging_breakdown())  # ANALYTICS
+
+
+@app.route('/api/analytics/recent')  # ANALYTICS
+def analytics_recent():  # ANALYTICS
+    """Return recent downloads."""  # ANALYTICS
+    return jsonify(get_recent_downloads())  # ANALYTICS
+
+
+@app.route('/api/analytics/failed')  # ANALYTICS
+def analytics_failed():  # ANALYTICS
+    """Return recent tagging failures."""  # ANALYTICS
+    return jsonify(get_failed_downloads())  # ANALYTICS
 
 
 @app.errorhandler(404)
