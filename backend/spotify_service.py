@@ -190,6 +190,8 @@ class SpotifyService:
                 "release_date": track.get("release_date"),
                 "external_url": track.get("external_urls", {}).get("spotify"),
                 "artists": [artist["name"] for artist in track.get("artists", [])],
+                # CHANGED: highest-res album art (images[0] = 640x640)
+                "album_art_url": (track.get("album", {}).get("images") or [{}])[0].get("url"),
             }
 
             # Persist to cache

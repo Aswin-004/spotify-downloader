@@ -7,20 +7,25 @@ import {
   ChevronRight,
   ChevronDown,
   HardDrive,
+  Tags,
+  Loader2,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
 import { cn } from '@/lib/utils';
 
 export default function Files() {
-  const { files: socketFiles } = useSocket();
+  const { files: socketFiles, retagProgress } = useSocket();
   const [files, setFiles] = useState([]);
   const [search, setSearch] = useState('');
   const [expandedFolders, setExpandedFolders] = useState(new Set());
+  const [retagging, setRetagging] = useState(false); // MUSICBRAINZ
 
   useEffect(() => {
     api.getFiles().then((data) => {
@@ -68,6 +73,23 @@ export default function Files() {
     }
   }, [folderNames]);
 
+  // MUSICBRAINZ — handle retag button click
+  async function handleRetag() {
+    setRetagging(true);
+    try {
+      await api.retagLibrary();
+    } catch {
+      setRetagging(false);
+    }
+  }
+
+  // MUSICBRAINZ — stop spinner when retag completes
+  useEffect(() => {
+    if (retagProgress?.status === 'complete' || retagProgress?.status === 'error') {
+      setRetagging(false);
+    }
+  }, [retagProgress]);
+
   return (
     <div className="max-w-4xl mx-auto space-y-5">
       {/* Header */}
@@ -87,7 +109,45 @@ export default function Files() {
             </p>
           </div>
         </div>
+        {/* MUSICBRAINZ — Retag Library button */}
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleRetag}
+          disabled={retagging}
+        >
+          {retagging ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Tags className="w-3.5 h-3.5" />
+          )}
+          {retagging ? 'Retagging...' : 'Retag Library'}
+        </Button>
       </motion.div>
+
+      {/* MUSICBRAINZ — Retag progress bar */}
+      {retagProgress && retagProgress.status === 'processing' && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          exit={{ opacity: 0, height: 0 }}
+          className="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-2"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-4 h-4 text-primary animate-spin" />
+              <span className="text-sm font-medium">Retagging Library</span>
+            </div>
+            <span className="text-xs font-mono text-gray-400">
+              {retagProgress.current}/{retagProgress.total}
+            </span>
+          </div>
+          <Progress value={retagProgress.percentage || 0} />
+          <p className="text-xs text-gray-500 truncate">
+            {retagProgress.current_file || 'Starting...'}
+          </p>
+        </motion.div>
+      )}
 
       {/* Search */}
       <motion.div

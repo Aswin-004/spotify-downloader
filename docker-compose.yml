@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: spotify_downloader_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  mongo:  # MUSICBRAINZ
+    image: mongo:7  # MUSICBRAINZ
+    container_name: spotify_downloader_mongo  # MUSICBRAINZ
+    ports:  # MUSICBRAINZ
+      - "27017:27017"  # MUSICBRAINZ
+    volumes:  # MUSICBRAINZ
+      - mongo_data:/data/db  # MUSICBRAINZ
+    restart: unless-stopped  # MUSICBRAINZ
+    healthcheck:  # MUSICBRAINZ
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]  # MUSICBRAINZ
+      interval: 5s  # MUSICBRAINZ
+      timeout: 3s  # MUSICBRAINZ
+      retries: 5  # MUSICBRAINZ
+
+volumes:
+  redis_data:
+  mongo_data:  # MUSICBRAINZ

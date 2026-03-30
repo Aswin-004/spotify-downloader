@@ -67,4 +67,14 @@ export const api = {
   getHealth() {
     return fetch('/api/health').then(handleResponse);
   },
+
+  // MUSICBRAINZ — Retag library
+  retagLibrary() {
+    return fetch('/api/library/retag', { method: 'POST' }).then(handleResponse);
+  },
+
+  // MUSICBRAINZ — Get retag status
+  getRetagStatus() {
+    return fetch('/api/library/retag/status').then(handleResponse);
+  },
 };

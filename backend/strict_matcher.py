@@ -140,18 +140,23 @@ def string_similarity(text_a: str, text_b: str) -> float:
 
 def duration_score(actual_sec: Optional[int], expected_sec: Optional[int]) -> float:
     """
-    Smart tiered duration scoring (Step 4).
+    CHANGED — Smart tiered duration scoring (Step 4).
     Returns 0.0–1.0 based on how close the durations are.
+    ±2 s = perfect.  ±10 s = OK.  ±25 s = marginal.  >25 s = reject.
+    Heavy -50 penalty applied when diff > 2 s (via score_candidate).
     """
     if not actual_sec or not expected_sec:
         return 0.5  # Unknown duration — neutral
 
     diff = abs(actual_sec - expected_sec)
 
-    if diff <= 10:
+    # CHANGED: tighter scoring — ±2 s is perfect, heavy penalty above
+    if diff <= 2:
         return 1.0
-    elif diff <= 25:
+    elif diff <= 10:
         return 0.7
+    elif diff <= 25:
+        return 0.4
     else:
         return 0.0
 
@@ -184,6 +189,7 @@ def score_candidate(
     artist: str,
     expected_duration_sec: Optional[int],
     uploader: Optional[str] = None,
+    channel_is_verified: bool = False,
 ) -> Tuple[float, List[str]]:
     """
     Score a YouTube candidate using multi-factor scoring.
@@ -248,14 +254,23 @@ def score_candidate(
     # ── STEP 6: Official boost ──
     official_bonus = 0.05 if "official" in yt_lower else 0.0
 
+    # ── CHANGED: Verified channel boost (+0.30 = +30 on 0–100 scale) ──
+    verified_bonus = 0.30 if channel_is_verified else 0.0
+
+    # ── CHANGED: Heavy penalty when duration exceeds ±2 s ──
+    tight_penalty = 0.0
+    if actual_duration_sec and expected_duration_sec:
+        if abs(actual_duration_sec - expected_duration_sec) > 2:
+            tight_penalty = -0.50  # heavy penalty
+
     # ── STEP 5: Weighted final score ──
-    final = (0.5 * title_score) + (0.3 * artist_score) + (0.2 * dur_score) + official_bonus
+    final = (0.5 * title_score) + (0.3 * artist_score) + (0.2 * dur_score) + official_bonus + verified_bonus + tight_penalty
     final = max(0.0, min(1.0, final))
 
     logger.info(
         f"Candidate: \"{yt_title}\" | "
         f"title={title_score:.2f} artist={artist_score:.2f} dur={dur_score:.2f} "
-        f"official={official_bonus:.2f} → score={final:.2f}"
+        f"official={official_bonus:.2f} verified={verified_bonus:.2f} tight_pen={tight_penalty:.2f} → score={final:.2f}"
     )
 
     return final, rejections
@@ -280,9 +295,11 @@ def select_best_candidate(
         duration = candidate.get("duration")
         uploader = candidate.get("uploader", "")
 
+        # CHANGED: pass channel_is_verified for +30 boost
+        verified = candidate.get("channel_is_verified", False)
         score, rejections = score_candidate(
             yt_title, duration, spotify_title, artist,
-            expected_duration_sec, uploader,
+            expected_duration_sec, uploader, channel_is_verified=verified,
         )
 
         scored.append({

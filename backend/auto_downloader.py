@@ -66,8 +66,9 @@ INGEST_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "ingest_tracks.jso
 CACHE_PATH = os.path.join(os.path.dirname(__file__), ".spotify_cache")
 
 REDIRECT_URI = config.REDIRECT_URI
-# Dynamic workers: min(5, cpu_count), with a floor of 3
-MAX_WORKERS = min(5, max(3, os.cpu_count() or 3))
+# DISCONNECT FIX: cap at 2 workers — 5 parallel yt-dlp+FFmpeg processes
+# flood Socket.IO with events and exhaust the eventlet hub, causing disconnects
+MAX_WORKERS = 2  # DISCONNECT FIX
 
 AUTO_STATUS = {
     "status": "idle",
@@ -84,6 +85,7 @@ AUTO_STATUS = {
 # Thread-safe registry of downloaded file keys
 _registry_lock = threading.Lock()
 _downloaded_registry: set = set()
+_download_semaphore = threading.Semaphore(2)  # DISCONNECT FIX: limit concurrent yt-dlp processes
 
 
 # ── SocketIO bridge for real-time events ─────────────────────────────────────
@@ -96,12 +98,24 @@ def set_socketio(sio):
     _socketio = sio
 
 
+# DISCONNECT FIX: rate-limit _emit to max every 0.3s per event to avoid flooding Socket.IO
+_last_emit_times = {}  # DISCONNECT FIX
+_emit_lock = threading.Lock()  # DISCONNECT FIX
+
 def _emit(event, data):
     """Emit a SocketIO event to all connected clients."""
     if _socketio is not None:
         try:
+            now = time.time()  # DISCONNECT FIX
+            with _emit_lock:  # DISCONNECT FIX
+                last = _last_emit_times.get(event, 0)  # DISCONNECT FIX
+                if now - last < 0.3:  # DISCONNECT FIX: skip if emitted < 300ms ago
+                    return  # DISCONNECT FIX
+                _last_emit_times[event] = now  # DISCONNECT FIX
             _socketio.emit(event, data)
-            _socketio.sleep(0)
+            # DISCONNECT FIX: removed _socketio.sleep(0) — calling it from
+            # ThreadPoolExecutor worker threads corrupts the eventlet hub
+            # and directly causes WebSocket disconnections under parallel load.
         except Exception:
             pass
 
@@ -289,13 +303,34 @@ def ingest_download(download_dir=None):
         try:
             AUTO_STATUS["current"] = f"{title} - {artist}"
             _emit("download_start", {"title": title, "artist": artist, "source": "ingest"})
-            result = downloader.download_track(
-                title,
-                artist,
-                output_dir=target_folder,
-                output_filename=filename,
-                duration_ms=track_info.get("duration_ms"),
-            )
+
+            # Throttled per-track progress callback for real-time UI updates
+            _last_pct = [0]
+            _last_track_emit = [0.0]  # DISCONNECT FIX: time-based throttle too
+
+            def _track_progress_cb(pct, status_text):
+                now = time.time()  # DISCONNECT FIX
+                # Only emit when progress changes by >= 2% AND at most every 0.5s
+                if (abs(pct - _last_pct[0]) >= 2 or pct >= 100) and (now - _last_track_emit[0] >= 0.5 or pct >= 100):  # DISCONNECT FIX
+                    _last_pct[0] = pct
+                    _last_track_emit[0] = now  # DISCONNECT FIX
+                    _emit("download_track_progress", {
+                        "title": title,
+                        "artist": artist,
+                        "percent": pct,
+                        "status_text": status_text,
+                        "source": "ingest",
+                    })
+
+            with _download_semaphore:  # DISCONNECT FIX: limit concurrent yt-dlp processes
+                result = downloader.download_track(
+                    title,
+                    artist,
+                    progress_callback=_track_progress_cb,
+                    output_dir=target_folder,
+                    output_filename=filename,
+                    duration_ms=track_info.get("duration_ms"),
+                )
 
             if result["status"] == "success":
                 with _registry_lock:
