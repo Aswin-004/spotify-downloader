@@ -15,14 +15,14 @@ import threading
 import time
 from pathlib import Path
 from config import config
-from spotify_service import get_spotify_service
-from downloader_service import get_downloader_service, sanitize_filename
-from downloader_service import download_queue_status, update_queue, set_manual_active
-from downloader_service import set_socketio as set_downloader_socketio
-from auto_downloader import AUTO_STATUS, BASE_DOWNLOAD_DIR, INGEST_PLAYLIST_ID, set_socketio
-from auto_downloader import manual_refresh as _manual_refresh
-from spotify_service import get_api_usage
-from analytics_service import (  # ANALYTICS
+from services.spotify_service import get_spotify_service
+from services.downloader_service import get_downloader_service, sanitize_filename
+from services.downloader_service import download_queue_status, update_queue, set_manual_active
+from services.downloader_service import set_socketio as set_downloader_socketio
+from services.auto_downloader import AUTO_STATUS, BASE_DOWNLOAD_DIR, INGEST_PLAYLIST_ID, set_socketio
+from services.auto_downloader import manual_refresh as _manual_refresh
+from services.spotify_service import get_api_usage
+from services.analytics_service import (  # ANALYTICS
     get_overview_stats, get_downloads_per_day,  # ANALYTICS
     get_top_artists, get_source_breakdown,  # ANALYTICS
     get_tagging_breakdown, get_recent_downloads,  # ANALYTICS
@@ -30,9 +30,12 @@ from analytics_service import (  # ANALYTICS
 )  # ANALYTICS
 from utils import setup_logging, extract_spotify_id
 
+# FILE ORGANIZER — Import library blueprint
+from routes import library_bp
+
 # MUSICBRAINZ — import tagger service
 try:  # MUSICBRAINZ
-    from tagger_service import tag_file as tagger_tag_file, lookup_musicbrainz, _ensure_tables as tagger_ensure_tables  # MUSICBRAINZ
+    from services.tagger_service import tag_file as tagger_tag_file, lookup_musicbrainz, _ensure_tables as tagger_ensure_tables  # MUSICBRAINZ
     _tagger_available = True  # MUSICBRAINZ
 except ImportError as _tag_err:  # MUSICBRAINZ
     _tagger_available = False  # MUSICBRAINZ
@@ -186,6 +189,9 @@ CORS(app, resources={
         "supports_credentials": False
     }
 })
+
+# FILE ORGANIZER — Register library blueprint
+app.register_blueprint(library_bp)
 
 # Get services
 spotify_service = get_spotify_service()
@@ -1132,6 +1138,118 @@ def analytics_failed():  # ANALYTICS
     return jsonify(get_failed_downloads())  # ANALYTICS
 
 
+# ═══════════════════════════════════════════════════════════════════  # NOTIFICATION
+# NOTIFICATION — Test route & storage monitor  # NOTIFICATION
+# ═══════════════════════════════════════════════════════════════════  # NOTIFICATION
+
+@app.route('/api/notifications/test', methods=['POST'])  # NOTIFICATION
+def test_notifications_route():  # NOTIFICATION
+    """Send a test notification to Telegram + Discord."""  # NOTIFICATION
+    try:  # NOTIFICATION
+        from services.notifications_service import test_notifications, is_telegram_enabled, is_discord_enabled  # NOTIFICATION
+        test_notifications()  # NOTIFICATION
+        return jsonify({  # NOTIFICATION
+            "message": "Test notification sent",  # NOTIFICATION
+            "telegram_enabled": is_telegram_enabled(),  # NOTIFICATION
+            "discord_enabled": is_discord_enabled(),  # NOTIFICATION
+        })  # NOTIFICATION
+    except Exception as e:  # NOTIFICATION
+        return jsonify({"error": str(e)}), 500  # NOTIFICATION
+
+
+@app.route('/api/skipped-tracks', methods=['GET'])  # PERMANENT SKIP
+def get_skipped_tracks():  # PERMANENT SKIP
+    """Return all permanently skipped tracks and their failure counts."""  # PERMANENT SKIP
+    try:  # PERMANENT SKIP
+        from services.auto_downloader import _load_failure_counts, MAX_FAIL_ATTEMPTS  # PERMANENT SKIP
+        counts = _load_failure_counts()  # PERMANENT SKIP
+        skipped = {tid: c for tid, c in counts.items() if c >= MAX_FAIL_ATTEMPTS}  # PERMANENT SKIP
+        return jsonify({"skipped": skipped, "threshold": MAX_FAIL_ATTEMPTS, "total": len(skipped)})  # PERMANENT SKIP
+    except Exception as e:  # PERMANENT SKIP
+        return jsonify({"error": str(e)}), 500  # PERMANENT SKIP
+
+
+@app.route('/api/skipped-tracks/reset', methods=['POST'])  # PERMANENT SKIP
+def reset_skipped_tracks():  # PERMANENT SKIP
+    """Reset failure counts — optionally for a single track_id or all."""  # PERMANENT SKIP
+    try:  # PERMANENT SKIP
+        from services.auto_downloader import _load_failure_counts, _save_failure_counts  # PERMANENT SKIP
+        from services.auto_downloader import _load_ingest_history, _save_ingest_history  # PERMANENT SKIP
+        data = request.get_json(silent=True) or {}  # PERMANENT SKIP
+        track_id = data.get("track_id")  # PERMANENT SKIP
+        counts = _load_failure_counts()  # PERMANENT SKIP
+        history = _load_ingest_history()  # PERMANENT SKIP
+        if track_id:  # PERMANENT SKIP
+            counts.pop(track_id, None)  # PERMANENT SKIP
+            history.discard(track_id)  # PERMANENT SKIP — allow re-download
+            msg = f"Reset failure count for {track_id}"  # PERMANENT SKIP
+        else:  # PERMANENT SKIP
+            reset_ids = [tid for tid, c in counts.items() if c >= 3]  # PERMANENT SKIP
+            counts.clear()  # PERMANENT SKIP
+            for tid in reset_ids:  # PERMANENT SKIP
+                history.discard(tid)  # PERMANENT SKIP
+            msg = f"Reset all failure counts ({len(reset_ids)} tracks unblocked)"  # PERMANENT SKIP
+        _save_failure_counts(counts)  # PERMANENT SKIP
+        _save_ingest_history(history)  # PERMANENT SKIP
+        return jsonify({"message": msg})  # PERMANENT SKIP
+    except Exception as e:  # PERMANENT SKIP
+        return jsonify({"error": str(e)}), 500  # PERMANENT SKIP
+
+
+@app.route('/api/notifications/status', methods=['GET'])  # NOTIFICATION
+def notifications_status():  # NOTIFICATION
+    """Return which notification channels are enabled."""  # NOTIFICATION
+    try:  # NOTIFICATION
+        from services.notifications_service import is_telegram_enabled, is_discord_enabled  # NOTIFICATION
+        from services.notifications_service import NOTIFY_ON_SUCCESS, NOTIFY_ON_FAILURE, NOTIFY_ON_PLAYLIST  # NOTIFICATION
+        from services.notifications_service import STORAGE_THRESHOLD_MB  # NOTIFICATION
+        return jsonify({  # NOTIFICATION
+            "telegram_enabled": is_telegram_enabled(),  # NOTIFICATION
+            "discord_enabled": is_discord_enabled(),  # NOTIFICATION
+            "notify_on_success": NOTIFY_ON_SUCCESS,  # NOTIFICATION
+            "notify_on_failure": NOTIFY_ON_FAILURE,  # NOTIFICATION
+            "notify_on_playlist": NOTIFY_ON_PLAYLIST,  # NOTIFICATION
+            "storage_threshold_mb": STORAGE_THRESHOLD_MB,  # NOTIFICATION
+        })  # NOTIFICATION
+    except Exception as e:  # NOTIFICATION
+        return jsonify({"error": str(e)}), 500  # NOTIFICATION
+
+
+# NOTIFICATION — Storage monitor (runs every 30 minutes, warns once per hour max)
+_last_storage_warning_time = 0  # NOTIFICATION
+
+
+def _storage_monitor():  # NOTIFICATION
+    """Background task: check storage every 30 minutes and send warning if over threshold."""  # NOTIFICATION
+    global _last_storage_warning_time  # NOTIFICATION
+    time.sleep(60)  # NOTIFICATION — wait for startup
+    while True:  # NOTIFICATION
+        try:  # NOTIFICATION
+            from services.notifications_service import STORAGE_THRESHOLD_MB, notify_storage_warning  # NOTIFICATION
+            from services.notifications_service import is_telegram_enabled, is_discord_enabled  # NOTIFICATION
+            if not (is_telegram_enabled() or is_discord_enabled()):  # NOTIFICATION
+                time.sleep(1800)  # NOTIFICATION — 30 min
+                continue  # NOTIFICATION
+            total_bytes = 0  # NOTIFICATION
+            if os.path.isdir(BASE_DOWNLOAD_DIR):  # NOTIFICATION
+                for root, _dirs, files in os.walk(BASE_DOWNLOAD_DIR):  # NOTIFICATION
+                    for f in files:  # NOTIFICATION
+                        try:  # NOTIFICATION
+                            total_bytes += os.path.getsize(os.path.join(root, f))  # NOTIFICATION
+                        except OSError:  # NOTIFICATION
+                            pass  # NOTIFICATION
+            used_mb = total_bytes / (1024 * 1024)  # NOTIFICATION
+            now = time.time()  # NOTIFICATION
+            # NOTIFICATION — Only warn if over threshold AND at least 1 hour since last warning
+            if used_mb > STORAGE_THRESHOLD_MB and (now - _last_storage_warning_time) > 3600:  # NOTIFICATION
+                notify_storage_warning(used_mb, STORAGE_THRESHOLD_MB)  # NOTIFICATION
+                _last_storage_warning_time = now  # NOTIFICATION
+                logger.info(f"[notifications] Storage warning sent: {round(used_mb)}MB / {round(STORAGE_THRESHOLD_MB)}MB")  # NOTIFICATION
+        except Exception as e:  # NOTIFICATION
+            logger.error(f"[notifications] Storage monitor error: {e}")  # NOTIFICATION
+        time.sleep(1800)  # NOTIFICATION — check every 30 minutes
+
+
 @app.errorhandler(404)
 def not_found(e):
     """Handle 404 errors"""
@@ -1166,7 +1284,7 @@ if __name__ == '__main__':
 
         # Start playlist auto-sync monitor (guarded against duplicate tasks)
         if not getattr(app, '_auto_thread_started', False):
-            from auto_downloader import playlist_monitor
+            from services.auto_downloader import playlist_monitor
             socketio.start_background_task(target=playlist_monitor)
             app._auto_thread_started = True
             logger.info("Auto-downloader background task started")
@@ -1177,6 +1295,10 @@ if __name__ == '__main__':
             bridge_thread = threading.Thread(target=_redis_pubsub_bridge, daemon=True)
             bridge_thread.start()
             logger.info("Redis pub/sub bridge thread started")
+
+        # NOTIFICATION — Start storage monitor background task
+        socketio.start_background_task(target=_storage_monitor)  # NOTIFICATION
+        logger.info("Storage monitor background task started")  # NOTIFICATION
         
         # Run Flask app with SocketIO
         socketio.run(

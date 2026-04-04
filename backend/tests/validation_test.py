@@ -22,7 +22,7 @@ print("=" * 60)
 print("TEST 1: Importing strict_matcher module...")
 print("=" * 60)
 try:
-    from strict_matcher import (
+    from services.strict_matcher import (
         clean_title,
         has_reject_keyword,
         string_similarity,
@@ -160,7 +160,7 @@ print("\n" + "=" * 60)
 print("TEST 7: Checking downloader_service imports...")
 print("=" * 60)
 try:
-    from downloader_service import DownloaderService, get_downloader_service
+    from services.downloader_service import DownloaderService, get_downloader_service
     print("[OK] downloader_service imports successfully with strict_matcher")
 except ImportError as e:
     print(f"[FAIL] Import error in downloader_service: {e}")

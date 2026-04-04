@@ -77,4 +77,55 @@ export const api = {
   getRetagStatus() {
     return fetch('/api/library/retag/status').then(handleResponse);
   },
+
+  // ANALYTICS — Analytics dashboard endpoints
+  getAnalyticsOverview() { // ANALYTICS
+    return fetch('/api/analytics/overview').then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+  getAnalyticsDownloadsPerDay(days = 30) { // ANALYTICS
+    return fetch(`/api/analytics/downloads-per-day?days=${days}`).then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+  getAnalyticsTopArtists(limit = 10) { // ANALYTICS
+    return fetch(`/api/analytics/top-artists?limit=${limit}`).then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+  getAnalyticsSourceBreakdown() { // ANALYTICS
+    return fetch('/api/analytics/source-breakdown').then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+  getAnalyticsTaggingBreakdown() { // ANALYTICS
+    return fetch('/api/analytics/tagging-breakdown').then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+  getAnalyticsRecent() { // ANALYTICS
+    return fetch('/api/analytics/recent').then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+  getAnalyticsFailed() { // ANALYTICS
+    return fetch('/api/analytics/failed').then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+  retryDownload(trackId) { // ANALYTICS
+    return fetch('/api/download/retry', { // ANALYTICS
+      method: 'POST', // ANALYTICS
+      headers: { 'Content-Type': 'application/json' }, // ANALYTICS
+      body: JSON.stringify({ track_id: trackId }), // ANALYTICS
+    }).then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+
+  // FILE ORGANIZER — Batch organize library
+  organize(options = {}) {
+    const mode = options.mode || 'artist';
+    return fetch('/api/library/organize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    }).then(handleResponse);
+  },
+
+  // FILE ORGANIZER — Organize recently downloaded files (last N hours)
+  organizeRecent(options = {}) {
+    const mode = options.mode || 'artist';
+    const hours = options.hours || 24;
+    return fetch('/api/library/organize-recent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, hours }),
+    }).then(handleResponse);
+  },
 };

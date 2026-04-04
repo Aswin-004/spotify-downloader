@@ -43,7 +43,27 @@ REJECT_KEYWORDS = [
     "slowed", "reverb", "8d", "nightcore",
     "cover", "edit", "version",
     "bass boosted", "sped up", "tiktok", "clip",
+    "mashup", "parody",  # QUALITY UPGRADE
 ]
+
+
+# QUALITY UPGRADE — Pre-scoring blacklist filter (applied before candidate scoring)
+BLACKLISTED_KEYWORDS = [  # QUALITY UPGRADE
+    'cover', 'karaoke', 'nightcore',  # QUALITY UPGRADE
+    'sped up', 'reverb', 'slowed',  # QUALITY UPGRADE
+    'remix', 'mashup', 'parody',  # QUALITY UPGRADE
+]  # QUALITY UPGRADE
+
+
+def is_blacklisted(title, original_track_title):  # QUALITY UPGRADE
+    """Return True if the candidate title contains a blacklisted keyword
+    that does NOT appear in the original Spotify title."""  # QUALITY UPGRADE
+    title_lower = title.lower()  # QUALITY UPGRADE
+    original_lower = original_track_title.lower() if original_track_title else ""  # QUALITY UPGRADE
+    for keyword in BLACKLISTED_KEYWORDS:  # QUALITY UPGRADE
+        if keyword in title_lower and keyword not in original_lower:  # QUALITY UPGRADE
+            return True  # QUALITY UPGRADE
+    return False  # QUALITY UPGRADE
 
 # Title cleaning patterns — remove noise before scoring (Step 1)
 TITLE_NOISE_PATTERNS = [
@@ -150,13 +170,15 @@ def duration_score(actual_sec: Optional[int], expected_sec: Optional[int]) -> fl
 
     diff = abs(actual_sec - expected_sec)
 
-    # CHANGED: tighter scoring — ±2 s is perfect, heavy penalty above
-    if diff <= 2:
-        return 1.0
-    elif diff <= 10:
-        return 0.7
-    elif diff <= 25:
-        return 0.4
+    # QUALITY UPGRADE: tighter tiered scoring — ±2/5/10/30
+    if diff <= 2:  # QUALITY UPGRADE
+        return 1.0  # QUALITY UPGRADE — perfect match
+    elif diff <= 5:  # QUALITY UPGRADE
+        return 0.8  # QUALITY UPGRADE — good match
+    elif diff <= 10:  # QUALITY UPGRADE
+        return 0.5  # QUALITY UPGRADE — acceptable
+    elif diff <= 30:  # QUALITY UPGRADE
+        return 0.2  # QUALITY UPGRADE — poor match
     else:
         return 0.0
 
@@ -256,6 +278,13 @@ def score_candidate(
 
     # ── CHANGED: Verified channel boost (+0.30 = +30 on 0–100 scale) ──
     verified_bonus = 0.30 if channel_is_verified else 0.0
+
+    # QUALITY UPGRADE — uploader-based bonuses
+    uploader_lower = uploader.lower() if uploader else ""  # QUALITY UPGRADE
+    if 'official' in uploader_lower:  # QUALITY UPGRADE
+        official_bonus += 0.15  # QUALITY UPGRADE — official channel name
+    if 'vevo' in uploader_lower:  # QUALITY UPGRADE
+        official_bonus += 0.20  # QUALITY UPGRADE — VEVO verified partner
 
     # ── CHANGED: Heavy penalty when duration exceeds ±2 s ──
     tight_penalty = 0.0

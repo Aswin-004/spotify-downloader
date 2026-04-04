@@ -1,8 +1,8 @@
-# Environment
+# ── Environment ──────────────────────────────────────────────────────────────
 .env
 .env.local
 
-# Python
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -11,58 +11,59 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+env/
 
-# Spotify OAuth cache
+# ── Spotify OAuth cache ───────────────────────────────────────────────────────
 .spotify_cache
 .cache
+.cache-*
 
-# Metadata cache data
+# ── Runtime data & state files ────────────────────────────────────────────────
 backend/cache/
-
-# Download data & state files
+backend/logs/
 backend/downloads/
 downloads/
+**/ingest_failures.json
+**/playlist_snapshots.json
+downloaded_tracks.json
+ingest_tracks.json
 *.mp3
 *.wav
 *.m4a
-downloaded_tracks.json
-ingest_tracks.json
+*.flac
 
-# Logs
+# ── Logs ─────────────────────────────────────────────────────────────────────
 *.log
 logs/
-backend/logs/
 
-# Validation / debug artifacts
+# ── Validation / debug artifacts ─────────────────────────────────────────────
 backend/validation_output.txt
+backend/diagnose.py
 
-# Backup files
+# ── Backup & archive ─────────────────────────────────────────────────────────
 *.bak
 
-# IDE
+# ── Claude Code (local AI assistant memory) ──────────────────────────────────
+.claude/
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Node
+# ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
 package-lock.json
 
-# Build outputs
+# ── Build outputs ─────────────────────────────────────────────────────────────
 dist/
 build/
 
-# Old / legacy frontend
+# ── Legacy frontend (removed) ─────────────────────────────────────────────────
 frontend/
-*.log
-logs/
-
-# Node
-node_modules/
-

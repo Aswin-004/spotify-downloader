@@ -14,7 +14,7 @@ from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
 import logging
 from config import config
 from utils import extract_spotify_id, extract_spotify_track_id, setup_logging
-from metadata_cache import get_cache
+from services.metadata_cache import get_cache
 
 # Throttle: minimum seconds between consecutive Spotify API calls
 API_THROTTLE = 0.35

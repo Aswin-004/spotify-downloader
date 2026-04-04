@@ -14,7 +14,7 @@ import yt_dlp
 from pathlib import Path
 from config import config
 from utils import build_youtube_search_query, build_youtube_fallback_query, validate_filename, setup_logging
-from strict_matcher import (
+from services.strict_matcher import (
     score_candidate,
     select_best_candidate,
     has_reject_keyword,

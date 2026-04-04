@@ -13,6 +13,7 @@ import {
   SkipForward,
   XCircle,
   Loader2,
+  BarChart3, // ANALYTICS
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { cn, capitalize } from '@/lib/utils';
@@ -22,6 +23,8 @@ const navItems = [
   { to: '/', icon: Download, label: 'Download' },
   { to: '/history', icon: History, label: 'History' },
   { to: '/files', icon: FolderOpen, label: 'Files' },
+  { to: '/library', icon: ListMusic, label: 'Library' }, // FILE ORGANIZER
+  { to: '/analytics', icon: BarChart3, label: 'Analytics' }, // ANALYTICS
 ];
 
 export default function Sidebar({ collapsed, onToggle }) {

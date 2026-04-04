@@ -36,7 +36,7 @@ def _get_downloader():
     """Lazy-init the downloader service singleton."""
     global _downloader_service
     if _downloader_service is None:
-        from downloader_service import get_downloader_service
+        from services.downloader_service import get_downloader_service
         _downloader_service = get_downloader_service()
     return _downloader_service
 
@@ -45,7 +45,7 @@ def _get_spotify():
     """Lazy-init the Spotify service singleton."""
     global _spotify_service
     if _spotify_service is None:
-        from spotify_service import get_spotify_service
+        from services.spotify_service import get_spotify_service
         _spotify_service = get_spotify_service()
     return _spotify_service
 
@@ -61,7 +61,7 @@ def _emit_socketio_event(event: str, data: dict):
     """
     # Try the module-level socketio reference (set by app.py)
     try:
-        from downloader_service import _socketio
+        from services.downloader_service import _socketio
         if _socketio is not None:
             _socketio.emit(event, data)
             return
@@ -202,7 +202,7 @@ def sync_playlist_task(self, playlist_id: str):
 
     try:
         sp = _get_spotify()
-        from downloader_service import sanitize_filename
+        from services.downloader_service import sanitize_filename
 
         # Fetch tracks via existing spotify_service
         playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"

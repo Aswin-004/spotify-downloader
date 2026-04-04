@@ -31,7 +31,7 @@ import yt_dlp
 
 from config import config
 from utils import build_youtube_search_query, build_youtube_fallback_query, validate_filename, setup_logging
-from strict_matcher import (
+from services.strict_matcher import (
     score_candidate,
     select_best_candidate,
     has_reject_keyword,
@@ -41,12 +41,13 @@ from strict_matcher import (
     log_rejection,
     log_acceptance,
     string_similarity,
+    is_blacklisted,  # QUALITY UPGRADE
 )
 from download_history import save_report
 
 # TAGGING INTEGRATION — import tagger service
 try:  # TAGGING INTEGRATION
-    from tagger_service import tag_file as _tag_file, save_tagging_report as _save_tagging_report  # TAGGING INTEGRATION
+    from services.tagger_service import tag_file as _tag_file, save_tagging_report as _save_tagging_report  # TAGGING INTEGRATION
     _TAGGER_AVAILABLE = True  # TAGGING INTEGRATION
 except ImportError:  # TAGGING INTEGRATION
     _TAGGER_AVAILABLE = False  # TAGGING INTEGRATION
@@ -299,6 +300,23 @@ def _embed_album_art(filepath: str, art_url: Optional[str]) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# SMART FORMAT SELECTION (duration-based)  # QUALITY UPGRADE
+# ═══════════════════════════════════════════════════════════════════
+
+def get_ydl_format(duration_ms=None):  # QUALITY UPGRADE
+    """Return yt-dlp format string based on track duration."""  # QUALITY UPGRADE
+    if not duration_ms or duration_ms <= 0:  # QUALITY UPGRADE
+        return 'bestaudio[ext=flac]/bestaudio[ext=m4a]/bestaudio/best'  # QUALITY UPGRADE
+    duration_sec = duration_ms / 1000  # QUALITY UPGRADE
+    if duration_sec > 600:  # QUALITY UPGRADE — long track (10min+): prefer lossless
+        return 'bestaudio[ext=flac]/bestaudio/best'  # QUALITY UPGRADE
+    elif duration_sec < 60:  # QUALITY UPGRADE — short track: M4A (smaller, fast)
+        return 'bestaudio[ext=m4a]/bestaudio/best'  # QUALITY UPGRADE
+    else:  # QUALITY UPGRADE — standard track: full chain
+        return 'bestaudio[ext=flac]/bestaudio[ext=m4a]/bestaudio/best'  # QUALITY UPGRADE
+
+
+# ═══════════════════════════════════════════════════════════════════
 # QUALITY REPORT HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
@@ -311,24 +329,33 @@ def _emit_quality_report(report: dict):
             pass  # Don't let emit failures propagate
 
 
-def _build_quality_report(
+def _build_quality_report(  # QUALITY UPGRADE
     *,
     bitrate: str = "320kbps",
+    format_downloaded: str = "unknown",  # QUALITY UPGRADE
     source_platform: str = "youtube",
+    search_stage_used: Optional[int] = None,  # QUALITY UPGRADE
     duration_diff: Optional[float] = None,
     title_similarity: Optional[float] = None,
+    channel_verified: bool = False,  # QUALITY UPGRADE
+    blacklist_filtered: int = 0,  # QUALITY UPGRADE
     art_embedded: bool = False,
     normalization_applied: bool = False,
+    silence_trimmed: bool = False,  # QUALITY UPGRADE
     query_stage: Optional[int] = None,
 ) -> dict:
     return {
         "bitrate_achieved": bitrate,
+        "format_downloaded": format_downloaded,  # QUALITY UPGRADE
         "source_platform": source_platform,
+        "search_stage_used": search_stage_used or query_stage,  # QUALITY UPGRADE
         "duration_match_diff": duration_diff,
-        "title_similarity_score": title_similarity,
-        "art_embedded": art_embedded,
+        "title_similarity": title_similarity,  # QUALITY UPGRADE
+        "channel_verified": channel_verified,  # QUALITY UPGRADE
+        "blacklist_filtered": blacklist_filtered,  # QUALITY UPGRADE
         "normalization_applied": normalization_applied,
-        "query_stage_used": query_stage,
+        "silence_trimmed": silence_trimmed,  # QUALITY UPGRADE
+        "art_embedded": art_embedded,
     }
 
 
@@ -348,6 +375,9 @@ class DownloaderService:
         self._last_title_similarity = 0.0
         # ── CHANGED: track source platform of the final download
         self._last_source_platform = "youtube"
+        self._last_format_downloaded = "unknown"  # QUALITY UPGRADE
+        self._last_channel_verified = False  # QUALITY UPGRADE
+        self._last_blacklist_filtered = 0  # QUALITY UPGRADE
         self._ensure_download_dir()
 
     def _ensure_download_dir(self):
@@ -539,7 +569,7 @@ class DownloaderService:
                 ffmpeg_bin = _find_ffmpeg_binary()
 
                 # 1. Silence trimming
-                _trim_silence(filepath, ffmpeg_bin)
+                trim_ok = _trim_silence(filepath, ffmpeg_bin)  # QUALITY UPGRADE
 
                 # 2. Loudness normalisation
                 norm_ok = _apply_loudnorm(filepath, ffmpeg_bin)
@@ -561,11 +591,16 @@ class DownloaderService:
 
                 report = _build_quality_report(
                     bitrate="320kbps",
+                    format_downloaded=self._last_format_downloaded,  # QUALITY UPGRADE
                     source_platform=self._last_source_platform,
+                    search_stage_used=self._last_query_stage,  # QUALITY UPGRADE
                     duration_diff=dur_diff,
                     title_similarity=round(self._last_title_similarity, 3),
+                    channel_verified=self._last_channel_verified,  # QUALITY UPGRADE
+                    blacklist_filtered=self._last_blacklist_filtered,  # QUALITY UPGRADE
                     art_embedded=art_ok,
                     normalization_applied=norm_ok,
+                    silence_trimmed=trim_ok,  # QUALITY UPGRADE
                     query_stage=self._last_query_stage,
                 )
 
@@ -620,10 +655,52 @@ class DownloaderService:
                     "tagging_report": tagging_report,  # TAGGING INTEGRATION
                 }
                 logger.info(f"Track downloaded successfully: {filename}")
+
+                # FILE ORGANIZER — Auto-organize after successful download
+                organize_mode = os.getenv("ORGANIZE_MODE", "artist")
+                if organize_mode != "off":
+                    try:
+                        from services.organizer_service import organize_file
+                        organize_result = organize_file(filename, mode=organize_mode)
+                        if organize_result.get("moved"):
+                            result["organized"] = True
+                            result["organize_result"] = organize_result
+                            logger.info(f"[organizer] Auto-organized: {filename} → {organize_result.get('folder')}")
+                        elif organize_result.get("error"):
+                            logger.warning(f"[organizer] Auto-organize failed for {filename}: {organize_result.get('error')}")
+                    except Exception as org_err:
+                        logger.warning(f"[organizer] Failed to run organizer: {org_err}")
+
+                # NOTIFICATION — Success
+                try:  # NOTIFICATION
+                    from services.notifications_service import notify_download_success  # NOTIFICATION
+                    notify_download_success(  # NOTIFICATION
+                        track={  # NOTIFICATION
+                            'name': title,  # NOTIFICATION
+                            'artists': [{'name': artist}],  # NOTIFICATION
+                            'album': {'images': [{'url': album_art_url or ''}]},  # NOTIFICATION
+                        },  # NOTIFICATION
+                        quality_report=report,  # NOTIFICATION
+                    )  # NOTIFICATION
+                except Exception as _notif_err:  # NOTIFICATION
+                    logger.error(f"Notification error: {_notif_err}")  # NOTIFICATION
+
                 return result
 
             except Exception as download_error:
                 logger.warning(f"Auto-download failed for '{title}' by '{artist}': {download_error}")
+
+                # NOTIFICATION — Failure (auto-download failed)
+                try:  # NOTIFICATION
+                    from services.notifications_service import notify_download_failure  # NOTIFICATION
+                    notify_download_failure(  # NOTIFICATION
+                        track={'name': title, 'artists': [{'name': artist}]},  # NOTIFICATION
+                        attempt=1,  # NOTIFICATION
+                        error=str(download_error),  # NOTIFICATION
+                    )  # NOTIFICATION
+                except Exception as _notif_err:  # NOTIFICATION
+                    logger.error(f"Notification error: {_notif_err}")  # NOTIFICATION
+
                 youtube_url = self._build_youtube_search_url(title, artist)
                 return {
                     "status": "fallback",
@@ -635,6 +712,18 @@ class DownloaderService:
 
         except Exception as e:
             logger.error(f"Unexpected error in download_track: {e}")
+
+            # NOTIFICATION — Failure (unexpected error)
+            try:  # NOTIFICATION
+                from services.notifications_service import notify_download_failure  # NOTIFICATION
+                notify_download_failure(  # NOTIFICATION
+                    track={'name': title, 'artists': [{'name': artist}]},  # NOTIFICATION
+                    attempt=1,  # NOTIFICATION
+                    error=str(e),  # NOTIFICATION
+                )  # NOTIFICATION
+            except Exception as _notif_err:  # NOTIFICATION
+                logger.error(f"Notification error: {_notif_err}")  # NOTIFICATION
+
             youtube_url = self._build_youtube_search_url(title, artist) if title and artist else "https://www.youtube.com"
             return {
                 "status": "fallback",
@@ -649,10 +738,10 @@ class DownloaderService:
     # ═══════════════════════════════════════════════════════════════════
 
     def _try_download_with_query(self, query, source_name="YouTube", progress_callback=None,
-                                  output_dir=None, output_filename=None):
+                                  output_dir=None, output_filename=None, duration_ms=None):  # QUALITY UPGRADE
         """
-        CHANGED — 320 kbps, lossless-first format selection, copy-codec
-        when source is already MP3.
+        CHANGED — 320 kbps, smart format selection based on duration,
+        copy-codec when source is already MP3.
         """
         logger.info(f"[{source_name}] Downloading: {query}")
 
@@ -683,9 +772,9 @@ class DownloaderService:
         else:
             outtmpl = os.path.join(actual_dir, '%(title)s.%(ext)s')
 
-        # ── CHANGED: lossless-first format string ──────────────────────
-        # Try FLAC first, then M4A, then any best audio
-        FORMAT_STRING = "bestaudio[ext=flac]/bestaudio[ext=m4a]/bestaudio/best"
+        # ── QUALITY UPGRADE: smart format selection based on duration ──
+        FORMAT_STRING = get_ydl_format(duration_ms)  # QUALITY UPGRADE
+        logger.info(f"[{source_name}] Format string: {FORMAT_STRING} (duration_ms={duration_ms})")  # QUALITY UPGRADE
 
         ydl_opts = {
             'format': FORMAT_STRING,
@@ -730,7 +819,18 @@ class DownloaderService:
                         _socketio.emit('download_error', {'error': f'yt-dlp failed: {str(e2)[:100]}', 'source': source_name})
                     except Exception:
                         pass
+                # NOTIFICATION — yt-dlp pipeline error
+                try:  # NOTIFICATION
+                    from services.notifications_service import notify_ytdlp_error  # NOTIFICATION
+                    notify_ytdlp_error(str(e2)[:100])  # NOTIFICATION
+                except Exception:  # NOTIFICATION
+                    pass  # NOTIFICATION
                 raise
+
+        # QUALITY UPGRADE — capture the source format that was actually downloaded
+        if info:  # QUALITY UPGRADE
+            _info_entry = info.get('entries', [info])[0] if info.get('entries') else info  # QUALITY UPGRADE
+            self._last_format_downloaded = _info_entry.get('ext', 'unknown') if _info_entry else 'unknown'  # QUALITY UPGRADE
 
         # Resolve filename
         if output_filename:
@@ -885,13 +985,21 @@ class DownloaderService:
         expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
 
         candidates = []
+        blacklisted_count = 0  # QUALITY UPGRADE
         for i, entry in enumerate(entries):
             if not entry:
                 continue
 
+            # QUALITY UPGRADE — pre-scoring blacklist filter
+            yt_title_raw = entry.get("title", "")  # QUALITY UPGRADE
+            if is_blacklisted(yt_title_raw, spotify_title or ""):  # QUALITY UPGRADE
+                blacklisted_count += 1  # QUALITY UPGRADE
+                logger.info(f"[{source_name}] Blacklisted #{i+1}: \"{yt_title_raw}\"")  # QUALITY UPGRADE
+                continue  # QUALITY UPGRADE
+
             # ── CHANGED: include channel_is_verified for +30 boost ──
             candidates.append({
-                "title": entry.get("title", ""),
+                "title": yt_title_raw,
                 "duration": entry.get("duration"),
                 "url": entry.get("webpage_url") or entry.get("url"),
                 "uploader": entry.get("uploader", "") or entry.get("channel", "") or "",
@@ -899,6 +1007,10 @@ class DownloaderService:
                 "entry": entry,
                 "index": i,
             })
+
+        self._last_blacklist_filtered = blacklisted_count  # QUALITY UPGRADE
+        if blacklisted_count > 0:  # QUALITY UPGRADE
+            logger.info(f"[{source_name}] Blacklist filtered {blacklisted_count} candidate(s)")  # QUALITY UPGRADE
 
         best_candidate, selection_reason = select_best_candidate(
             candidates=candidates,
@@ -926,6 +1038,9 @@ class DownloaderService:
         clean_sp = clean_title(spotify_title or "")
         self._last_title_similarity = string_similarity(clean_sp, clean_yt)
 
+        # QUALITY UPGRADE — capture verified status for quality report
+        self._last_channel_verified = best_candidate.get("channel_is_verified", False)  # QUALITY UPGRADE
+
         video_url = best_candidate.get("url")
         if not video_url:
             raise Exception(f"[{source_name}] Selected candidate missing URL")
@@ -935,6 +1050,7 @@ class DownloaderService:
         return self._try_download_with_query(
             video_url, source_name, progress_callback,
             output_dir=actual_dir, output_filename=output_filename,
+            duration_ms=duration_ms,  # QUALITY UPGRADE
         )
 
     # ═══════════════════════════════════════════════════════════════════
