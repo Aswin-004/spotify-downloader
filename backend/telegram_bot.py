@@ -37,11 +37,14 @@ Circular-import safety:
 """
 
 import asyncio
+import functools
 import json
 import os
 import re
 import shutil
 import threading
+from collections import defaultdict
+from datetime import datetime as dt, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -73,6 +76,38 @@ except (ValueError, TypeError):
 # SET      → auto downloader pauses before starting next batch.
 # Commands: /pause sets it, /resume clears it.
 AUTO_DOWNLOADER_PAUSED: threading.Event = threading.Event()
+
+
+def _sync_pause_state_from_db() -> None:
+    """Load pause state from MongoDB at startup."""
+    try:
+        db = _get_db()
+        doc = db.app_settings.find_one({"_id": "auto_downloader_paused"})
+        if doc and doc.get("value"):
+            AUTO_DOWNLOADER_PAUSED.set()
+            logger.info("[telegram_bot] Pause state from DB: PAUSED")
+        else:
+            AUTO_DOWNLOADER_PAUSED.clear()
+            logger.info("[telegram_bot] Pause state from DB: RUNNING")
+    except Exception as e:
+        logger.warning(f"[telegram_bot] Could not load pause state: {e}")
+        AUTO_DOWNLOADER_PAUSED.clear()
+
+
+def _persist_pause_state(paused: bool) -> bool:
+    """Save pause state to MongoDB."""
+    try:
+        db = _get_db()
+        db.app_settings.update_one(
+            {"_id": "auto_downloader_paused"},
+            {"$set": {"value": paused, "updated_at": dt.utcnow()}},
+            upsert=True,
+        )
+        logger.info(f"[telegram_bot] Pause state saved: {paused}")
+        return True
+    except Exception as e:
+        logger.error(f"[telegram_bot] Persist failed: {e}")
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -145,6 +180,61 @@ def _get_failures_file() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# ERROR HANDLING DECORATOR
+# ═══════════════════════════════════════════════════════════════════
+
+def handle_command_error(cmd_name: str):
+    """Decorator to safely catch all command errors."""
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+            try:
+                return await func(update, context)
+            except Exception as e:
+                logger.exception(f"[{cmd_name}] Error: {e}")
+                try:
+                    from telegram.error import TelegramError
+                    if isinstance(e, TelegramError):
+                        await update.message.reply_text("⚠️ Telegram error. Try again soon.")
+                    else:
+                        await update.message.reply_text(f"❌ Command failed: {str(e)[:80]}")
+                except Exception:
+                    logger.error(f"[{cmd_name}] Could not send error message")
+        return wrapper
+    return decorator
+
+
+# ═══════════════════════════════════════════════════════════════════
+# RATE LIMITER
+# ═══════════════════════════════════════════════════════════════════
+
+class RateLimiter:
+    def __init__(self, max_calls: int = 10, window_seconds: int = 60):
+        self.max_calls = max_calls
+        self.window_seconds = window_seconds
+        self.calls: dict = defaultdict(list)
+
+    def is_allowed(self, user_id: int) -> bool:
+        now = dt.utcnow()
+        cutoff = now - timedelta(seconds=self.window_seconds)
+        self.calls[user_id] = [t for t in self.calls[user_id] if t > cutoff]
+        if len(self.calls[user_id]) < self.max_calls:
+            self.calls[user_id].append(now)
+            return True
+        return False
+
+    def get_reset_time(self, user_id: int) -> int:
+        if not self.calls[user_id]:
+            return 0
+        oldest = self.calls[user_id][0]
+        reset = oldest + timedelta(seconds=self.window_seconds)
+        return max(0, int((reset - dt.utcnow()).total_seconds()))
+
+
+_rate_limiter = RateLimiter(max_calls=10, window_seconds=60)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # UTILITY HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
@@ -211,6 +301,7 @@ HELP_TEXT = (
     "/skipped       — list permanently failed tracks\n"
     "/reset_skipped — unblock all skipped tracks\n"
     "/storage       — disk usage of download directory\n"
+    "/organize      — reorganise library into language/genre folders\n"
     "/help          — show this message\n\n"
     "Or send any Spotify link to download immediately."
 )
@@ -235,8 +326,16 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
     await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
 
 
+@handle_command_error("cmd_status")
 async def cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     if not await _auth_check(update):
+        return
+
+    user_id = update.effective_user.id
+    if not _rate_limiter.is_allowed(user_id):
+        reset = _rate_limiter.get_reset_time(user_id)
+        await update.message.reply_text(f"⏱️ Rate limited. Wait {reset}s.")
+        logger.warning(f"[cmd_status] Rate limit: user {user_id}")
         return
 
     auto  = _get_auto_status()
@@ -269,23 +368,33 @@ async def cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
 async def cmd_pause(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     if not await _auth_check(update):
         return
-    AUTO_DOWNLOADER_PAUSED.set()
-    logger.info("[telegram_bot] Auto downloader paused via /pause")
-    await update.message.reply_text(
-        "⏸ <b>Auto downloader paused.</b>\n\nSend /resume to restart.",
-        parse_mode="HTML",
-    )
+    try:
+        AUTO_DOWNLOADER_PAUSED.set()
+        _persist_pause_state(True)
+        logger.info("[telegram_bot] Auto downloader paused via /pause")
+        await update.message.reply_text(
+            "⏸ <b>Auto downloader paused.</b>\n\nSend /resume to restart.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.exception(f"[cmd_pause] Error: {e}")
+        await update.message.reply_text(f"❌ Failed: {str(e)[:80]}")
 
 
 async def cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     if not await _auth_check(update):
         return
-    AUTO_DOWNLOADER_PAUSED.clear()
-    logger.info("[telegram_bot] Auto downloader resumed via /resume")
-    await update.message.reply_text(
-        "▶ <b>Auto downloader resumed.</b>",
-        parse_mode="HTML",
-    )
+    try:
+        AUTO_DOWNLOADER_PAUSED.clear()
+        _persist_pause_state(False)
+        logger.info("[telegram_bot] Auto downloader resumed via /resume")
+        await update.message.reply_text(
+            "▶ <b>Auto downloader resumed.</b>",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.exception(f"[cmd_resume] Error: {e}")
+        await update.message.reply_text(f"❌ Failed: {str(e)[:80]}")
 
 
 async def cmd_progress(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -329,8 +438,16 @@ async def cmd_progress(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
 _LIB_PAGE_SIZE = 5
 
 
+@handle_command_error("cmd_library")
 async def cmd_library(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     if not await _auth_check(update):
+        return
+
+    user_id = update.effective_user.id
+    if not _rate_limiter.is_allowed(user_id):
+        reset = _rate_limiter.get_reset_time(user_id)
+        await update.message.reply_text(f"⏱️ Rate limited. Wait {reset}s.")
+        logger.warning(f"[cmd_library] Rate limit: user {user_id}")
         return
 
     try:
@@ -445,8 +562,16 @@ async def handle_library_pagination(
 
 # ─── /find — regex search ─────────────────────────────────────────
 
+@handle_command_error("cmd_find")
 async def cmd_find(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     if not await _auth_check(update):
+        return
+
+    user_id = update.effective_user.id
+    if not _rate_limiter.is_allowed(user_id):
+        reset = _rate_limiter.get_reset_time(user_id)
+        await update.message.reply_text(f"⏱️ Rate limited. Wait {reset}s.")
+        logger.warning(f"[cmd_find] Rate limit: user {user_id}")
         return
 
     if not context.args:
@@ -491,8 +616,16 @@ async def cmd_find(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
 
 # ─── /location — last download path ───────────────────────────────
 
+@handle_command_error("cmd_location")
 async def cmd_location(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     if not await _auth_check(update):
+        return
+
+    user_id = update.effective_user.id
+    if not _rate_limiter.is_allowed(user_id):
+        reset = _rate_limiter.get_reset_time(user_id)
+        await update.message.reply_text(f"⏱️ Rate limited. Wait {reset}s.")
+        logger.warning(f"[cmd_location] Rate limit: user {user_id}")
         return
 
     try:
@@ -545,8 +678,16 @@ async def cmd_location(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
 
 # ─── /skipped — permanently failed tracks ─────────────────────────
 
+@handle_command_error("cmd_skipped")
 async def cmd_skipped(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     if not await _auth_check(update):
+        return
+
+    user_id = update.effective_user.id
+    if not _rate_limiter.is_allowed(user_id):
+        reset = _rate_limiter.get_reset_time(user_id)
+        await update.message.reply_text(f"⏱️ Rate limited. Wait {reset}s.")
+        logger.warning(f"[cmd_skipped] Rate limit: user {user_id}")
         return
 
     failures_file = _get_failures_file()
@@ -602,8 +743,16 @@ async def cmd_reset_skipped(
 
 # ─── /storage — disk usage report ─────────────────────────────────
 
+@handle_command_error("cmd_storage")
 async def cmd_storage(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     if not await _auth_check(update):
+        return
+
+    user_id = update.effective_user.id
+    if not _rate_limiter.is_allowed(user_id):
+        reset = _rate_limiter.get_reset_time(user_id)
+        await update.message.reply_text(f"⏱️ Rate limited. Wait {reset}s.")
+        logger.warning(f"[cmd_storage] Rate limit: user {user_id}")
         return
 
     base = _get_base_dir()
@@ -646,6 +795,41 @@ async def cmd_storage(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
+@handle_command_error("cmd_organize")
+async def cmd_organize(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    if not await _auth_check(update):
+        return
+
+    user_id = update.effective_user.id
+    if not _rate_limiter.is_allowed(user_id):
+        reset = _rate_limiter.get_reset_time(user_id)
+        await update.message.reply_text(f"⏱️ Rate limited. Wait {reset}s.")
+        logger.warning(f"[cmd_organize] Rate limit: user {user_id}")
+        return
+
+    from config import config as _cfg
+    source  = _cfg.BASE_DOWNLOAD_DIR
+    dest    = _cfg.BASE_DOWNLOAD_DIR + "_organised"
+    chat_id = update.effective_chat.id
+
+    await update.message.reply_text(
+        f"🗂 <b>Starting library migration...</b>\n\n"
+        f"📁 <b>Source:</b> <code>{source}</code>\n"
+        f"📁 <b>Dest  :</b> <code>{dest}</code>\n\n"
+        f"I'll send progress updates every 25 files.",
+        parse_mode="HTML",
+    )
+    logger.info(f"[cmd_organize] Dispatching migration thread (source={source})")
+
+    t = threading.Thread(
+        target=_run_migration_thread,
+        args=(source, dest, chat_id),
+        daemon=True,
+        name="tg-migrate",
+    )
+    t.start()
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SPOTIFY LINK HANDLER
 # ═══════════════════════════════════════════════════════════════════
@@ -653,6 +837,52 @@ async def cmd_storage(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
 _SPOTIFY_URL_RE = re.compile(
     r"https?://open\.spotify\.com/(track|playlist|album)/[A-Za-z0-9]+"
 )
+
+
+def _run_migration_thread(source: str, dest: str, chat_id: int) -> None:
+    """
+    Run migrate_library in a background daemon thread.
+    Sends: start confirmation → progress every 25 files → final report.
+    Always non-interactive (Telegram cannot read stdin).
+    """
+    from pathlib import Path
+    from services.library_migrator import (
+        DEFAULT_CONFIG_PATH,
+        DEFAULT_LOGS_DIR,
+        migrate_library,
+        build_report_text,
+    )
+
+    def _send(msg: str) -> None:
+        _send_message_sync(chat_id, msg)
+
+    def progress_cb(done: int, total: int) -> None:
+        if total > 0 and (done % 25 == 0 or done == total):
+            _send(f"⏳ {done}/{total} files processed...")
+
+    try:
+        result = migrate_library(
+            source=Path(source),
+            dest=Path(dest),
+            config_path=DEFAULT_CONFIG_PATH,
+            interactive=False,
+            dry_run=False,
+            logs_dir=DEFAULT_LOGS_DIR,
+            progress_cb=progress_cb,
+        )
+        report = build_report_text(
+            category_stats=result.category_stats,
+            errors=result.errors,
+            skipped_artists=result.skipped_artists,
+            undo_log_path=result.undo_log_path,
+            duration_seconds=result.duration_seconds,
+            html=True,
+        )
+        _send(f"✅ <b>Migration complete!</b>\n\n{report}")
+        logger.info(f"[telegram_bot] /organize done: moved={result.files_moved}")
+    except Exception as e:
+        logger.exception(f"[telegram_bot] /organize thread error: {e}")
+        _send(f"❌ <b>Migration failed:</b>\n{str(e)[:300]}")
 
 
 def _run_spotify_download(url: str, chat_id: int) -> None:
@@ -811,6 +1041,8 @@ def _run_bot() -> None:
     Build and run the Telegram Application (blocking).
     Called from start_bot_thread() in a daemon thread with its own event loop.
     """
+    _sync_pause_state_from_db()
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -829,6 +1061,7 @@ def _run_bot() -> None:
     ptb_app.add_handler(CommandHandler("skipped",       cmd_skipped))
     ptb_app.add_handler(CommandHandler("reset_skipped", cmd_reset_skipped))
     ptb_app.add_handler(CommandHandler("storage",       cmd_storage))
+    ptb_app.add_handler(CommandHandler("organize",      cmd_organize))
 
     # ── /library Prev / Next pagination ──────────────────────────
     ptb_app.add_handler(
