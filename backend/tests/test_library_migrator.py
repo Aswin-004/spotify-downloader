@@ -137,3 +137,70 @@ def test_fmt_bytes(tmp_path):
     assert _fmt_bytes(1024) == "1.0 KB"
     assert _fmt_bytes(1024 * 1024) == "1.0 MB"
     assert _fmt_bytes(1024 ** 3) == "1.0 GB"
+
+
+# ── Task 3: Scanner + resolver ───────────────────────────────────
+
+def test_scan_source_folders_finds_audio_files(tmp_path):
+    artist = tmp_path / "Diljit Dosanjh"
+    artist.mkdir()
+    (artist / "song.mp3").write_bytes(b"x")
+    (artist / "cover.jpg").write_bytes(b"img")
+    from services.library_migrator import scan_source_folders
+    result = scan_source_folders(tmp_path)
+    assert "Diljit Dosanjh" in result
+    assert len(result["Diljit Dosanjh"]) == 1
+    assert result["Diljit Dosanjh"][0].name == "song.mp3"
+
+
+def test_scan_source_folders_ignores_non_audio(tmp_path):
+    artist = tmp_path / "Drake"
+    artist.mkdir()
+    (artist / "README.txt").write_bytes(b"x")
+    from services.library_migrator import scan_source_folders
+    result = scan_source_folders(tmp_path)
+    assert "Drake" not in result
+
+
+def test_scan_source_folders_ignores_root_files(tmp_path):
+    (tmp_path / "stray.mp3").write_bytes(b"x")
+    artist = tmp_path / "Drake"
+    artist.mkdir()
+    (artist / "song.flac").write_bytes(b"y")
+    from services.library_migrator import scan_source_folders
+    result = scan_source_folders(tmp_path)
+    assert list(result.keys()) == ["Drake"]
+
+
+def test_scan_source_folders_all_extensions(tmp_path):
+    artist = tmp_path / "Artist"
+    artist.mkdir()
+    for ext in (".mp3", ".flac", ".wav", ".m4a", ".aac"):
+        (artist / f"song{ext}").write_bytes(b"x")
+    from services.library_migrator import scan_source_folders
+    result = scan_source_folders(tmp_path)
+    assert len(result["Artist"]) == 5
+
+
+def test_resolve_artists_known_category(tmp_path):
+    from services.library_migrator import resolve_artists
+    mappings = {"Diljit Dosanjh": "Punjabi", "Drake": "English", "hugel": None}
+    resolved, unresolved = resolve_artists(["Diljit Dosanjh", "Drake"], mappings)
+    assert resolved == {"Diljit Dosanjh": "Punjabi", "Drake": "English"}
+    assert unresolved == []
+
+
+def test_resolve_artists_null_goes_to_unresolved(tmp_path):
+    from services.library_migrator import resolve_artists
+    mappings = {"hugel": None}
+    resolved, unresolved = resolve_artists(["hugel"], mappings)
+    assert resolved == {}
+    assert unresolved == ["hugel"]
+
+
+def test_resolve_artists_missing_from_config_goes_to_unresolved(tmp_path):
+    from services.library_migrator import resolve_artists
+    mappings = {"Drake": "English"}
+    resolved, unresolved = resolve_artists(["Drake", "NewArtist"], mappings)
+    assert "NewArtist" in unresolved
+    assert "Drake" not in unresolved

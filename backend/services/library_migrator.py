@@ -108,3 +108,46 @@ def copy_verify_delete(src: Path, dest: Path) -> bool:
         return False
     src.unlink()
     return True
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SCANNER AND RESOLVER
+# ═══════════════════════════════════════════════════════════════════
+
+def scan_source_folders(source: Path) -> Dict[str, List[Path]]:
+    """
+    Scan source for artist subdirectories that contain at least one audio file.
+    Returns {folder_name: [sorted list of audio file Paths]}.
+    Root-level files are ignored — only subfolders are considered.
+    """
+    result: Dict[str, List[Path]] = {}
+    for folder in sorted(Path(source).iterdir()):
+        if not folder.is_dir():
+            continue
+        audio_files = sorted(
+            f for f in folder.iterdir()
+            if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
+        )
+        if audio_files:
+            result[folder.name] = audio_files
+    return result
+
+
+def resolve_artists(
+    artist_folders: List[str],
+    mappings: Dict[str, Optional[str]],
+) -> Tuple[Dict[str, str], List[str]]:
+    """
+    Split artist folder names into resolved and unresolved.
+    - resolved: {artist_name: category} for artists with a non-null mapping
+    - unresolved: list of artists with null mapping or missing from mappings entirely
+    """
+    resolved: Dict[str, str] = {}
+    unresolved: List[str] = []
+    for artist in artist_folders:
+        category = mappings.get(artist)
+        if category:
+            resolved[artist] = category
+        else:
+            unresolved.append(artist)
+    return resolved, unresolved
