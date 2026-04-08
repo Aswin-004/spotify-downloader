@@ -26,7 +26,8 @@ from services.analytics_service import (  # ANALYTICS
     get_overview_stats, get_downloads_per_day,  # ANALYTICS
     get_top_artists, get_source_breakdown,  # ANALYTICS
     get_tagging_breakdown, get_recent_downloads,  # ANALYTICS
-    get_failed_downloads,  # ANALYTICS
+    get_failed_downloads, get_cache_analytics,  # ANALYTICS
+    get_tagging_failure_summary, get_weekly_download_stats,  # ANALYTICS
 )  # ANALYTICS
 from utils import setup_logging, extract_spotify_id
 
@@ -1136,6 +1137,33 @@ def analytics_recent():  # ANALYTICS
 def analytics_failed():  # ANALYTICS
     """Return recent tagging failures."""  # ANALYTICS
     return jsonify(get_failed_downloads())  # ANALYTICS
+
+
+@app.route('/api/cache-analytics')  # ANALYTICS
+def cache_analytics():  # ANALYTICS
+    """Return MusicBrainz cache statistics."""  # ANALYTICS
+    try:  # ANALYTICS
+        return jsonify(get_cache_analytics())  # ANALYTICS
+    except Exception as e:  # ANALYTICS
+        return jsonify({"error": str(e)}), 500  # ANALYTICS
+
+
+@app.route('/api/tagging-failures/summary')  # ANALYTICS
+def tagging_failures_summary():  # ANALYTICS
+    """Return tagging failure breakdown by error_type + retry trend."""  # ANALYTICS
+    try:  # ANALYTICS
+        return jsonify(get_tagging_failure_summary())  # ANALYTICS
+    except Exception as e:  # ANALYTICS
+        return jsonify({"error": str(e)}), 500  # ANALYTICS
+
+
+@app.route('/api/download-history/stats')  # ANALYTICS
+def download_history_stats():  # ANALYTICS
+    """Return weekly download stats and top-3 artists."""  # ANALYTICS
+    try:  # ANALYTICS
+        return jsonify(get_weekly_download_stats())  # ANALYTICS
+    except Exception as e:  # ANALYTICS
+        return jsonify({"error": str(e)}), 500  # ANALYTICS
 
 
 # ═══════════════════════════════════════════════════════════════════  # NOTIFICATION

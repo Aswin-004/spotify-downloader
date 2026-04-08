@@ -12,6 +12,11 @@ import { // ANALYTICS
   Loader2, // ANALYTICS
   TrendingUp, // ANALYTICS
   Music, // ANALYTICS
+  Database, // ANALYTICS
+  Zap, // ANALYTICS
+  AlertTriangle, // ANALYTICS
+  Calendar, // ANALYTICS
+  Star, // ANALYTICS
 } from 'lucide-react'; // ANALYTICS
 import { // ANALYTICS
   LineChart, // ANALYTICS
@@ -113,6 +118,9 @@ export default function Analytics() { // ANALYTICS
   const [taggingBreakdown, setTaggingBreakdown] = useState([]); // ANALYTICS
   const [recentDownloads, setRecentDownloads] = useState([]); // ANALYTICS
   const [failedDownloads, setFailedDownloads] = useState([]); // ANALYTICS
+  const [cacheAnalytics, setCacheAnalytics] = useState(null); // ANALYTICS
+  const [failureSummary, setFailureSummary] = useState(null); // ANALYTICS
+  const [weeklyStats, setWeeklyStats] = useState(null); // ANALYTICS
   const [dayRange, setDayRange] = useState(30); // ANALYTICS
   const [loading, setLoading] = useState(true); // ANALYTICS
   const [retrying, setRetrying] = useState({}); // ANALYTICS
@@ -120,7 +128,7 @@ export default function Analytics() { // ANALYTICS
   // ANALYTICS — Fetch all analytics data
   const fetchAll = useCallback(async () => { // ANALYTICS
     try { // ANALYTICS
-      const [ov, pd, ta, sb, tb, rd, fd] = await Promise.all([ // ANALYTICS
+      const [ov, pd, ta, sb, tb, rd, fd, ca, fs, ws] = await Promise.all([ // ANALYTICS
         api.getAnalyticsOverview(), // ANALYTICS
         api.getAnalyticsDownloadsPerDay(dayRange), // ANALYTICS
         api.getAnalyticsTopArtists(), // ANALYTICS
@@ -128,6 +136,9 @@ export default function Analytics() { // ANALYTICS
         api.getAnalyticsTaggingBreakdown(), // ANALYTICS
         api.getAnalyticsRecent(), // ANALYTICS
         api.getAnalyticsFailed(), // ANALYTICS
+        api.getCacheAnalytics(), // ANALYTICS
+        api.getTaggingFailuresSummary(), // ANALYTICS
+        api.getDownloadHistoryStats(), // ANALYTICS
       ]); // ANALYTICS
       setOverview(ov); // ANALYTICS
       setPerDay(pd); // ANALYTICS
@@ -136,6 +147,9 @@ export default function Analytics() { // ANALYTICS
       setTaggingBreakdown(tb); // ANALYTICS
       setRecentDownloads(rd); // ANALYTICS
       setFailedDownloads(fd); // ANALYTICS
+      setCacheAnalytics(ca); // ANALYTICS
+      setFailureSummary(fs); // ANALYTICS
+      setWeeklyStats(ws); // ANALYTICS
     } catch { // ANALYTICS
       // silent — data just won't update // ANALYTICS
     } finally { // ANALYTICS
@@ -534,6 +548,235 @@ export default function Analytics() { // ANALYTICS
           )} {/* ANALYTICS */}
         </CardContent> {/* ANALYTICS */}
       </Card> {/* ANALYTICS */}
+
+      {/* ── NEW: Download History Summary ─────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-blue-400" />
+            <CardTitle className="text-sm font-medium text-gray-300">This Week</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {loading || !weeklyStats ? (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Total downloads this week */}
+              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-5">
+                <Download className="w-5 h-5 text-emerald-400 mb-2" />
+                <span className="text-3xl font-bold font-mono text-emerald-400">
+                  {weeklyStats.total_this_week}
+                </span>
+                <span className="text-xs text-gray-500 mt-1">Downloads</span>
+              </div>
+              {/* Success rate */}
+              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-5">
+                <CheckCircle2 className="w-5 h-5 text-blue-400 mb-2" />
+                <span className="text-3xl font-bold font-mono text-blue-400">
+                  {weeklyStats.success_rate}%
+                </span>
+                <span className="text-xs text-gray-500 mt-1">Tagged</span>
+              </div>
+              {/* Top 3 artists */}
+              <div className="rounded-xl border border-border bg-surface-light/30 p-4">
+                <div className="flex items-center gap-1.5 mb-3">
+                  <Star className="w-3.5 h-3.5 text-yellow-400" />
+                  <span className="text-xs font-medium text-gray-400">Top Artists</span>
+                </div>
+                {weeklyStats.top_artists.length === 0 ? (
+                  <p className="text-xs text-gray-600 text-center py-2">No data yet</p>
+                ) : (
+                  <ol className="space-y-1.5">
+                    {weeklyStats.top_artists.map((a, i) => (
+                      <li key={a.artist} className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-gray-500 w-4 shrink-0">{i + 1}.</span>
+                        <span className="text-xs text-gray-200 truncate flex-1">{a.artist}</span>
+                        <Badge variant="secondary" className="text-[10px] shrink-0">{a.count}</Badge>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── NEW: Cache Analytics ──────────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Database className="w-4 h-4 text-yellow-400" />
+            <CardTitle className="text-sm font-medium text-gray-300">MusicBrainz Cache</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {loading || !cacheAnalytics ? (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Hit rate donut */}
+              <div className="flex flex-col items-center rounded-xl border border-border bg-surface-light/30 p-4">
+                <div className="relative w-20 h-20">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={[
+                          { value: cacheAnalytics.cache_hit_rate },
+                          { value: Math.max(0, 100 - cacheAnalytics.cache_hit_rate) },
+                        ]}
+                        cx="50%" cy="50%"
+                        innerRadius={26} outerRadius={36}
+                        startAngle={90} endAngle={-270}
+                        strokeWidth={0}
+                      >
+                        <Cell fill="#f59e0b" />
+                        <Cell fill="#1f2937" />
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <span className="absolute inset-0 flex items-center justify-center text-sm font-bold font-mono text-yellow-400">
+                    {cacheAnalytics.cache_hit_rate}%
+                  </span>
+                </div>
+                <span className="text-xs text-gray-500 mt-2">Hit Rate</span>
+              </div>
+              {/* Cached tracks */}
+              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-4">
+                <Zap className="w-5 h-5 text-yellow-400 mb-2" />
+                <span className="text-2xl font-bold font-mono">{cacheAnalytics.total_cached_tracks}</span>
+                <span className="text-xs text-gray-500 mt-1">Cached Tracks</span>
+              </div>
+              {/* Avg age */}
+              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-4">
+                <HardDrive className="w-5 h-5 text-gray-400 mb-2" />
+                <span className="text-2xl font-bold font-mono">{cacheAnalytics.avg_age_days}d</span>
+                <span className="text-xs text-gray-500 mt-1">Avg Age</span>
+              </div>
+              {/* API calls saved */}
+              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-4">
+                <TrendingUp className="w-5 h-5 text-emerald-400 mb-2" />
+                <span className="text-2xl font-bold font-mono text-emerald-400">
+                  {cacheAnalytics.api_calls_saved}
+                </span>
+                <span className="text-xs text-gray-500 mt-1">API Calls Saved</span>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── NEW: Tagging Failure Summary ──────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Error type breakdown pie */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-400" />
+              <CardTitle className="text-sm font-medium text-gray-300">Failure Types</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {loading || !failureSummary ? (
+              <Skeleton className="h-52 w-full" />
+            ) : failureSummary.by_error_type.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-52 text-gray-600">
+                <CheckCircle2 className="w-8 h-8 mb-2" />
+                <p className="text-sm">No failures recorded</p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center">
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie
+                      data={failureSummary.by_error_type}
+                      dataKey="count"
+                      nameKey="error_type"
+                      cx="50%" cy="50%"
+                      outerRadius={70} innerRadius={38}
+                      strokeWidth={0} paddingAngle={3}
+                    >
+                      {failureSummary.by_error_type.map((entry, i) => (
+                        <Cell
+                          key={entry.error_type}
+                          fill={
+                            { network: '#3b82f6', metadata_missing: '#f59e0b', format_invalid: '#ef4444', rate_limit: '#a855f7' }[entry.error_type]
+                            || PIE_COLORS[i % PIE_COLORS.length]
+                          }
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend formatter={(v) => <span className="text-xs text-gray-400">{v}</span>} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Retry trend + recent failures list */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <RotateCw className="w-4 h-4 text-yellow-400" />
+              <CardTitle className="text-sm font-medium text-gray-300">Retry Trend (7d)</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {loading || !failureSummary ? (
+              <Skeleton className="h-28 w-full" />
+            ) : failureSummary.retry_trend.length === 0 ? (
+              <div className="flex items-center justify-center h-28 text-gray-600 text-sm">
+                No retries in the last 7 days
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={110}>
+                <BarChart data={failureSummary.retry_trend} margin={{ left: -10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                  <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => v.slice(5)} stroke="#1f2937" />
+                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} stroke="#1f2937" allowDecimals={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="retries" name="Retries" fill="#f59e0b" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+            {/* Recent failures list */}
+            {failureSummary?.recent_failures?.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-gray-500 mb-2">Recent</p>
+                {failureSummary.recent_failures.slice(0, 5).map((f, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 rounded-lg bg-surface-light/30 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-300 truncate">{f.title || '—'}</p>
+                      <p className="text-[10px] text-gray-600 truncate">{f.artist || ''}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Badge
+                        variant="secondary"
+                        className={cn('text-[10px]', {
+                          'text-blue-400': f.error_type === 'network',
+                          'text-yellow-400': f.error_type === 'metadata_missing',
+                          'text-red-400': f.error_type === 'format_invalid',
+                          'text-purple-400': f.error_type === 'rate_limit',
+                        })}
+                      >
+                        {f.error_type || 'unknown'}
+                      </Badge>
+                      <span className="text-[10px] text-gray-600 font-mono">{formatTime(f.timestamp)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div> // ANALYTICS
   ); // ANALYTICS
 } // ANALYTICS

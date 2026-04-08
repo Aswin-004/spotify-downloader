@@ -107,6 +107,15 @@ export const api = {
       body: JSON.stringify({ track_id: trackId }), // ANALYTICS
     }).then(handleResponse); // ANALYTICS
   }, // ANALYTICS
+  getCacheAnalytics() { // ANALYTICS
+    return fetch('/api/cache-analytics').then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+  getTaggingFailuresSummary() { // ANALYTICS
+    return fetch('/api/tagging-failures/summary').then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
+  getDownloadHistoryStats() { // ANALYTICS
+    return fetch('/api/download-history/stats').then(handleResponse); // ANALYTICS
+  }, // ANALYTICS
 
   // FILE ORGANIZER — Batch organize library
   organize(options = {}) {

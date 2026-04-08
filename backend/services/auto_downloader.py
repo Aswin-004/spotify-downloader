@@ -35,6 +35,13 @@ from services.downloader_service import download_queue_status, update_queue, wai
 from services.spotify_service import is_rate_limited, set_global_rate_limit
 from services.metadata_cache import get_cache
 
+# BPM/KEY — import bpm_key_service
+try:  # BPM/KEY
+    from bpm_key_service import analyze_and_tag as _analyze_and_tag  # BPM/KEY
+    _BPM_KEY_AVAILABLE = True  # BPM/KEY
+except ImportError:  # BPM/KEY
+    _BPM_KEY_AVAILABLE = False  # BPM/KEY
+
 # Use loguru when available, fall back to stdlib logger
 try:
     from loguru import logger
@@ -393,6 +400,16 @@ def ingest_download(download_dir=None):
                 saved_ids.add(tid)
                 logger.info(f"[ingest] Downloaded: {result['filename']}")
                 _emit("download_complete", {"title": title, "artist": artist, "status": "completed", "filename": result.get("filename", ""), "source": "ingest"})
+
+                # BPM/KEY — detect BPM and musical key after successful download
+                if _BPM_KEY_AVAILABLE:  # BPM/KEY
+                    try:  # BPM/KEY
+                        _ingest_filepath = result.get("filepath") or os.path.join(target_folder, result.get("filename", ""))  # BPM/KEY
+                        _ingest_filename = result.get("filename", "")  # BPM/KEY
+                        if _ingest_filepath and _ingest_filename:  # BPM/KEY
+                            _analyze_and_tag(_ingest_filepath, _ingest_filename)  # BPM/KEY
+                    except Exception as _bpm_err:  # BPM/KEY
+                        logger.warning(f"BPM/key analysis failed (non-critical): {_bpm_err}")  # BPM/KEY
 
                 # FILE ORGANIZER — Auto-organize after successful ingest download
                 organize_mode = os.getenv("ORGANIZE_MODE", "artist")

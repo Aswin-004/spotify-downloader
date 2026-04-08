@@ -52,6 +52,13 @@ try:  # TAGGING INTEGRATION
 except ImportError:  # TAGGING INTEGRATION
     _TAGGER_AVAILABLE = False  # TAGGING INTEGRATION
 
+# BPM/KEY — import bpm_key_service
+try:  # BPM/KEY
+    from bpm_key_service import analyze_and_tag as _analyze_and_tag  # BPM/KEY
+    _BPM_KEY_AVAILABLE = True  # BPM/KEY
+except ImportError:  # BPM/KEY
+    _BPM_KEY_AVAILABLE = False  # BPM/KEY
+
 # ── Optional mutagen import (album-art embedding) ──────────────────────────
 try:
     from mutagen.mp3 import MP3
@@ -644,6 +651,13 @@ class DownloaderService:
                             })  # TAGGING INTEGRATION
                     except Exception as tag_err:  # TAGGING INTEGRATION
                         logger.warning(f"[tagger] Tagging failed for {filename}: {tag_err}")  # TAGGING INTEGRATION
+
+                # BPM/KEY — detect BPM and musical key after tagging
+                if _BPM_KEY_AVAILABLE:  # BPM/KEY
+                    try:  # BPM/KEY
+                        _analyze_and_tag(filepath, filename)  # BPM/KEY
+                    except Exception as _bpm_err:  # BPM/KEY
+                        logger.warning(f"BPM/key analysis failed (non-critical): {_bpm_err}")  # BPM/KEY
 
                 result = {
                     "status": "success",

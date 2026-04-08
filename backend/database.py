@@ -16,7 +16,7 @@ import os  # MUSICBRAINZ
 import threading  # MUSICBRAINZ
 from datetime import datetime, timedelta, timezone  # MUSICBRAINZ
 
-from pymongo import MongoClient, DESCENDING  # MUSICBRAINZ
+from pymongo import MongoClient, ASCENDING, DESCENDING  # MUSICBRAINZ
 from pymongo.errors import ConnectionFailure  # MUSICBRAINZ
 
 # MUSICBRAINZ — Loguru / stdlib fallback
@@ -93,6 +93,17 @@ def _ensure_indexes():  # MUSICBRAINZ
     db.tagging_failures.create_index(  # MUSICBRAINZ
         [("timestamp", DESCENDING)],  # MUSICBRAINZ
         name="idx_failure_time",  # MUSICBRAINZ
+    )  # MUSICBRAINZ
+    db.tagging_failures.create_index(  # MUSICBRAINZ
+        [("error_type", ASCENDING), ("timestamp", DESCENDING)],  # MUSICBRAINZ
+        name="idx_failure_error_type_time",  # MUSICBRAINZ
+    )  # MUSICBRAINZ
+
+    # MUSICBRAINZ — download_history compound index (user_id optional field)
+    db.download_history.create_index(  # MUSICBRAINZ
+        [("user_id", ASCENDING), ("downloaded_at", DESCENDING)],  # MUSICBRAINZ
+        name="idx_user_downloaded_at",  # MUSICBRAINZ
+        sparse=True,  # MUSICBRAINZ — sparse because user_id is optional
     )  # MUSICBRAINZ
 
     logger.info("[database] MongoDB indexes ensured")  # MUSICBRAINZ
@@ -202,23 +213,35 @@ def update_tagging_report(filename: str, tagging_report: dict):  # MUSICBRAINZ
 # ═══════════════════════════════════════════════════════════════════
 
 def get_cached_mb(track_id: str) -> dict | None:  # MUSICBRAINZ
-    """Retrieve cached MusicBrainz data (TTL handled by MongoDB TTL index)."""  # MUSICBRAINZ
+    """Retrieve cached MusicBrainz data, updating hit counter and last_accessed."""  # MUSICBRAINZ
     col = get_musicbrainz_cache_collection()  # MUSICBRAINZ
-    doc = col.find_one({"track_id": track_id})  # MUSICBRAINZ
+    doc = col.find_one_and_update(  # MUSICBRAINZ
+        {"track_id": track_id},  # MUSICBRAINZ
+        {  # MUSICBRAINZ
+            "$inc": {"cache_hit_count": 1},  # MUSICBRAINZ
+            "$set": {"last_accessed": datetime.now(timezone.utc)},  # MUSICBRAINZ
+        },  # MUSICBRAINZ
+        return_document=True,  # MUSICBRAINZ
+    )  # MUSICBRAINZ
     if doc is None:  # MUSICBRAINZ
         return None  # MUSICBRAINZ
     return doc.get("mb_data")  # MUSICBRAINZ
 
 
 def set_cached_mb(track_id: str, mb_data: dict):  # MUSICBRAINZ
-    """Store MusicBrainz data in cache (upsert)."""  # MUSICBRAINZ
+    """Store MusicBrainz data in cache (upsert). Initialises hit counter on insert."""  # MUSICBRAINZ
     col = get_musicbrainz_cache_collection()  # MUSICBRAINZ
+    now = datetime.now(timezone.utc)  # MUSICBRAINZ
     col.update_one(  # MUSICBRAINZ
         {"track_id": track_id},  # MUSICBRAINZ
-        {"$set": {  # MUSICBRAINZ
-            "mb_data": mb_data,  # MUSICBRAINZ
-            "cached_at": datetime.now(timezone.utc),  # MUSICBRAINZ
-        }},  # MUSICBRAINZ
+        {  # MUSICBRAINZ
+            "$set": {  # MUSICBRAINZ
+                "mb_data": mb_data,  # MUSICBRAINZ
+                "cached_at": now,  # MUSICBRAINZ
+                "last_accessed": now,  # MUSICBRAINZ
+            },  # MUSICBRAINZ
+            "$setOnInsert": {"cache_hit_count": 0},  # MUSICBRAINZ — only set on new docs
+        },  # MUSICBRAINZ
         upsert=True,  # MUSICBRAINZ
     )  # MUSICBRAINZ
 
@@ -227,18 +250,42 @@ def set_cached_mb(track_id: str, mb_data: dict):  # MUSICBRAINZ
 # MUSICBRAINZ — tagging_failures helpers
 # ═══════════════════════════════════════════════════════════════════
 
+def _classify_error_type(error: str) -> str:  # MUSICBRAINZ
+    """Classify a tagging error string into a category."""  # MUSICBRAINZ
+    e = error.lower()  # MUSICBRAINZ
+    if any(k in e for k in ("network", "connection", "timeout", "refused", "unreachable", "socket")):  # MUSICBRAINZ
+        return "network"  # MUSICBRAINZ
+    if any(k in e for k in ("no musicbrainz match", "score", "no results", "not found", "_miss")):  # MUSICBRAINZ
+        return "metadata_missing"  # MUSICBRAINZ
+    if any(k in e for k in ("id3", "tag", "mutagen", "format", "invalid", "corrupt", "save")):  # MUSICBRAINZ
+        return "format_invalid"  # MUSICBRAINZ
+    if any(k in e for k in ("rate limit", "429", "too many", "quota")):  # MUSICBRAINZ
+        return "rate_limit"  # MUSICBRAINZ
+    return "unknown"  # MUSICBRAINZ
+
+
 def log_tagging_failure(  # MUSICBRAINZ
     track_id: str,  # MUSICBRAINZ
     title: str,  # MUSICBRAINZ
     artist: str,  # MUSICBRAINZ
     error: str,  # MUSICBRAINZ
 ):  # MUSICBRAINZ
-    """Record a tagging failure for review."""  # MUSICBRAINZ
+    """Record a tagging failure with error classification and retry tracking."""  # MUSICBRAINZ
     col = get_tagging_failures_collection()  # MUSICBRAINZ
-    col.insert_one({  # MUSICBRAINZ
-        "track_id": track_id,  # MUSICBRAINZ
-        "title": title,  # MUSICBRAINZ
-        "artist": artist,  # MUSICBRAINZ
-        "error": error[:500],  # MUSICBRAINZ
-        "timestamp": datetime.now(timezone.utc),  # MUSICBRAINZ
-    })  # MUSICBRAINZ
+    now = datetime.now(timezone.utc)  # MUSICBRAINZ
+    # MUSICBRAINZ — upsert by track_id so re-runs increment retry_count
+    col.update_one(  # MUSICBRAINZ
+        {"track_id": track_id},  # MUSICBRAINZ
+        {  # MUSICBRAINZ
+            "$set": {  # MUSICBRAINZ
+                "title": title,  # MUSICBRAINZ
+                "artist": artist,  # MUSICBRAINZ
+                "error": error[:500],  # MUSICBRAINZ
+                "error_type": _classify_error_type(error),  # MUSICBRAINZ
+                "last_retry_timestamp": now,  # MUSICBRAINZ
+            },  # MUSICBRAINZ
+            "$inc": {"retry_count": 1},  # MUSICBRAINZ
+            "$setOnInsert": {"timestamp": now},  # MUSICBRAINZ — first seen
+        },  # MUSICBRAINZ
+        upsert=True,  # MUSICBRAINZ
+    )  # MUSICBRAINZ
