@@ -204,3 +204,55 @@ def test_resolve_artists_missing_from_config_goes_to_unresolved(tmp_path):
     resolved, unresolved = resolve_artists(["Drake", "NewArtist"], mappings)
     assert "NewArtist" in unresolved
     assert "Drake" not in unresolved
+
+
+# ── Task 4: Interactive prompt + undo log ────────────────────────
+
+def test_prompt_unresolved_saves_answer(tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg.json"
+    data = {
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"hugel": None}
+    }
+    import json as _json
+    cfg.write_text(_json.dumps(data))
+    monkeypatch.setattr("builtins.input", lambda _: "2")
+    from services.library_migrator import prompt_unresolved, load_config
+    result = prompt_unresolved(["hugel"], data["categories"], cfg, data)
+    assert result == {"hugel": "English"}
+    saved = load_config(cfg)
+    assert saved["mappings"]["hugel"] == "English"
+
+
+def test_prompt_unresolved_skip_choice(tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg.json"
+    data = {
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"hugel": None}
+    }
+    import json as _json
+    cfg.write_text(_json.dumps(data))
+    monkeypatch.setattr("builtins.input", lambda _: "5")
+    from services.library_migrator import prompt_unresolved
+    result = prompt_unresolved(["hugel"], data["categories"], cfg, data)
+    assert result == {}
+
+
+def test_write_undo_log_creates_file(tmp_path):
+    entries = [
+        {"from": "dest/Punjabi/song.mp3", "to": "source/Diljit Dosanjh/song.mp3"}
+    ]
+    from services.library_migrator import write_undo_log
+    path = write_undo_log(entries, tmp_path)
+    assert path.exists()
+    assert path.suffix == ".json"
+    assert "migrate_undo_" in path.name
+
+
+def test_write_undo_log_content(tmp_path):
+    import json as _json
+    entries = [{"from": "a", "to": "b"}, {"from": "c", "to": "d"}]
+    from services.library_migrator import write_undo_log
+    path = write_undo_log(entries, tmp_path)
+    loaded = _json.loads(path.read_text())
+    assert loaded == entries

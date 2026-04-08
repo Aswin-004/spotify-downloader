@@ -151,3 +151,62 @@ def resolve_artists(
         else:
             unresolved.append(artist)
     return resolved, unresolved
+
+
+# ═══════════════════════════════════════════════════════════════════
+# INTERACTIVE PROMPT + UNDO LOG
+# ═══════════════════════════════════════════════════════════════════
+
+def prompt_unresolved(
+    unresolved: List[str],
+    categories: List[str],
+    config_path: Path,
+    config_data: Dict,
+) -> Dict[str, str]:
+    """
+    Interactively prompt user to assign each unresolved artist to a category.
+    Saves each answer to config_path immediately after it is given.
+    Returns {artist: category} for resolved items only (skipped items are omitted).
+    """
+    newly_resolved: Dict[str, str] = {}
+    for artist in unresolved:
+        print(f'\nArtist: "{artist}"')
+        for i, cat in enumerate(categories, 1):
+            print(f"  [{i}] {cat}")
+        print(f"  [{len(categories) + 1}] Skip")
+        while True:
+            try:
+                raw = input("> ").strip()
+                choice = int(raw)
+            except (ValueError, EOFError):
+                print("  Invalid input, skipping.")
+                break
+            if 1 <= choice <= len(categories):
+                category = categories[choice - 1]
+                newly_resolved[artist] = category
+                config_data["mappings"][artist] = category
+                save_config(config_path, config_data)
+                logger.info(f"[migrator] Assigned '{artist}' → '{category}', saved")
+                break
+            elif choice == len(categories) + 1:
+                logger.info(f"[migrator] Skipped '{artist}'")
+                break
+            else:
+                print(f"  Please enter 1–{len(categories) + 1}")
+    return newly_resolved
+
+
+def write_undo_log(entries: List[Dict], logs_dir: Path) -> Path:
+    """
+    Write undo log JSON to logs_dir/migrate_undo_YYYYMMDD_HHMMSS.json.
+    Returns the path of the written file.
+    Each entry: {"from": "<dest path>", "to": "<source path>"}
+    """
+    logs_dir = Path(logs_dir)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = logs_dir / f"migrate_undo_{ts}.json"
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2, ensure_ascii=False)
+    logger.info(f"[migrator] Undo log written: {log_path}")
+    return log_path
