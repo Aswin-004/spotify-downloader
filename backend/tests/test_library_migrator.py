@@ -256,3 +256,68 @@ def test_write_undo_log_content(tmp_path):
     path = write_undo_log(entries, tmp_path)
     loaded = _json.loads(path.read_text())
     assert loaded == entries
+
+
+# ── Task 5: Report builder ───────────────────────────────────────
+
+def test_build_report_text_plain_contains_totals():
+    from services.library_migrator import build_report_text
+    stats = {
+        "Punjabi": {"files": 10, "bytes": 1024 * 1024},
+        "English": {"files": 5,  "bytes": 512 * 1024},
+        "Hindi":   {"files": 0,  "bytes": 0},
+        "House":   {"files": 0,  "bytes": 0},
+    }
+    text = build_report_text(
+        category_stats=stats,
+        errors=[],
+        skipped_artists=[],
+        undo_log_path=None,
+        duration_seconds=90.0,
+        html=False,
+    )
+    assert "Punjabi" in text
+    assert "10" in text
+    assert "1m 30s" in text
+    assert "Errors   : 0" in text
+
+
+def test_build_report_text_shows_skipped_artists():
+    from services.library_migrator import build_report_text
+    text = build_report_text(
+        category_stats={cat: {"files": 0, "bytes": 0} for cat in ["Punjabi","English","Hindi","House"]},
+        errors=[],
+        skipped_artists=["hugel", "NIJJAR"],
+        undo_log_path=None,
+        duration_seconds=10.0,
+        html=False,
+    )
+    assert "hugel" in text
+    assert "NIJJAR" in text
+
+
+def test_build_report_text_shows_undo_path():
+    from services.library_migrator import build_report_text
+    text = build_report_text(
+        category_stats={cat: {"files": 0, "bytes": 0} for cat in ["Punjabi","English","Hindi","House"]},
+        errors=[],
+        skipped_artists=[],
+        undo_log_path="logs/migrate_undo_20260408_120000.json",
+        duration_seconds=5.0,
+        html=False,
+    )
+    assert "migrate_undo_20260408_120000.json" in text
+
+
+def test_build_report_text_html_wraps_pre():
+    from services.library_migrator import build_report_text
+    text = build_report_text(
+        category_stats={cat: {"files": 0, "bytes": 0} for cat in ["Punjabi","English","Hindi","House"]},
+        errors=[],
+        skipped_artists=[],
+        undo_log_path=None,
+        duration_seconds=1.0,
+        html=True,
+    )
+    assert text.startswith("<pre>")
+    assert text.endswith("</pre>")

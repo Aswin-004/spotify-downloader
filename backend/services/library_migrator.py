@@ -210,3 +210,51 @@ def write_undo_log(entries: List[Dict], logs_dir: Path) -> Path:
         json.dump(entries, f, indent=2, ensure_ascii=False)
     logger.info(f"[migrator] Undo log written: {log_path}")
     return log_path
+
+
+# ═══════════════════════════════════════════════════════════════════
+# REPORT BUILDER
+# ═══════════════════════════════════════════════════════════════════
+
+CATEGORIES_ORDER = ["Punjabi", "English", "Hindi", "House"]
+
+
+def build_report_text(
+    category_stats: Dict[str, Dict],
+    errors: List[Dict],
+    skipped_artists: List[str],
+    undo_log_path: Optional[str],
+    duration_seconds: float,
+    html: bool = False,
+) -> str:
+    """
+    Build the final migration report as a plain string or HTML <pre> block.
+    category_stats format: {category: {"files": int, "bytes": int}}
+    """
+    lines = ["MUSIC LIBRARY MIGRATION REPORT", "=" * 32]
+
+    total_files = 0
+    total_bytes = 0
+    for cat in CATEGORIES_ORDER:
+        stats = category_stats.get(cat, {"files": 0, "bytes": 0})
+        f, b = stats["files"], stats["bytes"]
+        total_files += f
+        total_bytes += b
+        lines.append(f"{cat:<9}: {f:>4} files  ({_fmt_bytes(b)})")
+
+    lines.append("-" * 32)
+    lines.append(f"{'Total':<9}: {total_files:>4} files  ({_fmt_bytes(total_bytes)})")
+    lines.append(f"Errors   : {len(errors)}")
+
+    if skipped_artists:
+        lines.append(f"Skipped artists (unresolved): {', '.join(skipped_artists)}")
+
+    if undo_log_path:
+        lines.append(f"Undo log : {undo_log_path}")
+
+    mins = int(duration_seconds // 60)
+    secs = int(duration_seconds % 60)
+    lines.append(f"Duration : {mins}m {secs}s")
+
+    text = "\n".join(lines)
+    return f"<pre>{text}</pre>" if html else text
