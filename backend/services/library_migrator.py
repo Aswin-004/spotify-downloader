@@ -258,3 +258,144 @@ def build_report_text(
 
     text = "\n".join(lines)
     return f"<pre>{text}</pre>" if html else text
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MIGRATION ENGINE
+# ═══════════════════════════════════════════════════════════════════
+
+@dataclass
+class MigrationResult:
+    files_moved: int = 0
+    errors: List[Dict] = field(default_factory=list)
+    skipped_artists: List[str] = field(default_factory=list)
+    non_empty_source_folders: List[str] = field(default_factory=list)
+    category_stats: Dict[str, Dict] = field(default_factory=dict)
+    undo_entries: List[Dict] = field(default_factory=list)
+    undo_log_path: Optional[str] = None
+    duration_seconds: float = 0.0
+
+
+def migrate_library(
+    source: Path,
+    dest: Path,
+    config_path: Path = DEFAULT_CONFIG_PATH,
+    *,
+    interactive: bool = False,
+    dry_run: bool = False,
+    logs_dir: Path = DEFAULT_LOGS_DIR,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+) -> MigrationResult:
+    """
+    Migrate all audio files from artist-folder source into flat category buckets at dest.
+    """
+    import time
+    start = time.time()
+
+    result = MigrationResult()
+    result.category_stats = {cat: {"files": 0, "bytes": 0} for cat in CATEGORIES_ORDER}
+
+    config_data = load_config(Path(config_path))
+    categories = config_data["categories"]
+    mappings = config_data["mappings"]
+
+    source_folders = scan_source_folders(Path(source))
+    if not source_folders:
+        logger.info(f"[migrator] No artist folders with audio found in {source}")
+        result.duration_seconds = time.time() - start
+        return result
+
+    resolved, unresolved = resolve_artists(list(source_folders.keys()), mappings)
+
+    if unresolved and interactive and sys.stdin.isatty():
+        newly_resolved = prompt_unresolved(unresolved, categories, Path(config_path), config_data)
+        resolved.update(newly_resolved)
+        unresolved = [a for a in unresolved if a not in newly_resolved]
+
+    result.skipped_artists = unresolved
+
+    total_files = sum(len(files) for artist, files in source_folders.items() if artist in resolved)
+
+    files_done = 0
+    for artist, category in resolved.items():
+        audio_files = source_folders.get(artist, [])
+        for src_file in audio_files:
+            if dry_run:
+                logger.info(f"[migrator] DRY RUN: {src_file.name} → {category}/")
+                files_done += 1
+                if progress_cb:
+                    progress_cb(files_done, total_files)
+                continue
+
+            dest_path = resolve_dest_path(Path(dest), category, src_file.name)
+            src_bytes = src_file.stat().st_size
+
+            ok = copy_verify_delete(src_file, dest_path)
+            if ok:
+                result.files_moved += 1
+                result.undo_entries.append({
+                    "from": str(dest_path),
+                    "to": str(src_file),
+                })
+                result.category_stats[category]["files"] += 1
+                result.category_stats[category]["bytes"] += src_bytes
+                logger.info(f"[migrator] ✓ {src_file.name} → {category}/")
+            else:
+                result.errors.append({"file": str(src_file), "error": "MD5 mismatch"})
+
+            files_done += 1
+            if progress_cb:
+                progress_cb(files_done, total_files)
+
+            try:
+                from database import _get_db
+                db = _get_db()
+                db.download_history.update_one(
+                    {"filename": src_file.name},
+                    {"$set": {"folder": category, "relative_path": str(dest_path)}},
+                )
+            except Exception as db_err:
+                logger.debug(f"[migrator] MongoDB update skipped: {db_err}")
+
+    if not dry_run:
+        for artist in resolved:
+            artist_dir = Path(source) / artist
+            if artist_dir.exists():
+                remaining = list(artist_dir.iterdir())
+                if not remaining:
+                    artist_dir.rmdir()
+                    logger.info(f"[migrator] Removed empty folder: {artist}/")
+                else:
+                    result.non_empty_source_folders.append(artist)
+                    logger.warning(f"[migrator] Non-empty folder left: {artist}/ ({len(remaining)} items)")
+
+    if result.undo_entries and not dry_run:
+        undo_path = write_undo_log(result.undo_entries, Path(logs_dir))
+        result.undo_log_path = str(undo_path)
+
+    result.duration_seconds = time.time() - start
+    logger.info(
+        f"[migrator] Done: moved={result.files_moved}, "
+        f"skipped={len(result.skipped_artists)}, errors={len(result.errors)}"
+    )
+    return result
+
+
+def undo_migration(undo_log_path: Path) -> None:
+    """
+    Reverse a migration using its undo log.
+    Each entry: {"from": "<dest path>", "to": "<original source path>"}
+    """
+    undo_log_path = Path(undo_log_path)
+    if not undo_log_path.exists():
+        raise FileNotFoundError(f"Undo log not found: {undo_log_path}")
+    with open(undo_log_path, "r", encoding="utf-8") as f:
+        entries = json.load(f)
+    logger.info(f"[migrator] Undoing {len(entries)} moves from {undo_log_path.name}")
+    for entry in entries:
+        src = Path(entry["from"])
+        dest = Path(entry["to"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+        logger.info(f"[migrator] Restored: {src.name} → {dest.parent.name}/")
+    print(f"Undo complete: {len(entries)} files restored.")

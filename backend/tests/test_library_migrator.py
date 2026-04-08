@@ -321,3 +321,154 @@ def test_build_report_text_html_wraps_pre():
     )
     assert text.startswith("<pre>")
     assert text.endswith("</pre>")
+
+
+# ── Task 6: Migration engine ─────────────────────────────────────
+import json as _json_task6
+
+
+def _make_source(tmp_path, artists):
+    """Helper: create source dirs with fake audio files."""
+    source = tmp_path / "source"
+    for artist, filenames in artists.items():
+        d = source / artist
+        d.mkdir(parents=True)
+        for fn in filenames:
+            (d / fn).write_bytes(b"fake audio " + fn.encode())
+    return source
+
+
+def test_migrate_library_moves_resolved_files(tmp_path):
+    source = _make_source(tmp_path, {"Diljit Dosanjh": ["song1.mp3", "song2.mp3"]})
+    dest = tmp_path / "dest"
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(_json_task6.dumps({
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"Diljit Dosanjh": "Punjabi"},
+    }))
+    from services.library_migrator import migrate_library
+    result = migrate_library(
+        source=source, dest=dest, config_path=cfg,
+        interactive=False, logs_dir=tmp_path / "logs",
+    )
+    assert result.files_moved == 2
+    assert (dest / "Punjabi" / "song1.mp3").exists()
+    assert (dest / "Punjabi" / "song2.mp3").exists()
+    assert not (source / "Diljit Dosanjh" / "song1.mp3").exists()
+
+
+def test_migrate_library_deletes_empty_source_folder(tmp_path):
+    source = _make_source(tmp_path, {"Diljit Dosanjh": ["song.mp3"]})
+    dest = tmp_path / "dest"
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(_json_task6.dumps({
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"Diljit Dosanjh": "Punjabi"},
+    }))
+    from services.library_migrator import migrate_library
+    migrate_library(source=source, dest=dest, config_path=cfg,
+                    interactive=False, logs_dir=tmp_path / "logs")
+    assert not (source / "Diljit Dosanjh").exists()
+
+
+def test_migrate_library_keeps_nonempty_source_folder(tmp_path):
+    source = _make_source(tmp_path, {"Diljit Dosanjh": ["song.mp3"]})
+    (source / "Diljit Dosanjh" / "cover.jpg").write_bytes(b"img")
+    dest = tmp_path / "dest"
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(_json_task6.dumps({
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"Diljit Dosanjh": "Punjabi"},
+    }))
+    from services.library_migrator import migrate_library
+    result = migrate_library(source=source, dest=dest, config_path=cfg,
+                             interactive=False, logs_dir=tmp_path / "logs")
+    assert (source / "Diljit Dosanjh").exists()
+    assert "Diljit Dosanjh" in result.non_empty_source_folders
+
+
+def test_migrate_library_skips_unresolved(tmp_path):
+    source = _make_source(tmp_path, {"hugel": ["track.mp3"]})
+    dest = tmp_path / "dest"
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(_json_task6.dumps({
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"hugel": None},
+    }))
+    from services.library_migrator import migrate_library
+    result = migrate_library(source=source, dest=dest, config_path=cfg,
+                             interactive=False, logs_dir=tmp_path / "logs")
+    assert result.files_moved == 0
+    assert "hugel" in result.skipped_artists
+    assert (source / "hugel" / "track.mp3").exists()
+
+
+def test_migrate_library_writes_undo_log(tmp_path):
+    source = _make_source(tmp_path, {"Drake": ["track.mp3"]})
+    dest = tmp_path / "dest"
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(_json_task6.dumps({
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"Drake": "English"},
+    }))
+    logs_dir = tmp_path / "logs"
+    from services.library_migrator import migrate_library
+    result = migrate_library(source=source, dest=dest, config_path=cfg,
+                             interactive=False, logs_dir=logs_dir)
+    assert result.undo_log_path is not None
+    undo_entries = _json_task6.loads(Path(result.undo_log_path).read_text())
+    assert len(undo_entries) == 1
+    assert "from" in undo_entries[0]
+    assert "to" in undo_entries[0]
+
+
+def test_migrate_library_dry_run_moves_nothing(tmp_path):
+    source = _make_source(tmp_path, {"Drake": ["song.mp3"]})
+    dest = tmp_path / "dest"
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(_json_task6.dumps({
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"Drake": "English"},
+    }))
+    from services.library_migrator import migrate_library
+    result = migrate_library(source=source, dest=dest, config_path=cfg,
+                             interactive=False, dry_run=True,
+                             logs_dir=tmp_path / "logs")
+    assert result.files_moved == 0
+    assert (source / "Drake" / "song.mp3").exists()
+    assert not (dest / "English" / "song.mp3").exists()
+
+
+def test_migrate_library_progress_callback_called(tmp_path):
+    source = _make_source(tmp_path, {"Drake": ["a.mp3", "b.mp3", "c.mp3"]})
+    dest = tmp_path / "dest"
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(_json_task6.dumps({
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"Drake": "English"},
+    }))
+    calls = []
+    from services.library_migrator import migrate_library
+    migrate_library(source=source, dest=dest, config_path=cfg,
+                    interactive=False, logs_dir=tmp_path / "logs",
+                    progress_cb=lambda done, total: calls.append((done, total)))
+    assert len(calls) == 3
+    assert calls[-1][0] == 3
+
+
+def test_undo_migration_restores_files(tmp_path):
+    source = _make_source(tmp_path, {"Drake": ["song.mp3"]})
+    dest = tmp_path / "dest"
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(_json_task6.dumps({
+        "categories": ["Punjabi", "English", "Hindi", "House"],
+        "mappings": {"Drake": "English"},
+    }))
+    from services.library_migrator import migrate_library, undo_migration
+    result = migrate_library(source=source, dest=dest, config_path=cfg,
+                             interactive=False, logs_dir=tmp_path / "logs")
+    assert result.files_moved == 1
+    assert not (source / "Drake" / "song.mp3").exists()
+    undo_migration(Path(result.undo_log_path))
+    assert (source / "Drake" / "song.mp3").exists()
+    assert not (dest / "English" / "song.mp3").exists()
