@@ -54,8 +54,20 @@ export const api = {
     return fetch('/api/ingest-config').then(handleResponse);
   },
 
-  refreshPlaylist() {
-    return fetch('/api/refresh-playlist', { method: 'POST' }).then(handleResponse);
+  refreshPlaylist(options = {}) {
+    // Optional per-trigger folder override. When present, every track in the
+    // sync is pinned to Ingest/{forceFolder}/ regardless of artist routing.
+    // Optional force_redownload flag bypasses history + registry dedup so
+    // previously-downloaded tracks actually land in the new folder.
+    const body = {};
+    const forceFolder = (options.forceFolder || '').trim();
+    if (forceFolder) body.force_folder = forceFolder;
+    if (options.forceRedownload) body.force_redownload = true;
+    return fetch('/api/refresh-playlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(handleResponse);
   },
 
   deleteFile(filename) {

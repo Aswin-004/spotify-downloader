@@ -52,6 +52,22 @@ GENRE_MAPPING = {
 # Unsafe characters to strip from folder names (Windows + Unix conventions)
 UNSAFE_CHARS = r'<>:"/\|?*'
 
+# Artist to genre mapping (secondary classification)
+ARTIST_MAP = {
+    "ap dhillon": "Punjabi",
+    "diljit": "Punjabi",
+    "karan aujla": "Punjabi",
+    "shubh": "Punjabi",
+    "bohemia": "Punjabi",
+
+    "hugel": "House",
+    "black coffee": "House",
+    "keinemusik": "House",
+
+    "sammy virji": "UKG",
+    "fred again": "House"
+}
+
 
 # ═══════════════════════════════════════════════════════════════════
 # HELPERS
@@ -82,6 +98,93 @@ def clean_folder_name(name: str) -> str:
         name = name.replace("  ", " ")
     
     return name or "Unknown"
+
+
+def normalize_artist(artist: str) -> str:
+    """
+    Normalize artist name.
+    
+    Args:
+        artist: Artist name string
+        
+    Returns:
+        Normalized artist name
+    """
+    return artist.strip() if artist else "Unknown"
+
+
+def classify_folder(artist: str, genre: str, title: str, bpm=None) -> Tuple[str, Optional[str]]:
+    """
+    Classify track into DJ folder structure using genre-first logic.
+    Returns (main_folder, subfolder_or_none).
+    
+    Genre is primary, artist mapping is secondary, always classifies (no skips).
+    
+    Args:
+        artist: Artist name
+        genre: Genre category
+        title: Track title
+        bpm: Beats per minute (optional)
+        
+    Returns:
+        Tuple of (main_folder, subfolder) where subfolder is None for flat genres
+    """
+    artist_l = (artist or "").lower()
+    genre_l = (genre or "").lower()
+    title_l = (title or "").lower()
+    
+    artist_clean = normalize_artist(artist)
+    
+    # 1. GENRE FIRST (PRIMARY LOGIC)
+    
+    if any(x in genre_l for x in ["house", "afro", "deep house", "tech house"]):
+        return ("House", "Others")
+    
+    if "garage" in genre_l:
+        return ("UKG", "Others")
+    
+    if "techno" in genre_l:
+        return ("Techno", None)
+    
+    if "dnb" in genre_l or "drum and bass" in genre_l:
+        return ("DnB", None)
+    
+    if "dubstep" in genre_l:
+        return ("Dubstep", None)
+    
+    if any(x in genre_l for x in ["hindi", "bollywood"]):
+        return ("Bollywood", artist_clean)
+    
+    # 2. TITLE-BASED FALLBACK (IMPORTANT FOR REMIXES)
+    
+    if any(x in title_l for x in ["remix", "edit", "vip"]):
+        return ("House", "Others")
+    
+    # 3. ARTIST MAPPING (SECONDARY)
+    
+    for key, value in ARTIST_MAP.items():
+        if key in artist_l:
+            if value in ["Bollywood", "Punjabi"]:
+                return (value, artist_clean)
+            else:
+                return (value, artist_clean)
+    
+    # 4. SMART FALLBACK HEURISTICS (NO DEFAULT BOLLYWOOD)
+    
+    # Check for extended Punjabi artist keywords
+    if any(x in artist_l for x in ["ap dhillon", "diljit", "karan aujla", "shubh", "punjab", "patiala"]):
+        return ("Punjabi", artist_clean)
+    
+    # Extended remix/mix detection
+    if any(x in title_l for x in ["remix", "edit", "vip", "mix", "mashup", "bootleg", "cover"]):
+        return ("House", "Others")
+    
+    # Detect by language patterns (basic)
+    if any(x in title_l for x in ["ਪ", "ਾ", "ੰ"]):
+        return ("Punjabi", artist_clean)
+    
+    # SAFE DEFAULT: Uncategorized (not Bollywood)
+    return ("Uncategorized", None)
 
 
 def map_genre_to_category(genre_tag: str) -> str:
@@ -163,31 +266,26 @@ def resolve_destination_path(filename: str, folder_structure: str) -> Tuple[str,
     dest_folder.mkdir(parents=True, exist_ok=True)
     
     dest_filepath = dest_folder / filename
-    
-    # Handle collision: append _1, _2, etc.
+
+    # Handle collision: skip if identical file already exists at destination
     if dest_filepath.exists():
-        base_name = filename[:-4]  # Remove .mp3
-        counter = 1
-        while (dest_folder / f"{base_name}_{counter}.mp3").exists():
-            counter += 1
-        new_filename = f"{base_name}_{counter}.mp3"
-        dest_filepath = dest_folder / new_filename
-    else:
-        new_filename = filename
-    
+        logger.info(f"[organizer] File already exists at destination, skipping: {dest_filepath}")
+        relative_path = str(dest_filepath.relative_to(BASE_DOWNLOAD_DIR))
+        return str(dest_folder), str(dest_filepath), relative_path
+
     # Relative path for MongoDB storage
     relative_path = str(dest_filepath.relative_to(BASE_DOWNLOAD_DIR))
     
     return str(dest_folder), str(dest_filepath), relative_path
 
 
-def organize_file(filename: str, mode: str = "artist", file_dir: Optional[str] = None, spotify_genre: str = "") -> Dict:
+def organize_file(filename: str, mode: str = "dj_hybrid", file_dir: Optional[str] = None, spotify_genre: str = "") -> Dict:
     """
-    Organize a single MP3 file into structured folder based on ID3 tags.
+    Organize a single MP3 file into structured folder.
 
     Args:
         filename: Just the filename (e.g., "Song.mp3")
-        mode: "artist" | "genre" | "artist_genre"
+        mode: Organization mode — "artist", "genre", "artist_genre", or "dj_hybrid" (default).
         file_dir: Directory where the file lives. If None, defaults to BASE_DOWNLOAD_DIR root.
                   Pass this when the file was downloaded to a subfolder (e.g. auto_downloader).
         spotify_genre: Fallback genre string when the ID3 TCON tag is empty or unknown.
@@ -214,8 +312,8 @@ def organize_file(filename: str, mode: str = "artist", file_dir: Optional[str] =
 
     try:
         # Validate mode
-        if mode not in ["artist", "genre", "artist_genre"]:
-            raise ValueError(f"Invalid mode: {mode}. Expected 'artist', 'genre', or 'artist_genre'")
+        if mode not in ["artist", "genre", "artist_genre", "dj_hybrid"]:
+            raise ValueError(f"Invalid mode: {mode}. Expected 'artist', 'genre', 'artist_genre', or 'dj_hybrid'")
 
         # Find original file — check file_dir first, then BASE_DOWNLOAD_DIR root
         if file_dir:
@@ -244,23 +342,30 @@ def organize_file(filename: str, mode: str = "artist", file_dir: Optional[str] =
         
         # Determine folder structure based on mode
         if mode == "artist":
-            folder_structure = artist
+            folder_structure = clean_folder_name(artist)
         elif mode == "genre":
-            folder_structure = genre
+            folder_structure = genre if genre not in ("Unknown", "Other") else "Uncategorized"
         elif mode == "artist_genre":
-            folder_structure = f"{genre}/{artist}"
-        else:
-            raise ValueError(f"Unexpected mode: {mode}")
+            genre_folder = genre if genre not in ("Unknown", "Other") else "Uncategorized"
+            folder_structure = f"{genre_folder}/{clean_folder_name(artist)}"
+        else:  # "dj_hybrid" (default)
+            main, sub = classify_folder(artist, genre, filename, None)
+            folder_structure = f"{main}/{sub}" if sub else main
         
         # Clean folder structure
         folder_structure_clean = "/".join(clean_folder_name(p) for p in folder_structure.split("/"))
         
         # Resolve destination with collision handling
         dest_folder, new_filepath, relative_path = resolve_destination_path(filename, folder_structure_clean)
-        
-        # Move file
-        shutil.move(str(old_path), new_filepath)
-        logger.info(f"[organizer] Moved: {old_path} → {new_filepath}")
+
+        # If destination already exists (returned same path), delete the source duplicate
+        if str(old_path) != new_filepath and Path(new_filepath).exists():
+            os.remove(str(old_path))
+            logger.info(f"[organizer] Duplicate removed: {old_path} (already at {new_filepath})")
+        else:
+            # Move file
+            shutil.move(str(old_path), new_filepath)
+            logger.info(f"[organizer] Moved: {old_path} → {new_filepath}")
         
         result["moved"] = True
         result["old_path"] = str(old_path)
@@ -296,12 +401,12 @@ def organize_file(filename: str, mode: str = "artist", file_dir: Optional[str] =
     return result
 
 
-def organize_recent(mode: str = "artist", hours: int = 24) -> Dict:
+def organize_recent(mode: str = "dj_hybrid", hours: int = 24) -> Dict:
     """
     Organize MP3 files in BASE_DOWNLOAD_DIR root that were modified within the last N hours.
 
     Args:
-        mode: "artist" | "genre" | "artist_genre"
+        mode: DEPRECATED — always uses "dj_hybrid". Pass ignored for backwards compatibility.
         hours: Look-back window in hours (default 24)
 
     Returns:
@@ -313,11 +418,14 @@ def organize_recent(mode: str = "artist", hours: int = 24) -> Dict:
     """
     import time
 
+    # FORCE dj_hybrid mode
+    mode = "dj_hybrid"
+
     result = {"moved": 0, "skipped": 0, "errors": [], "scanned": 0}
 
     try:
-        if mode not in ["artist", "genre", "artist_genre"]:
-            raise ValueError(f"Invalid mode: {mode}. Expected 'artist', 'genre', or 'artist_genre'")
+        if mode not in ["dj_hybrid"]:
+            raise ValueError(f"Invalid mode: always uses dj_hybrid classification")
 
         cutoff = time.time() - (hours * 3600)
         mp3_files = [
@@ -353,12 +461,12 @@ def organize_recent(mode: str = "artist", hours: int = 24) -> Dict:
     return result
 
 
-def organize_library(mode: str = "artist") -> Dict:
+def organize_library(mode: str = "dj_hybrid") -> Dict:
     """
-    Organize all MP3 files in BASE_DOWNLOAD_DIR root into structured folders.
+    Organize all MP3 files in BASE_DOWNLOAD_DIR root using DJ_HYBRID classification.
     
     Args:
-        mode: "artist" | "genre" | "artist_genre"
+        mode: DEPRECATED — always uses "dj_hybrid". Pass ignored for backwards compatibility.
         
     Returns:
         Dict with keys:
@@ -372,10 +480,13 @@ def organize_library(mode: str = "artist") -> Dict:
         "errors": [],
     }
     
+    # FORCE dj_hybrid mode
+    mode = "dj_hybrid"
+    
     try:
         # Validate mode
-        if mode not in ["artist", "genre", "artist_genre"]:
-            raise ValueError(f"Invalid mode: {mode}. Expected 'artist', 'genre', or 'artist_genre'")
+        if mode not in ["dj_hybrid"]:
+            raise ValueError(f"Invalid mode: always uses dj_hybrid classification")
         
         # Find all .mp3 files in BASE_DOWNLOAD_DIR root (not recursively)
         mp3_files = [

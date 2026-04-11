@@ -53,24 +53,30 @@ def detect_bpm_and_key(filepath: str) -> dict:
 
         logger.info(f"Analyzing BPM + key: {path.name}")
 
-        # load audio — use 30s from middle for speed + accuracy
+        # load audio — use up to 30s from middle for speed + accuracy
         duration = librosa.get_duration(path=filepath)
         offset = max(0, duration / 2 - 15)  # start 15s before midpoint
+        analysis_duration = min(30.0, max(0.0, duration - offset))
 
         y, sr = librosa.load(
             filepath,
-            sr=22050,           # standard sample rate
+            sr=22050,                   # standard sample rate
             mono=True,
             offset=offset,
-            duration=30.0       # analyze 30 seconds only — fast enough
+            duration=analysis_duration  # keep window within file length
         )
 
         # --- BPM detection ---
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-        bpm = int(round(float(np.atleast_1d(tempo)[0])))
+        tempo_values = np.atleast_1d(tempo)
+        bpm = None
+        if tempo_values.size > 0:
+            bpm = int(round(float(tempo_values[0])))
 
         # sanity check — reject unrealistic BPM
-        if bpm < 40 or bpm > 250:
+        if bpm is None:
+            logger.warning(f"No BPM detected for {path.name} — skipping")
+        elif bpm < 40 or bpm > 250:
             logger.warning(f"Unrealistic BPM {bpm} for {path.name} — skipping")
             bpm = None
         else:
@@ -82,28 +88,58 @@ def detect_bpm_and_key(filepath: str) -> dict:
             logger.debug(f"BPM detected: {bpm}")
 
         # --- Key detection (Krumhansl-Schmuckler) ---
-        chromagram = librosa.feature.chroma_cqt(y=y, sr=sr)
-        chroma_mean = np.mean(chromagram, axis=1)
-
-        # correlate against all 24 keys (12 major + 12 minor)
+        chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+        chroma_mean = np.mean(chroma, axis=1)
         major_scores = []
         minor_scores = []
+        valid_major_score_found = False
+        valid_minor_score_found = False
         for i in range(12):
             rotated = np.roll(chroma_mean, -i)
-            major_scores.append(np.corrcoef(rotated, MAJOR_PROFILE)[0, 1])
-            minor_scores.append(np.corrcoef(rotated, MINOR_PROFILE)[0, 1])
 
-        best_major = max(major_scores)
-        best_minor = max(minor_scores)
+            major_corr = np.corrcoef(rotated, MAJOR_PROFILE)[0, 1]
+            if np.isfinite(major_corr):
+                major_scores.append(float(major_corr))
+                valid_major_score_found = True
+            else:
+                logger.warning(
+                    f"Invalid major key correlation for {path.name} at rotation {i}; "
+                    "using fallback score"
+                )
+                major_scores.append(-1.0)
 
-        if best_major >= best_minor:
-            key_idx  = major_scores.index(best_major)
-            key_mode = "maj"
-            confidence = float(best_major)
+            minor_corr = np.corrcoef(rotated, MINOR_PROFILE)[0, 1]
+            if np.isfinite(minor_corr):
+                minor_scores.append(float(minor_corr))
+                valid_minor_score_found = True
+            else:
+                logger.warning(
+                    f"Invalid minor key correlation for {path.name} at rotation {i}; "
+                    "using fallback score"
+                )
+                minor_scores.append(-1.0)
+
+        if not valid_major_score_found and not valid_minor_score_found:
+            logger.warning(
+                f"Unable to detect key for {path.name}: all key correlation scores were invalid"
+            )
+            key_idx = None
+            key_mode = None
+            confidence = 0.0
+            key_root = None
+            key_str = None
         else:
-            key_idx  = minor_scores.index(best_minor)
-            key_mode = "min"
-            confidence = float(best_minor)
+            best_major = max(major_scores)
+            best_minor = max(minor_scores)
+
+            if best_major >= best_minor:
+                key_idx  = major_scores.index(best_major)
+                key_mode = "maj"
+                confidence = float(best_major)
+            else:
+                key_idx  = minor_scores.index(best_minor)
+                key_mode = "min"
+                confidence = float(best_minor)
 
         key_root = PITCH_CLASSES[key_idx]
         key_str  = f"{key_root} {key_mode}"
@@ -195,6 +231,11 @@ def backfill_library(base_dir: str) -> dict:
     col   = get_download_history_collection()
     base  = Path(base_dir)
     stats = {"analyzed": 0, "skipped": 0, "errors": 0}
+    analyzed_filenames = {
+        record["filename"]
+        for record in col.find({"bpm_analyzed": True}, {"filename": 1, "_id": 0})
+        if record.get("filename")
+    }
 
     mp3_files = list(base.rglob("*.mp3"))
     logger.info(f"Backfill: found {len(mp3_files)} MP3s in {base_dir}")
@@ -202,8 +243,7 @@ def backfill_library(base_dir: str) -> dict:
     for mp3 in mp3_files:
         try:
             # skip if already analyzed
-            record = col.find_one({"filename": mp3.name, "bpm_analyzed": True})
-            if record:
+            if mp3.name in analyzed_filenames:
                 stats["skipped"] += 1
                 continue
 

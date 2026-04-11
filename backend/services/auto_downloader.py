@@ -53,12 +53,28 @@ BASE_DOWNLOAD_DIR = config.BASE_DOWNLOAD_DIR
 INGEST_FOLDER = os.path.join(BASE_DOWNLOAD_DIR, "Ingest")
 
 
-def resolve_folder(artist, base_dir=None, title=None):
+def resolve_folder(artist, base_dir=None, title=None, force_folder=None):
     """Resolve download subfolder based on artist, FOLDER_RULES, and language detection.
     Returns the full folder path (e.g. Ingest/Sammy Virji/).
     Falls back to base_dir if no rule matches.
-    If title contains Devanagari (Hindi) script -> routes to Bollywood/ subfolder."""
+    If title contains Devanagari (Hindi) script -> routes to Bollywood/ subfolder.
+
+    Args:
+        artist: Track artist (first-listed).
+        base_dir: Base download dir (defaults to INGEST_FOLDER).
+        title: Track title (used for language detection).
+        force_folder: Optional override. If provided, ALL FOLDER_RULES and
+            language detection are skipped and the track is routed to
+            ``{base}/{force_folder}/`` verbatim. Used by manual ingest refresh
+            when the user wants every track in a batch pinned to a specific
+            folder regardless of per-track artist.
+    """
     base = base_dir or INGEST_FOLDER
+    # FORCE FOLDER — user-supplied override, skip all routing logic
+    if force_folder:
+        folder = os.path.join(base, force_folder)
+        os.makedirs(folder, exist_ok=True)
+        return folder
     rules = config.FOLDER_RULES if hasattr(config, 'FOLDER_RULES') else {}
     artist_lower = artist.lower() if artist else ""
     for pattern, subfolder in rules.items():
@@ -248,11 +264,21 @@ def _extract_retry_seconds(*sources):
     return None
 
 
-def ingest_download(download_dir=None):
+def ingest_download(download_dir=None, force_folder=None, force_redownload=False):
     """Download new tracks from the ingest playlist with parallel workers.
 
     Args:
         download_dir: Optional custom download directory. Falls back to INGEST_FOLDER.
+        force_folder: Optional per-batch folder override. When set, every track
+            in this sync is routed to ``{download_dir}/{force_folder}/``,
+            bypassing FOLDER_RULES and language detection. Ephemeral — not
+            persisted across monitor cycles.
+        force_redownload: When True, bypass both the ingest_tracks.json history
+            filter and the in-memory file registry dedup — every playlist
+            track is treated as new and sent through the downloader. The
+            ``PERMANENT_SKIP`` filter (tracks with >= MAX_FAIL_ATTEMPTS prior
+            failures) is still applied to avoid replaying known-broken tracks.
+            Ephemeral — not persisted across monitor cycles.
     """
     if not INGEST_PLAYLIST_ID:
         logger.warning("[ingest] No INGEST_PLAYLIST_ID configured. Skipping.")
@@ -267,6 +293,13 @@ def ingest_download(download_dir=None):
 
     target_base = download_dir or INGEST_FOLDER
 
+    # FORCE FOLDER — log override so ingest logs make routing obvious
+    if force_folder:
+        logger.info(f"[ingest] FORCE FOLDER active: all tracks -> {os.path.join(target_base, force_folder)}")
+    # FORCE REDOWNLOAD — log override so ingest logs make dedup-bypass obvious
+    if force_redownload:
+        logger.info("[ingest] FORCE REDOWNLOAD active: bypassing history + registry dedup")
+
     from services.spotify_service import get_spotify_service
     sp_service = get_spotify_service()
 
@@ -279,7 +312,11 @@ def ingest_download(download_dir=None):
         return
 
     saved_ids = _load_ingest_history()
-    new_tracks = [t for t in tracks if t["id"] not in saved_ids]
+    if force_redownload:
+        # FORCE REDOWNLOAD — bypass ingest_tracks.json history filter
+        new_tracks = list(tracks)
+    else:
+        new_tracks = [t for t in tracks if t["id"] not in saved_ids]
 
     # PERMANENT SKIP — Load failure counts and filter out permanently failed tracks
     failure_counts = _load_failure_counts()  # PERMANENT SKIP
@@ -307,11 +344,12 @@ def ingest_download(download_dir=None):
     downloader = get_downloader_service()
     os.makedirs(target_base, exist_ok=True)
 
-    # Build file registry from existing downloads for instant duplicate skip
+    # Build file registry from ALL download directories (including organized folders)
+    # to prevent re-downloading tracks that were already organized into subfolders.
     global _downloaded_registry
     with _registry_lock:
-        _downloaded_registry = _build_file_registry(target_base)
-    logger.info(f"[ingest] Existing files in {os.path.basename(target_base)}: {len(_downloaded_registry)}")
+        _downloaded_registry = _build_file_registry(BASE_DOWNLOAD_DIR)
+    logger.info(f"[ingest] Existing files across all folders: {len(_downloaded_registry)}")
 
     total = len(new_tracks)
     completed_count = [0]  # mutable counter for threads
@@ -325,8 +363,20 @@ def ingest_download(download_dir=None):
     AUTO_STATUS["progress"] = 0
     _emit_auto_status()
 
-    def _download_single(track_info):
-        """Download a single track with duplicate guard. Thread-safe."""
+    def _download_single(track_info, force_folder=None, force_redownload=False):
+        """Download a single track with duplicate guard. Thread-safe.
+
+        Args:
+            track_info: Spotify track dict (id, title, artist, duration_ms).
+            force_folder: Optional per-batch folder override passed down from
+                ``ingest_download``. When set, ``resolve_folder`` skips all
+                rule-based routing and pins the track to ``{target_base}/{force_folder}/``.
+            force_redownload: When True, skip the ``_downloaded_registry``
+                dedup check so the track is processed even if an MP3 with the
+                same normalized name already exists somewhere under
+                ``BASE_DOWNLOAD_DIR``. Used together with ``force_folder`` to
+                land a previously-downloaded track in a different subfolder.
+        """
         # Yield to manual downloads (priority)
         if wait_if_manual_active():
             logger.info("[ingest] Yielded to manual download, resuming")
@@ -336,18 +386,20 @@ def ingest_download(download_dir=None):
         artist = track_info["artist"]
         track_key = normalize(sanitize_filename(title))
 
-        # Resolve target folder based on artist rules
-        target_folder = resolve_folder(artist, base_dir=target_base, title=title)
+        # Resolve target folder based on artist rules (or force_folder override)
+        target_folder = resolve_folder(artist, base_dir=target_base, title=title, force_folder=force_folder)
         os.makedirs(target_folder, exist_ok=True)
 
         # --- Duplicate check 1: file registry ---
-        with _registry_lock:
-            if track_key in _downloaded_registry:
-                skip_count[0] += 1
-                logger.debug(f"[ingest] Skipping (exists): {title} - {artist}")
-                _emit("download_skipped", {"title": title, "artist": artist, "reason": "Already downloaded", "source": "ingest"})
-                saved_ids.add(tid)
-                return
+        # FORCE REDOWNLOAD — skip the registry dedup so redownloads aren't swallowed
+        if not force_redownload:
+            with _registry_lock:
+                if track_key in _downloaded_registry:
+                    skip_count[0] += 1
+                    logger.debug(f"[ingest] Skipping (exists): {title} - {artist}")
+                    _emit("download_skipped", {"title": title, "artist": artist, "reason": "Already downloaded", "source": "ingest"})
+                    saved_ids.add(tid)
+                    return
 
         # --- Duplicate check 2: file on disk ---
         filename = sanitize_filename(title)
@@ -394,6 +446,15 @@ def ingest_download(download_dir=None):
                 )
 
             if result["status"] == "success":
+                # Verify the file actually exists on disk before marking success
+                dl_filepath = result.get("filepath") or os.path.join(target_folder, result.get("filename", ""))
+                if not os.path.isfile(dl_filepath) or os.path.getsize(dl_filepath) < 1000:
+                    logger.error(f"[ingest] Download reported success but file missing/empty: {dl_filepath}")
+                    fail_count[0] += 1
+                    _record_failure(tid, title, artist, failure_counts)
+                    _emit("download_error", {"title": title, "artist": artist, "error": "File missing after download", "source": "ingest"})
+                    return
+
                 with _registry_lock:
                     _downloaded_registry.add(track_key)
                 success_count[0] += 1
@@ -404,7 +465,7 @@ def ingest_download(download_dir=None):
                 # BPM/KEY — detect BPM and musical key after successful download
                 if _BPM_KEY_AVAILABLE:  # BPM/KEY
                     try:  # BPM/KEY
-                        _ingest_filepath = result.get("filepath") or os.path.join(target_folder, result.get("filename", ""))  # BPM/KEY
+                        _ingest_filepath = dl_filepath  # BPM/KEY
                         _ingest_filename = result.get("filename", "")  # BPM/KEY
                         if _ingest_filepath and _ingest_filename:  # BPM/KEY
                             _analyze_and_tag(_ingest_filepath, _ingest_filename)  # BPM/KEY
@@ -412,26 +473,47 @@ def ingest_download(download_dir=None):
                         logger.warning(f"BPM/key analysis failed (non-critical): {_bpm_err}")  # BPM/KEY
 
                 # FILE ORGANIZER — Auto-organize after successful ingest download
+                # NOTE: when force_folder is active, the user has explicitly pinned
+                # every track in this batch to a chosen folder. Skip the organizer
+                # so it cannot re-route files based on ID3 artist tags.
                 organize_mode = os.getenv("ORGANIZE_MODE", "artist")
-                if organize_mode != "off":
+                if organize_mode != "off" and not force_folder:
                     try:
                         from services.organizer_service import organize_file
                         org_filename = result.get("filename") or f"{filename}.mp3"
                         organize_result = organize_file(org_filename, mode=organize_mode, file_dir=target_folder)
                         if organize_result.get("moved"):
-                            logger.info(f"[organizer] Auto-organized: {org_filename} → {organize_result.get('folder')}")
+                            final_path = organize_result.get("new_path")
+                            # Verify file exists at organized location
+                            if final_path and os.path.isfile(final_path):
+                                logger.info(f"[organizer] Auto-organized: {org_filename} → {organize_result.get('folder')}")
+                            else:
+                                logger.warning(f"[organizer] File missing after organize: {final_path}")
                         elif organize_result.get("error"):
                             logger.warning(f"[organizer] Auto-organize skipped for {org_filename}: {organize_result.get('error')}")
                     except Exception as org_err:
                         logger.warning(f"[organizer] Failed to run organizer: {org_err}")
+
+                # Post-processing warning (file downloaded but tagging/organizing failed)
+                if result.get("warning"):
+                    logger.warning(f"[ingest] Post-processing warning: {result.get('warning')}")
             else:
-                # Strict match policy — record failure, skip permanently after MAX_FAIL_ATTEMPTS
-                fail_count[0] += 1
-                permanently_skipped = _record_failure(tid, title, artist, failure_counts)  # PERMANENT SKIP
-                if permanently_skipped:  # PERMANENT SKIP
-                    saved_ids.add(tid)  # PERMANENT SKIP — mark as done so it never retries
-                logger.warning(f"[ingest] SKIPPED (no strict match): {title} - {artist} | {result.get('message', '')}")
-                _emit("download_error", {"title": title, "artist": artist, "error": result.get("message", "No strict match"), "source": "ingest"})
+                # FAILURE CHECK: Only record as failure if file doesn't actually exist
+                if not (os.path.isfile(file_path) and os.path.getsize(file_path) > 1000):
+                    fail_count[0] += 1
+                    permanently_skipped = _record_failure(tid, title, artist, failure_counts)  # PERMANENT SKIP
+                    if permanently_skipped:  # PERMANENT SKIP
+                        saved_ids.add(tid)  # PERMANENT SKIP — mark as done so it never retries
+                    logger.warning(f"[ingest] FAILED (auto-download failed & file missing): {title} - {artist} | {result.get('message', '')}")
+                    _emit("download_error", {"title": title, "artist": artist, "error": result.get("message", "No strict match"), "source": "ingest"})
+                else:
+                    # File exists even though status != success (manual fallback but file exists)
+                    skip_count[0] += 1
+                    with _registry_lock:
+                        _downloaded_registry.add(track_key)
+                    saved_ids.add(tid)
+                    logger.info(f"[ingest] File exists despite fallback status: {title} - {artist}")
+                    _emit("download_complete", {"title": title, "artist": artist, "status": "completed (manual)", "filename": filename + ".mp3", "source": "ingest"})
 
         except Exception as e:
             fail_count[0] += 1
@@ -458,7 +540,7 @@ def ingest_download(download_dir=None):
     _ingest_start_time = time.time()  # NOTIFICATION — track elapsed time
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(_download_single, t): t for t in new_tracks}
+        futures = {executor.submit(_download_single, t, force_folder, force_redownload): t for t in new_tracks}
         for future in as_completed(futures):
             try:
                 future.result()
@@ -531,16 +613,28 @@ def playlist_monitor():
         time.sleep(CHECK_INTERVAL)
 
 
-def manual_refresh(download_dir=None):
+def manual_refresh(download_dir=None, force_folder=None, force_redownload=False):
     """Trigger a manual ingest refresh (force-fetches from Spotify, bypasses cache).
 
     Args:
         download_dir: Optional custom download directory.
+        force_folder: Optional per-trigger folder override. When set, every
+            track in this sync lands in ``{download_dir}/{force_folder}/``,
+            bypassing FOLDER_RULES and language detection. Ephemeral — not
+            persisted.
+        force_redownload: When True, bypass the ingest history filter and the
+            in-memory file registry dedup so every playlist track is processed
+            as new. Typically set automatically when ``force_folder`` is used,
+            so previously-downloaded tracks actually land in the pinned folder.
     """
     if is_rate_limited():
         return {"status": "rate_limited", "message": "Spotify API is rate-limited."}
     try:
-        ingest_download(download_dir=download_dir)
+        ingest_download(
+            download_dir=download_dir,
+            force_folder=force_folder,
+            force_redownload=force_redownload,
+        )
         return {"status": "ok", "message": "Ingest refresh triggered."}
     except Exception as e:
         return {"status": "error", "message": str(e)}

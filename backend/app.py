@@ -2,9 +2,7 @@
 Spotify Meta Downloader - Flask Backend Application
 Main application entry point
 """
-# DISCONNECT FIX: removed eventlet entirely — it's deprecated and causes
-# RLock/green-thread conflicts with Celery, Redis, yt-dlp, and ThreadPoolExecutor.
-# Using threading async_mode instead (requires simple-websocket for WebSocket support).
+# Eventlet removed — using threading async_mode for SocketIO stability
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -167,10 +165,10 @@ app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 app.config['SECRET_KEY'] = config.SECRET_KEY
 
-# SocketIO with CORS — threading async mode (no eventlet)
-socketio = SocketIO(  # DISCONNECT FIX: switched from eventlet to threading
+# SocketIO with CORS — threading for stable WebSocket support
+socketio = SocketIO(
     app,
-    async_mode="threading",  # DISCONNECT FIX: native threads — no green thread corruption
+    async_mode="threading",
     cors_allowed_origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173"],
     ping_timeout=300,
     ping_interval=10,
@@ -552,52 +550,71 @@ def _download_background(url):
                 download_status["status"] = "starting"
                 download_status["current"] = "Fetching metadata..."
                 download_status["progress"] = 5
-            
+
             metadata = spotify_service.get_track_metadata(url)
             title = metadata["title"]
             artist = metadata["artist"]
             duration_ms = metadata.get("duration_ms")
             album_art_url = metadata.get("album_art_url")  # highest-res Spotify image
-            
+
             # Route to Artists/{artist}/ folder for manual downloads
             artists_root = os.path.join(os.path.dirname(downloader_service.download_dir), "Artists")
             artist_folder = os.path.join(artists_root, sanitize_filename(artist))
             os.makedirs(artist_folder, exist_ok=True)
-            
+
             # Update global queue for manual download
             update_queue(total=1, completed=0, current=f"{title} - {artist}")
-            
-            def track_progress_cb(pct, status_text):
+
+            # Use Celery task queue when available, fall back to blocking download
+            if _celery_available:
+                logger.info(f"[celery] Dispatching track to Celery: {title} - {artist}")
+                task_meta = {
+                    "title": title,
+                    "artist": artist,
+                    "album": metadata.get("album"),
+                    "duration_ms": duration_ms,
+                    "album_art_url": album_art_url,
+                }
+                task = download_track_task.delay(task_meta, artist_folder)
                 with status_lock:
-                    download_status["progress"] = max(10, pct)
-                    download_status["current"] = f"{title} - {status_text}"
-            
-            with status_lock:
-                download_status["status"] = "downloading"
-                download_status["current"] = f"{title} - {artist}"
-                download_status["progress"] = 10
-            
-            result = downloader_service.download_track(title, artist, progress_callback=track_progress_cb, duration_ms=duration_ms, output_dir=artist_folder, album_art_url=album_art_url)
-            
-            # Update queue as completed
-            update_queue(completed=1)
-            
-            with status_lock:
-                if result['status'] == 'success':
-                    download_status["status"] = "completed"
-                    download_status["progress"] = 100
-                    download_status["current"] = result['filename']
-                    download_status["match_quality"] = result.get("match_quality", "exact")
-                elif result['status'] == 'fallback':
-                    download_status["status"] = "fallback"
-                    download_status["progress"] = 100
-                    download_status["current"] = f"Manual download: {title} - {artist}"
-                    download_status["match_quality"] = "fallback"
-                else:
-                    download_status["status"] = "failed"
-                    download_status["current"] = "Download failed"
-                    download_status["match_quality"] = ""
-            add_history_entry(title, artist, result['status'], result.get('filename', ''))
+                    download_status["status"] = "queued"
+                    download_status["current"] = f"{title} - {artist} (queued)"
+                    download_status["progress"] = 15
+                    download_status["task_id"] = task.id
+                emit_status()
+                add_history_entry(title, artist, "queued", "")
+            else:
+                def track_progress_cb(pct, status_text):
+                    with status_lock:
+                        download_status["progress"] = max(10, pct)
+                        download_status["current"] = f"{title} - {status_text}"
+
+                with status_lock:
+                    download_status["status"] = "downloading"
+                    download_status["current"] = f"{title} - {artist}"
+                    download_status["progress"] = 10
+
+                result = downloader_service.download_track(title, artist, progress_callback=track_progress_cb, duration_ms=duration_ms, output_dir=artist_folder, album_art_url=album_art_url)
+
+                # Update queue as completed
+                update_queue(completed=1)
+
+                with status_lock:
+                    if result['status'] == 'success':
+                        download_status["status"] = "completed"
+                        download_status["progress"] = 100
+                        download_status["current"] = result['filename']
+                        download_status["match_quality"] = result.get("match_quality", "exact")
+                    elif result['status'] == 'fallback':
+                        download_status["status"] = "fallback"
+                        download_status["progress"] = 100
+                        download_status["current"] = f"Manual download: {title} - {artist}"
+                        download_status["match_quality"] = "fallback"
+                    else:
+                        download_status["status"] = "failed"
+                        download_status["current"] = "Download failed"
+                        download_status["match_quality"] = ""
+                add_history_entry(title, artist, result['status'], result.get('filename', ''))
     
     except Exception as e:
         logger.error(f"Download error: {str(e)}")
@@ -794,13 +811,42 @@ def clear_history():
     return jsonify({"success": True}), 200
 
 
+def _sanitize_force_folder(raw):
+    """Validate and sanitize an optional force_folder value supplied by the client.
+
+    Returns a sanitized folder name, or None if the input is empty/blank.
+    Raises ValueError with a user-facing message if the input is unsafe or
+    reduces to nothing after cleaning.
+    """
+    from services.organizer_service import clean_folder_name
+    if not isinstance(raw, str):
+        raise ValueError("force_folder must be a string")
+    stripped = raw.strip()
+    if not stripped:
+        raise ValueError("force_folder cannot be empty")
+    if ".." in stripped or "/" in stripped or "\\" in stripped or stripped in (".", "..") :
+        raise ValueError("force_folder contains invalid path characters")
+    cleaned = clean_folder_name(stripped)
+    if not cleaned or cleaned == "Unknown" or len(cleaned) > 120:
+        raise ValueError("force_folder is not a valid folder name")
+    return cleaned
+
+
 @app.route('/api/refresh-playlist', methods=['POST'])
 def refresh_playlist():
     """Trigger a manual playlist refresh (force-fetches from Spotify, bypasses cache).
-    Accepts optional JSON body: { "download_dir": "/path/to/folder" }
+    Accepts optional JSON body:
+        {
+          "download_dir": "/path/to/folder",     # optional absolute path
+          "force_folder": "Sammy Virji",         # optional per-trigger folder override
+          "force_redownload": true               # optional dedup bypass (history + registry)
+        }
     """
     download_dir = None
+    force_folder = None
+    force_redownload = False
     data = request.get_json(silent=True)
+
     if data and data.get("download_dir"):
         requested = data["download_dir"].strip()
         # Validate: must be an absolute path under a real directory
@@ -808,7 +854,34 @@ def refresh_playlist():
             download_dir = requested
         else:
             return jsonify({"status": "error", "message": "download_dir must be an absolute path"}), 400
-    result = _manual_refresh(download_dir=download_dir)
+
+    # FORCE FOLDER — optional per-trigger override that pins every track in the
+    # sync to a single Ingest subfolder regardless of artist-based routing.
+    if data and data.get("force_folder"):
+        try:
+            force_folder = _sanitize_force_folder(data["force_folder"])
+        except ValueError as ve:
+            logger.warning(f"[refresh-playlist] Rejected force_folder: {ve}")
+            return jsonify({"status": "error", "message": str(ve)}), 400
+        if force_folder:
+            logger.info(f"[refresh-playlist] force_folder override requested: '{force_folder}'")
+
+    # FORCE REDOWNLOAD — optional dedup bypass. Reject non-boolean-coercible
+    # input (e.g. arbitrary strings) rather than silently treating them as
+    # truthy, matching the defensive style used for force_folder.
+    if data and "force_redownload" in data:
+        raw_fr = data["force_redownload"]
+        if not isinstance(raw_fr, bool):
+            return jsonify({"status": "error", "message": "force_redownload must be a boolean"}), 400
+        force_redownload = raw_fr
+        if force_redownload:
+            logger.info("[refresh-playlist] force_redownload requested — history + registry dedup will be bypassed")
+
+    result = _manual_refresh(
+        download_dir=download_dir,
+        force_folder=force_folder,
+        force_redownload=force_redownload,
+    )
     status_code = 200 if result["status"] == "ok" else 429 if result["status"] == "rate_limited" else 500
     return jsonify(result), status_code
 
@@ -1327,7 +1400,27 @@ if __name__ == '__main__':
         # NOTIFICATION — Start storage monitor background task
         socketio.start_background_task(target=_storage_monitor)  # NOTIFICATION
         logger.info("Storage monitor background task started")  # NOTIFICATION
-        
+
+        # START TELEGRAM BOT
+        _telegram_bot_started = False
+        try:
+            if os.getenv("TELEGRAM_BOT_TOKEN"):
+                from telegram_bot import start_bot_thread, TELEGRAM_CHAT_ID
+
+                if not TELEGRAM_CHAT_ID:
+                    logger.error("[app] TELEGRAM_CHAT_ID not valid — bot disabled")
+                else:
+                    start_bot_thread()
+                    _telegram_bot_started = True
+                    logger.success(f"[app] ✅ Telegram bot initialized (chat_id={TELEGRAM_CHAT_ID})")
+            else:
+                logger.warning("[app] ⚠️  TELEGRAM_BOT_TOKEN not set — bot disabled")
+        except ImportError as e:
+            logger.warning(f"[app] ⚠️  python-telegram-bot not installed: {e}")
+        except Exception as e:
+            logger.error(f"[app] ❌ Telegram bot init failed: {e}")
+            logger.exception(e)
+
         # Run Flask app with SocketIO
         socketio.run(
             app,

@@ -537,7 +537,7 @@ class DownloaderService:
                     "message": f"Already exists: {clean_name}.mp3",
                 }
 
-            # Normalized duplicate check
+            # Normalized duplicate check — local directory first
             norm_key = normalize(clean_name)
             for existing in os.listdir(actual_dir):
                 if existing.lower().endswith(".mp3"):
@@ -552,9 +552,46 @@ class DownloaderService:
                                 "message": f"Already exists (normalized match): {existing}",
                             }
 
+            # Cross-directory duplicate check — scan all of BASE_DOWNLOAD_DIR
+            # to catch files that were organized into subfolders after download.
+            # TODO(human): Optimize this os.walk for large libraries — see options:
+            #   - Cache normalized filenames in a module-level set (fast, needs invalidation)
+            #   - Limit walk depth to 2 (Genre/Artist/) to skip deep nesting
+            #   - Skip non-music dirs (.git, __pycache__, temp) during walk
+            base_dir = config.BASE_DOWNLOAD_DIR
+            if actual_dir != base_dir:
+                # Skip system folders and known non-music directories
+                excluded = {'.git', '__pycache__', '.temp', 'node_modules', '.venv'}
+                for root, dirs, files in os.walk(base_dir):
+                    dirs[:] = [d for d in dirs if d not in excluded]
+                    if root == actual_dir:
+                        continue  # already checked above
+                    for existing in files:
+                        if existing.lower().endswith(".mp3"):
+                            if normalize(existing[:-4]) == norm_key:
+                                existing_path = os.path.join(root, existing)
+                                try:
+                                    if os.path.getsize(existing_path) > 1000:
+                                        logger.info(f"Skipping cross-dir duplicate: {existing} (in {root})")
+                                        return {
+                                            "status": "success",
+                                            "filename": existing,
+                                            "filepath": existing_path,
+                                            "message": f"Already exists in library: {existing}",
+                                        }
+                                except OSError:
+                                    pass
+
             logger.info(f"Target: {actual_dir}/{clean_name}.mp3")
             logger.info(f"Searching for: {title} by {artist}")
 
+            # ────────────────────────────────────────────────────────────────
+            # STAGE 1: DOWNLOAD (only failure here causes fallback)
+            # ────────────────────────────────────────────────────────────────
+            filename = None
+            filepath = None
+            download_success = False
+            
             try:
                 filename = self._download_from_youtube(
                     None, clean_name, progress_callback,
@@ -572,139 +609,13 @@ class DownloaderService:
                         os.remove(filepath)
                         raise Exception(f"Downloaded file too large ({actual_bytes/1024/1024:.1f}MB) — wrong track")
 
-                # ── NEW: Post-processing pipeline ──────────────────────────
-                ffmpeg_bin = _find_ffmpeg_binary()
-
-                # 1. Silence trimming
-                trim_ok = _trim_silence(filepath, ffmpeg_bin)  # QUALITY UPGRADE
-
-                # 2. Loudness normalisation
-                norm_ok = _apply_loudnorm(filepath, ffmpeg_bin)
-
-                # 3. Embed album art
-                art_ok = _embed_album_art(filepath, album_art_url)
-
-                # ── NEW: Build + persist + emit quality report ─────────────
-                expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
-                dur_diff = None
-                if expected_secs is not None:
-                    # Try to read actual duration from file
-                    try:
-                        audio = MP3(filepath) if _MUTAGEN_AVAILABLE else None
-                        if audio and audio.info:
-                            dur_diff = round(abs(audio.info.length - expected_secs), 2)
-                    except Exception:
-                        pass
-
-                report = _build_quality_report(
-                    bitrate="320kbps",
-                    format_downloaded=self._last_format_downloaded,  # QUALITY UPGRADE
-                    source_platform=self._last_source_platform,
-                    search_stage_used=self._last_query_stage,  # QUALITY UPGRADE
-                    duration_diff=dur_diff,
-                    title_similarity=round(self._last_title_similarity, 3),
-                    channel_verified=self._last_channel_verified,  # QUALITY UPGRADE
-                    blacklist_filtered=self._last_blacklist_filtered,  # QUALITY UPGRADE
-                    art_embedded=art_ok,
-                    normalization_applied=norm_ok,
-                    silence_trimmed=trim_ok,  # QUALITY UPGRADE
-                    query_stage=self._last_query_stage,
-                )
-
-                # Persist to SQLite
-                try:
-                    save_report(title, artist, album or "", filename, report)
-                except Exception as db_err:
-                    logger.warning(f"Failed to save quality report to DB: {db_err}")
-
-                # Emit to frontend
-                _emit_quality_report(report)
-
-                # TAGGING INTEGRATION — Auto-tag after successful download
-                tagging_report = None  # TAGGING INTEGRATION
-                if _TAGGER_AVAILABLE:  # TAGGING INTEGRATION
-                    try:  # TAGGING INTEGRATION
-                        spotify_meta = {  # TAGGING INTEGRATION
-                            "id": getattr(self, '_last_track_id', '') or '',  # TAGGING INTEGRATION
-                            "title": title,  # TAGGING INTEGRATION
-                            "artist": artist,  # TAGGING INTEGRATION
-                            "album": album or "",  # TAGGING INTEGRATION
-                            "album_art_url": album_art_url,  # TAGGING INTEGRATION
-                            "duration_ms": duration_ms,  # TAGGING INTEGRATION
-                            "release_date": getattr(self, '_last_release_date', ''),  # TAGGING INTEGRATION
-                        }  # TAGGING INTEGRATION
-                        tagging_report = _tag_file(  # TAGGING INTEGRATION
-                            filepath,  # TAGGING INTEGRATION
-                            spotify_meta,  # TAGGING INTEGRATION
-                            spotify_service_instance=None,  # TAGGING INTEGRATION
-                        )  # TAGGING INTEGRATION
-                        logger.info(f"[tagger] Tagging complete: {filename} — source={tagging_report.get('source')}, tags={len(tagging_report.get('tags_written', []))}")  # TAGGING INTEGRATION
-                        # TAGGING INTEGRATION — Persist tagging report to download_history
-                        _save_tagging_report(filename, tagging_report)  # TAGGING INTEGRATION
-                        # TAGGING INTEGRATION — Emit tagging_complete event via Socket.IO
-                        if _socketio:  # TAGGING INTEGRATION
-                            _socketio.emit("tagging_complete", {  # TAGGING INTEGRATION
-                                "filename": filename,  # TAGGING INTEGRATION
-                                "title": title,  # TAGGING INTEGRATION
-                                "artist": artist,  # TAGGING INTEGRATION
-                                "report": tagging_report,  # TAGGING INTEGRATION
-                            })  # TAGGING INTEGRATION
-                    except Exception as tag_err:  # TAGGING INTEGRATION
-                        logger.warning(f"[tagger] Tagging failed for {filename}: {tag_err}")  # TAGGING INTEGRATION
-
-                # BPM/KEY — detect BPM and musical key after tagging
-                if _BPM_KEY_AVAILABLE:  # BPM/KEY
-                    try:  # BPM/KEY
-                        _analyze_and_tag(filepath, filename)  # BPM/KEY
-                    except Exception as _bpm_err:  # BPM/KEY
-                        logger.warning(f"BPM/key analysis failed (non-critical): {_bpm_err}")  # BPM/KEY
-
-                result = {
-                    "status": "success",
-                    "filename": filename,
-                    "filepath": filepath,
-                    "message": f"Successfully downloaded: {filename}",
-                    "match_quality": self._last_match_quality,
-                    "quality_report": report,
-                    "tagging_report": tagging_report,  # TAGGING INTEGRATION
-                }
+                download_success = True
                 logger.info(f"Track downloaded successfully: {filename}")
 
-                # FILE ORGANIZER — Auto-organize after successful download
-                organize_mode = os.getenv("ORGANIZE_MODE", "artist")
-                if organize_mode != "off":
-                    try:
-                        from services.organizer_service import organize_file
-                        organize_result = organize_file(filename, mode=organize_mode)
-                        if organize_result.get("moved"):
-                            result["organized"] = True
-                            result["organize_result"] = organize_result
-                            logger.info(f"[organizer] Auto-organized: {filename} → {organize_result.get('folder')}")
-                        elif organize_result.get("error"):
-                            logger.warning(f"[organizer] Auto-organize failed for {filename}: {organize_result.get('error')}")
-                    except Exception as org_err:
-                        logger.warning(f"[organizer] Failed to run organizer: {org_err}")
-
-                # NOTIFICATION — Success
-                try:  # NOTIFICATION
-                    from services.notifications_service import notify_download_success  # NOTIFICATION
-                    notify_download_success(  # NOTIFICATION
-                        track={  # NOTIFICATION
-                            'name': title,  # NOTIFICATION
-                            'artists': [{'name': artist}],  # NOTIFICATION
-                            'album': {'images': [{'url': album_art_url or ''}]},  # NOTIFICATION
-                        },  # NOTIFICATION
-                        quality_report=report,  # NOTIFICATION
-                    )  # NOTIFICATION
-                except Exception as _notif_err:  # NOTIFICATION
-                    logger.error(f"Notification error: {_notif_err}")  # NOTIFICATION
-
-                return result
-
             except Exception as download_error:
-                logger.warning(f"Auto-download failed for '{title}' by '{artist}': {download_error}")
+                logger.error(f"Auto-download FAILED for '{title}' by '{artist}': {download_error}")
 
-                # NOTIFICATION — Failure (auto-download failed)
+                # NOTIFICATION — Failure (true download failure)
                 try:  # NOTIFICATION
                     from services.notifications_service import notify_download_failure  # NOTIFICATION
                     notify_download_failure(  # NOTIFICATION
@@ -723,6 +634,169 @@ class DownloaderService:
                     "title": title,
                     "artist": artist,
                 }
+
+            # ────────────────────────────────────────────────────────────────
+            # STAGE 2+: POST-PROCESSING (errors here DON'T cause retry)
+            # ────────────────────────────────────────────────────────────────
+            
+            if not download_success or not filepath or not os.path.isfile(filepath):
+                return {
+                    "status": "failed",
+                    "error": "Download succeeded but file not found at expected location",
+                    "filename": filename,
+                }
+
+            # Initialize error tracking for post-processing stages
+            tagging_error = None
+            organize_error = None
+            report = None
+
+            # ── NEW: Post-processing pipeline ──────────────────────────
+            ffmpeg_bin = _find_ffmpeg_binary()
+
+            # 1. Silence trimming
+            trim_ok = _trim_silence(filepath, ffmpeg_bin)  # QUALITY UPGRADE
+
+            # 2. Loudness normalisation
+            norm_ok = _apply_loudnorm(filepath, ffmpeg_bin)
+
+            # 3. Embed album art
+            art_ok = _embed_album_art(filepath, album_art_url)
+
+            # ── NEW: Build + persist + emit quality report ─────────────
+            expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
+            dur_diff = None
+            if expected_secs is not None:
+                # Try to read actual duration from file
+                try:
+                    audio = MP3(filepath) if _MUTAGEN_AVAILABLE else None
+                    if audio and audio.info:
+                        dur_diff = round(abs(audio.info.length - expected_secs), 2)
+                except Exception:
+                    pass
+
+            report = _build_quality_report(
+                bitrate="320kbps",
+                format_downloaded=self._last_format_downloaded,  # QUALITY UPGRADE
+                source_platform=self._last_source_platform,
+                search_stage_used=self._last_query_stage,  # QUALITY UPGRADE
+                duration_diff=dur_diff,
+                title_similarity=round(self._last_title_similarity, 3),
+                channel_verified=self._last_channel_verified,  # QUALITY UPGRADE
+                blacklist_filtered=self._last_blacklist_filtered,  # QUALITY UPGRADE
+                art_embedded=art_ok,
+                normalization_applied=norm_ok,
+                silence_trimmed=trim_ok,  # QUALITY UPGRADE
+                query_stage=self._last_query_stage,
+            )
+
+            # Persist to SQLite
+            try:
+                save_report(title, artist, album or "", filename, report)
+            except Exception as db_err:
+                logger.warning(f"Failed to save quality report to DB: {db_err}")
+
+            # Emit to frontend
+            _emit_quality_report(report)
+
+            # ─── STAGE 2A: TAGGING (errors captured, not fatal) ─────────────
+            tagging_report = None  # TAGGING INTEGRATION
+            if _TAGGER_AVAILABLE:  # TAGGING INTEGRATION
+                try:  # TAGGING INTEGRATION
+                    spotify_meta = {  # TAGGING INTEGRATION
+                        "id": getattr(self, '_last_track_id', '') or '',  # TAGGING INTEGRATION
+                        "title": title,  # TAGGING INTEGRATION
+                        "artist": artist,  # TAGGING INTEGRATION
+                        "album": album or "",  # TAGGING INTEGRATION
+                        "album_art_url": album_art_url,  # TAGGING INTEGRATION
+                        "duration_ms": duration_ms,  # TAGGING INTEGRATION
+                        "release_date": getattr(self, '_last_release_date', ''),  # TAGGING INTEGRATION
+                    }  # TAGGING INTEGRATION
+                    tagging_report = _tag_file(  # TAGGING INTEGRATION
+                        filepath,  # TAGGING INTEGRATION
+                        spotify_meta,  # TAGGING INTEGRATION
+                        spotify_service_instance=None,  # TAGGING INTEGRATION
+                    )  # TAGGING INTEGRATION
+                    logger.info(f"[tagger] Tagging complete: {filename} — source={tagging_report.get('source')}, tags={len(tagging_report.get('tags_written', []))}")  # TAGGING INTEGRATION
+                    # TAGGING INTEGRATION — Persist tagging report to download_history
+                    _save_tagging_report(filename, tagging_report)  # TAGGING INTEGRATION
+                    # TAGGING INTEGRATION — Emit tagging_complete event via Socket.IO
+                    if _socketio:  # TAGGING INTEGRATION
+                        _socketio.emit("tagging_complete", {  # TAGGING INTEGRATION
+                            "filename": filename,  # TAGGING INTEGRATION
+                            "title": title,  # TAGGING INTEGRATION
+                            "artist": artist,  # TAGGING INTEGRATION
+                            "report": tagging_report,  # TAGGING INTEGRATION
+                        })  # TAGGING INTEGRATION
+                except Exception as tag_err:  # TAGGING INTEGRATION
+                    tagging_error = str(tag_err)  # TAGGING INTEGRATION
+                    logger.warning(f"[tagger] Tagging failed for {filename}: {tag_err}")  # TAGGING INTEGRATION
+
+            # BPM/KEY — detect BPM and musical key after tagging
+            if _BPM_KEY_AVAILABLE:  # BPM/KEY
+                try:  # BPM/KEY
+                    _analyze_and_tag(filepath, filename)  # BPM/KEY
+                except Exception as _bpm_err:  # BPM/KEY
+                    logger.warning(f"BPM/key analysis failed (non-critical): {_bpm_err}")  # BPM/KEY
+
+            # ─── STAGE 2B: ORGANIZATION (errors captured, not fatal) ───────
+            organize_result = None
+            organize_mode = os.getenv("ORGANIZE_MODE", "artist")
+            if organize_mode != "off":
+                try:
+                    from services.organizer_service import organize_file
+                    organize_result = organize_file(filename, mode=organize_mode)
+                    if organize_result.get("moved"):
+                        logger.info(f"[organizer] Auto-organized: {filename} → {organize_result.get('folder')}")
+                    elif organize_result.get("error"):
+                        organize_error = organize_result.get("error")
+                        logger.warning(f"[organizer] Auto-organize failed for {filename}: {organize_error}")
+                except Exception as org_err:
+                    organize_error = str(org_err)
+                    logger.warning(f"[organizer] Failed to run organizer: {org_err}")
+
+            # ─── BUILD SUCCESS RESPONSE (file exists = success, even if post-processing failed) ───
+            result = {
+                "status": "success",
+                "filename": filename,
+                "filepath": filepath,
+                "message": f"Successfully downloaded: {filename}",
+                "match_quality": self._last_match_quality,
+                "quality_report": report,
+                "tagging_report": tagging_report,  # TAGGING INTEGRATION
+            }
+
+            # Add post-processing warnings if applicable
+            if tagging_error:
+                result["warning"] = f"Downloaded but tagging failed: {tagging_error}"
+                logger.warning(f"[download] {result['warning']}")
+
+            if organize_error:
+                if "warning" in result:
+                    result["warning"] += f"; Organization failed: {organize_error}"
+                else:
+                    result["warning"] = f"Downloaded but organization failed: {organize_error}"
+                logger.warning(f"[download] Organization warning: {organize_error}")
+
+            if organize_result and organize_result.get("moved"):
+                result["organized"] = True
+                result["organize_result"] = organize_result
+
+            # ─── NOTIFICATION — Success (file exists) ──────────────────────
+            try:  # NOTIFICATION
+                from services.notifications_service import notify_download_success  # NOTIFICATION
+                notify_download_success(  # NOTIFICATION
+                    track={  # NOTIFICATION
+                        'name': title,  # NOTIFICATION
+                        'artists': [{'name': artist}],  # NOTIFICATION
+                        'album': {'images': [{'url': album_art_url or ''}]},  # NOTIFICATION
+                    },  # NOTIFICATION
+                    quality_report=report,  # NOTIFICATION
+                )  # NOTIFICATION
+            except Exception as _notif_err:  # NOTIFICATION
+                logger.error(f"Notification error: {_notif_err}")  # NOTIFICATION
+
+            return result
 
         except Exception as e:
             logger.error(f"Unexpected error in download_track: {e}")

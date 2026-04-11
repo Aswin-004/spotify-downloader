@@ -216,7 +216,7 @@ def write_undo_log(entries: List[Dict], logs_dir: Path) -> Path:
 # REPORT BUILDER
 # ═══════════════════════════════════════════════════════════════════
 
-CATEGORIES_ORDER = ["Punjabi", "English", "Hindi", "House"]
+CATEGORIES_ORDER = ["Bollywood", "Punjabi", "International", "EDM"]
 
 
 def build_report_text(

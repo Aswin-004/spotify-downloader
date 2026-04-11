@@ -35,11 +35,13 @@ library_bp = Blueprint("library", __name__, url_prefix="/api/library")
 @library_bp.route("/organize", methods=["POST"])
 def organize():
     """
-    Batch organize all MP3 files in the library based on organization mode.
+    Batch organize all MP3 files in the library using DJ_HYBRID classification.
+    
+    Note: Mode parameter is now deprecated. Always uses dj_hybrid.
     
     Request body:
         {
-            "mode": "artist" | "genre" | "artist_genre"
+            "mode": (deprecated, ignored)
         }
     
     Response:
@@ -50,16 +52,10 @@ def organize():
         }
     """
     try:
-        data = request.get_json() or {}
-        mode = data.get("mode", "artist")
+        # FORCE dj_hybrid — ignore user input
+        mode = "dj_hybrid"
         
-        # Validate mode
-        if mode not in ["artist", "genre", "artist_genre"]:
-            return jsonify({
-                "error": f"Invalid mode: {mode}. Expected 'artist', 'genre', or 'artist_genre'"
-            }), 400
-        
-        logger.info(f"[library] Starting batch organize with mode: {mode}")
+        logger.info(f"[library] Starting batch organize with mode: dj_hybrid")
         
         result = organize_library(mode=mode)
         
@@ -82,10 +78,10 @@ def organize():
 def organize_recent_endpoint():
     """
     Organize MP3 files in the library root that were modified within the last N hours.
+    Uses DJ_HYBRID classification.
 
     Request body:
         {
-            "mode": "artist" | "genre" | "artist_genre",
             "hours": <int>   (default: 24)
         }
 
@@ -99,18 +95,14 @@ def organize_recent_endpoint():
     """
     try:
         data = request.get_json() or {}
-        mode = data.get("mode", "artist")
+        # FORCE dj_hybrid — ignore mode parameter if provided
+        mode = "dj_hybrid"
         hours = data.get("hours", 24)
-
-        if mode not in ["artist", "genre", "artist_genre"]:
-            return jsonify({
-                "error": f"Invalid mode: {mode}. Expected 'artist', 'genre', or 'artist_genre'"
-            }), 400
 
         if not isinstance(hours, (int, float)) or hours <= 0:
             return jsonify({"error": "hours must be a positive number"}), 400
 
-        logger.info(f"[library] organize-recent: mode={mode}, hours={hours}")
+        logger.info(f"[library] organize-recent: mode=dj_hybrid, hours={hours}")
 
         result = organize_recent(mode=mode, hours=int(hours))
 

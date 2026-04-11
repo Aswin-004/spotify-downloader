@@ -276,15 +276,15 @@ def score_candidate(
     # ── STEP 6: Official boost ──
     official_bonus = 0.05 if "official" in yt_lower else 0.0
 
-    # ── CHANGED: Verified channel boost (+0.30 = +30 on 0–100 scale) ──
-    verified_bonus = 0.30 if channel_is_verified else 0.0
+    # Verified channel boost (capped to prevent wrong tracks passing on badge alone)
+    verified_bonus = 0.10 if channel_is_verified else 0.0
 
-    # QUALITY UPGRADE — uploader-based bonuses
-    uploader_lower = uploader.lower() if uploader else ""  # QUALITY UPGRADE
-    if 'official' in uploader_lower:  # QUALITY UPGRADE
-        official_bonus += 0.15  # QUALITY UPGRADE — official channel name
-    if 'vevo' in uploader_lower:  # QUALITY UPGRADE
-        official_bonus += 0.20  # QUALITY UPGRADE — VEVO verified partner
+    # Uploader-based bonuses (conservative — badge ≠ correct track)
+    uploader_lower = uploader.lower() if uploader else ""
+    if 'official' in uploader_lower:
+        official_bonus += 0.05  # official channel name
+    if 'vevo' in uploader_lower:
+        official_bonus += 0.10  # VEVO verified partner
 
     # ── CHANGED: Heavy penalty when duration exceeds ±2 s ──
     tight_penalty = 0.0
