@@ -175,8 +175,10 @@ def _get_base_dir() -> str:
 
 
 def _get_failures_file() -> str:
-    """Absolute path to ingest_failures.json (sits next to auto_downloader.py)."""
-    return os.path.join(os.path.dirname(__file__), "ingest_failures.json")
+    """Absolute path to ingest_failures.json (sits in backend root)."""
+    from pathlib import Path
+    backend_root = Path(__file__).resolve().parent
+    return str(backend_root / "ingest_failures.json")
 
 
 # ═══════════════════════════════════════════════════════════════════

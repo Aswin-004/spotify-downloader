@@ -354,7 +354,7 @@ class SpotifyService:
     def get_playlist_tracks_by_id(self, playlist_id, force_refresh=False):
         """Fetch tracks from a playlist by ID (cache-first).
         Uses user OAuth (required since 2025), falls back to client credentials.
-        Returns list of track dicts with id, title, artist, duration_ms.
+        Returns list of track dicts with id, title, artist, artist_id, duration_ms.
         Also returns a 'source' field on each track when served from cache."""
         cache = get_cache()
         # Normalize playlist_id (may be a full URL)
@@ -391,6 +391,7 @@ class SpotifyService:
                             "id": track["id"],
                             "title": track["name"],
                             "artist": track["artists"][0]["name"] if track.get("artists") else "Unknown",
+                            "artist_id": track["artists"][0]["id"] if track.get("artists") else "",
                             "duration_ms": track.get("duration_ms"),
                         })
                 if results.get("next"):

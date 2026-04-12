@@ -648,7 +648,6 @@ class DownloaderService:
 
             # Initialize error tracking for post-processing stages
             tagging_error = None
-            organize_error = None
             report = None
 
             # ── NEW: Post-processing pipeline ──────────────────────────
@@ -739,22 +738,6 @@ class DownloaderService:
                 except Exception as _bpm_err:  # BPM/KEY
                     logger.warning(f"BPM/key analysis failed (non-critical): {_bpm_err}")  # BPM/KEY
 
-            # ─── STAGE 2B: ORGANIZATION (errors captured, not fatal) ───────
-            organize_result = None
-            organize_mode = os.getenv("ORGANIZE_MODE", "artist")
-            if organize_mode != "off":
-                try:
-                    from services.organizer_service import organize_file
-                    organize_result = organize_file(filename, mode=organize_mode)
-                    if organize_result.get("moved"):
-                        logger.info(f"[organizer] Auto-organized: {filename} → {organize_result.get('folder')}")
-                    elif organize_result.get("error"):
-                        organize_error = organize_result.get("error")
-                        logger.warning(f"[organizer] Auto-organize failed for {filename}: {organize_error}")
-                except Exception as org_err:
-                    organize_error = str(org_err)
-                    logger.warning(f"[organizer] Failed to run organizer: {org_err}")
-
             # ─── BUILD SUCCESS RESPONSE (file exists = success, even if post-processing failed) ───
             result = {
                 "status": "success",
@@ -770,17 +753,6 @@ class DownloaderService:
             if tagging_error:
                 result["warning"] = f"Downloaded but tagging failed: {tagging_error}"
                 logger.warning(f"[download] {result['warning']}")
-
-            if organize_error:
-                if "warning" in result:
-                    result["warning"] += f"; Organization failed: {organize_error}"
-                else:
-                    result["warning"] = f"Downloaded but organization failed: {organize_error}"
-                logger.warning(f"[download] Organization warning: {organize_error}")
-
-            if organize_result and organize_result.get("moved"):
-                result["organized"] = True
-                result["organize_result"] = organize_result
 
             # ─── NOTIFICATION — Success (file exists) ──────────────────────
             try:  # NOTIFICATION

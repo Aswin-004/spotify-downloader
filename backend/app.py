@@ -213,13 +213,16 @@ def handle_keepalive():
     """Respond to frontend keepalive ping to prevent timeout"""
     emit('pong_keepalive', {'status': 'alive'})  # DISCONNECT FIX
 
-# Background task to periodically emit auto-downloader status and queue status
+# Background task: lightweight 1s heartbeat so the UI stays responsive.
+# The full emit_status() bundle still fires on discrete events (download
+# complete, history update, etc.) — this tick just keeps the auto-status
+# and queue panels current without waiting for the next real event.
 def _auto_status_emitter():
-    """Emit auto-downloader status and queue status every 5 seconds"""
+    """Emit auto and queue status every 1 second (was 5s)."""
     while True:
-        time.sleep(5)  # DISCONNECT FIX: use time.sleep instead of socketio.sleep (no eventlet)
+        time.sleep(1)
         try:
-            emit_status()
+            socketio.emit("auto_status", dict(AUTO_STATUS))
             socketio.emit("queue_status", download_queue_status)
         except Exception:
             pass
@@ -884,6 +887,26 @@ def refresh_playlist():
     )
     status_code = 200 if result["status"] == "ok" else 429 if result["status"] == "rate_limited" else 500
     return jsonify(result), status_code
+
+
+@app.route('/api/clear-history-for-playlist', methods=['POST'])
+def clear_history_for_playlist():
+    """Remove ingest playlist track IDs from history so they re-download on next sync."""
+    from services.auto_downloader import remove_tracks_from_history
+    data = request.get_json(silent=True) or {}
+    playlist_id = data.get("playlist_id") or INGEST_PLAYLIST_ID
+    if not playlist_id:
+        return jsonify({"error": "No playlist_id configured"}), 400
+    try:
+        tracks = spotify_service.get_playlist_tracks_by_id(
+            playlist_id, force_refresh=True
+        )
+        track_ids = [t["id"] for t in tracks]
+        result = remove_tracks_from_history(track_ids)
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"[app] clear-history-for-playlist error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/health', methods=['GET'])

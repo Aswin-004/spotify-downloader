@@ -250,25 +250,37 @@ def set_cached_mb(track_id: str, mb_data: dict):  # MUSICBRAINZ
 # MUSICBRAINZ — tagging_failures helpers
 # ═══════════════════════════════════════════════════════════════════
 
-def _classify_error_type(error: str) -> str:  # MUSICBRAINZ
-    """Classify a tagging error string into a category."""  # MUSICBRAINZ
-    e = error.lower()  # MUSICBRAINZ
-    if any(k in e for k in ("network", "connection", "timeout", "refused", "unreachable", "socket")):  # MUSICBRAINZ
+def _classify_error_type(error: str | BaseException) -> str:  # MUSICBRAINZ
+    """Classify a tagging error into a category using stable types/codes."""  # MUSICBRAINZ
+    if isinstance(error, ConnectionFailure):  # MUSICBRAINZ
         return "network"  # MUSICBRAINZ
-    if any(k in e for k in ("no musicbrainz match", "score", "no results", "not found", "_miss")):  # MUSICBRAINZ
-        return "metadata_missing"  # MUSICBRAINZ
-    if any(k in e for k in ("id3", "tag", "mutagen", "format", "invalid", "corrupt", "save")):  # MUSICBRAINZ
-        return "format_invalid"  # MUSICBRAINZ
-    if any(k in e for k in ("rate limit", "429", "too many", "quota")):  # MUSICBRAINZ
-        return "rate_limit"  # MUSICBRAINZ
-    return "unknown"  # MUSICBRAINZ
+    if isinstance(error, (TimeoutError, OSError)):  # MUSICBRAINZ
+        return "network"  # MUSICBRAINZ
+    if not isinstance(error, str):  # MUSICBRAINZ
+        return "unknown"  # MUSICBRAINZ
+
+    error_code = error.strip().lower().replace(" ", "_").replace("-", "_")  # MUSICBRAINZ
+    code_map = {  # MUSICBRAINZ
+        "network": "network",  # MUSICBRAINZ
+        "connection_failure": "network",  # MUSICBRAINZ
+        "timeout": "network",  # MUSICBRAINZ
+        "metadata_missing": "metadata_missing",  # MUSICBRAINZ
+        "no_musicbrainz_match": "metadata_missing",  # MUSICBRAINZ
+        "mb_miss": "metadata_missing",  # MUSICBRAINZ
+        "_miss": "metadata_missing",  # MUSICBRAINZ
+        "format_invalid": "format_invalid",  # MUSICBRAINZ
+        "invalid_format": "format_invalid",  # MUSICBRAINZ
+        "rate_limit": "rate_limit",  # MUSICBRAINZ
+        "429": "rate_limit",  # MUSICBRAINZ
+    }  # MUSICBRAINZ
+    return code_map.get(error_code, "unknown")  # MUSICBRAINZ
 
 
 def log_tagging_failure(  # MUSICBRAINZ
     track_id: str,  # MUSICBRAINZ
     title: str,  # MUSICBRAINZ
     artist: str,  # MUSICBRAINZ
-    error: str,  # MUSICBRAINZ
+    error: str | BaseException,  # MUSICBRAINZ
 ):  # MUSICBRAINZ
     """Record a tagging failure with error classification and retry tracking."""  # MUSICBRAINZ
     col = get_tagging_failures_collection()  # MUSICBRAINZ

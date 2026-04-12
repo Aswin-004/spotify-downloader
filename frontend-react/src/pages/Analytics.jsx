@@ -622,29 +622,46 @@ export default function Analytics() { // ANALYTICS
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Hit rate donut */}
               <div className="flex flex-col items-center rounded-xl border border-border bg-surface-light/30 p-4">
-                <div className="relative w-20 h-20">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={[
-                          { value: cacheAnalytics.cache_hit_rate },
-                          { value: Math.max(0, 100 - cacheAnalytics.cache_hit_rate) },
-                        ]}
-                        cx="50%" cy="50%"
-                        innerRadius={26} outerRadius={36}
-                        startAngle={90} endAngle={-270}
-                        strokeWidth={0}
-                      >
-                        <Cell fill="#f59e0b" />
-                        <Cell fill="#1f2937" />
-                      </Pie>
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <span className="absolute inset-0 flex items-center justify-center text-sm font-bold font-mono text-yellow-400">
-                    {cacheAnalytics.cache_hit_rate}%
-                  </span>
-                </div>
-                <span className="text-xs text-gray-500 mt-2">Hit Rate</span>
+                {Number.isFinite(cacheAnalytics.cache_hit_rate) &&
+                cacheAnalytics.cache_hit_rate >= 0 &&
+                cacheAnalytics.cache_hit_rate <= 100 ? (
+                  <div className="relative w-20 h-20">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={[
+                            { value: cacheAnalytics.cache_hit_rate },
+                            { value: 100 - cacheAnalytics.cache_hit_rate },
+                          ]}
+                          cx="50%" cy="50%"
+                          innerRadius={26} outerRadius={36}
+                          startAngle={90} endAngle={-270}
+                          strokeWidth={0}
+                        >
+                          <Cell fill="#f59e0b" />
+                          <Cell fill="#1f2937" />
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <span className="absolute inset-0 flex items-center justify-center text-sm font-bold font-mono text-yellow-400">
+                      {cacheAnalytics.cache_hit_rate}%
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex h-20 w-20 flex-col items-center justify-center rounded-full border border-red-500/40 bg-red-500/10 text-red-400">
+                    <AlertTriangle className="h-5 w-5" />
+                    <span className="mt-1 text-[10px] font-medium leading-tight text-center">
+                      Invalid
+                    </span>
+                  </div>
+                )}
+                <span className="text-xs text-gray-500 mt-2">
+                  {Number.isFinite(cacheAnalytics.cache_hit_rate) &&
+                  cacheAnalytics.cache_hit_rate >= 0 &&
+                  cacheAnalytics.cache_hit_rate <= 100
+                    ? 'Hit Rate'
+                    : 'Invalid Hit Rate'}
+                </span>
               </div>
               {/* Cached tracks */}
               <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-4">

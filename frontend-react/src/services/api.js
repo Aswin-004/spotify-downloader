@@ -62,12 +62,25 @@ export const api = {
     const body = {};
     const forceFolder = (options.forceFolder || '').trim();
     if (forceFolder) body.force_folder = forceFolder;
-    if (options.forceRedownload) body.force_redownload = true;
+    // Only set force_redownload if explicitly passed as true
+    if (options.forceRedownload === true) {
+      body.force_redownload = true;
+    }
     return fetch('/api/refresh-playlist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).then(handleResponse);
+  },
+
+  clearHistoryForPlaylist: async (playlistId = null) => {
+    const body = playlistId ? { playlist_id: playlistId } : {};
+    const res = await fetch('/api/clear-history-for-playlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return res.json();
   },
 
   deleteFile(filename) {

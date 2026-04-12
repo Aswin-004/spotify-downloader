@@ -100,6 +100,13 @@ export function SocketProvider({ children }) {
       }
     });
 
+    // Lightweight 1s heartbeat from backend — keeps the auto-status panel
+    // current between discrete `auto_status_update` events. Fires regardless
+    // of whether a sync is active, so we don't touch ingestProgress here.
+    socket.on('auto_status', (data) => {
+      setAutoStatus(data);
+    });
+
     socket.on('download_start', (data) => {
       if (data.source === 'ingest') {
         setIngestProgress((prev) => ({

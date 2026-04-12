@@ -54,13 +54,11 @@ export default function Header({ onMenuToggle }) {
     try {
       // If empty, api.refreshPlaylist omits force_folder from the body — backend
       // falls back to normal artist-based routing.
-      // When force_folder IS set, auto-enable force_redownload: if the user
-      // pinned a folder, they clearly want the tracks to actually land there
-      // regardless of whether ingest history already marks them as seen.
+      // force_redownload is now an explicit opt-in via the Clear & Retry button only.
       const trimmed = forceFolder.trim();
       await api.refreshPlaylist({
         forceFolder: trimmed,
-        forceRedownload: Boolean(trimmed),
+        forceRedownload: false,
       });
       setOpen(false);
       setForceFolder('');
@@ -157,6 +155,20 @@ export default function Header({ onMenuToggle }) {
                 <p className="mt-1.5 text-[11px] text-gray-500">
                   Leave empty to auto-route by artist
                 </p>
+
+                <button
+                  onClick={async () => {
+                    setSubmitting(true);
+                    await api.clearHistoryForPlaylist();
+                    await triggerRefresh();
+                    setSubmitting(false);
+                    setOpen(false);
+                  }}
+                  className="w-full text-xs text-amber-400 hover:text-amber-300 py-1 transition-colors mt-3"
+                  disabled={submitting}
+                >
+                  ↺ Clear history & re-download all
+                </button>
 
                 <div className="mt-4 flex justify-end gap-2">
                   <Button
