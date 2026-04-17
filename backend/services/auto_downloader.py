@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import time
+import shutil
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -45,6 +46,7 @@ except ImportError:
 INGEST_PLAYLIST_ID = config.INGEST_PLAYLIST_ID
 BASE_DOWNLOAD_DIR = config.BASE_DOWNLOAD_DIR
 INGEST_FOLDER = os.path.join(BASE_DOWNLOAD_DIR, "Ingest")
+STAGING_FOLDER = os.path.join(BASE_DOWNLOAD_DIR, "Ingest", "Staging")
 
 
 CHECK_INTERVAL = config.CHECK_INTERVAL
@@ -318,6 +320,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
 
     downloader = get_downloader_service()
     os.makedirs(target_base, exist_ok=True)
+    os.makedirs(STAGING_FOLDER, exist_ok=True)
 
     # Build file registry from ALL download directories (including organized folders)
     # to prevent re-downloading tracks that were already organized into subfolders.
@@ -339,7 +342,12 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     _emit_auto_status()
 
     def _download_single(track_info, force_folder=None, force_redownload=False):
-        """Download a single track with duplicate guard. Thread-safe.
+        """Download a single track with two-pass staging system. Thread-safe.
+
+        Pass 1: Download to Staging/ folder
+        Pass 2: Determine final genre folder using MusicBrainz tags (best),
+                Spotify genres (fallback), or Uncategorized (last resort)
+        Pass 3: Move from Staging/ to final folder
 
         Args:
             track_info: Spotify track dict (id, title, artist, artist_id, duration_ms).
@@ -352,6 +360,9 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 ``BASE_DOWNLOAD_DIR``. Used together with ``force_folder`` to
                 land a previously-downloaded track in a different subfolder.
         """
+        from services.genre_router import map_genre_string, resolve_genre_folder
+        from services.organizer_service import clean_folder_name
+
         # Yield to manual downloads (priority)
         if wait_if_manual_active():
             logger.info("[ingest] Yielded to manual download, resuming")
@@ -360,19 +371,6 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
         title = track_info["title"]
         artist = track_info["artist"]
         track_key = normalize(sanitize_filename(title))
-
-        # Resolve target folder: force_folder wins, otherwise ask the genre router.
-        from services.genre_router import resolve_genre_folder
-        if force_folder:
-            folder_structure = force_folder
-        else:
-            folder_structure = resolve_genre_folder(
-                artist_id=track_info.get("artist_id", ""),
-                artist_name=artist,
-                sp=sp_service.sp,
-            )
-        target_folder = os.path.join(target_base, folder_structure)
-        os.makedirs(target_folder, exist_ok=True)
 
         # --- Duplicate check 1: file registry ---
         # FORCE REDOWNLOAD — skip the registry dedup so redownloads aren't swallowed
@@ -385,17 +383,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     saved_ids.add(tid)
                     return
 
-        # --- Duplicate check 2: file on disk ---
         filename = sanitize_filename(title)
-        file_path = os.path.join(target_folder, f"{filename}.mp3")
-        if os.path.isfile(file_path) and os.path.getsize(file_path) > 1000:
-            with _registry_lock:
-                _downloaded_registry.add(track_key)
-            skip_count[0] += 1
-            logger.debug(f"[ingest] Skipping (on disk): {title} - {artist}")
-            _emit("download_skipped", {"title": title, "artist": artist, "reason": "File exists on disk", "source": "ingest"})
-            saved_ids.add(tid)
-            return
 
         try:
             AUTO_STATUS["current"] = f"{title} - {artist}"
@@ -419,25 +407,73 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                         "source": "ingest",
                     })
 
+            # PASS 1: Always download to staging first
+            staging_dir = STAGING_FOLDER
+            os.makedirs(staging_dir, exist_ok=True)
+
             with _download_semaphore:  # DISCONNECT FIX: limit concurrent yt-dlp processes
                 result = downloader.download_track(
                     title,
                     artist,
                     progress_callback=_track_progress_cb,
-                    output_dir=target_folder,
+                    output_dir=staging_dir,
                     output_filename=filename,
                     duration_ms=track_info.get("duration_ms"),
                 )
 
             if result["status"] == "success":
+                staged_filepath = result.get("filepath") or os.path.join(staging_dir, result.get("filename", ""))
+
                 # Verify the file actually exists on disk before marking success
-                dl_filepath = result.get("filepath") or os.path.join(target_folder, result.get("filename", ""))
-                if not os.path.isfile(dl_filepath) or os.path.getsize(dl_filepath) < 1000:
-                    logger.error(f"[ingest] Download reported success but file missing/empty: {dl_filepath}")
+                if not os.path.isfile(staged_filepath) or os.path.getsize(staged_filepath) < 1000:
+                    logger.error(f"[ingest] Download reported success but file missing/empty: {staged_filepath}")
                     fail_count[0] += 1
                     _record_failure(tid, title, artist, failure_counts)
                     _emit("download_error", {"title": title, "artist": artist, "error": "File missing after download", "source": "ingest"})
                     return
+
+                # PASS 2: Determine final folder using best available genre
+                if force_folder:
+                    # Manual override always wins — flat, no artist subfolder
+                    final_folder = os.path.join(target_base, force_folder)
+                else:
+                    # Try MusicBrainz genre first (most accurate)
+                    mb_genre = (result.get("tagging_report") or {}).get("genre", "")
+                    if mb_genre:
+                        mapped = map_genre_string(mb_genre)
+                        if mapped:
+                            final_folder = os.path.join(target_base, mapped, clean_folder_name(artist))
+                            logger.info(f"[ingest] MB genre routing: {title} → {mapped}/{artist} (genre: '{mb_genre}')")
+                        else:
+                            final_folder = os.path.join(target_base, "Uncategorized", clean_folder_name(artist))
+                    else:
+                        # Fallback to Spotify artist genres
+                        folder_structure = resolve_genre_folder(
+                            artist_id=track_info.get("artist_id", ""),
+                            artist_name=artist,
+                            sp=sp_service.sp,
+                        )
+                        final_folder = os.path.join(target_base, folder_structure)
+                        logger.info(f"[ingest] Spotify genre routing: {title} → {folder_structure}")
+
+                os.makedirs(final_folder, exist_ok=True)
+
+                # PASS 3: Move from staging to final folder
+                final_filepath = os.path.join(final_folder, result.get("filename", f"{filename}.mp3"))
+
+                # Collision handling
+                if os.path.exists(final_filepath):
+                    base = Path(final_filepath).stem
+                    n = 1
+                    while os.path.exists(os.path.join(final_folder, f"{base}_{n}.mp3")):
+                        n += 1
+                    final_filepath = os.path.join(final_folder, f"{base}_{n}.mp3")
+
+                shutil.move(staged_filepath, final_filepath)
+                logger.info(f"[ingest] Moved: {result.get('filename')} → {final_folder}")
+
+                # Update result with final path
+                result["filepath"] = final_filepath
 
                 with _registry_lock:
                     _downloaded_registry.add(track_key)
@@ -450,22 +486,12 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 if result.get("warning"):
                     logger.warning(f"[ingest] Post-processing warning: {result.get('warning')}")
             else:
-                # FAILURE CHECK: Only record as failure if file doesn't actually exist
-                if not (os.path.isfile(file_path) and os.path.getsize(file_path) > 1000):
-                    fail_count[0] += 1
-                    permanently_skipped = _record_failure(tid, title, artist, failure_counts)  # PERMANENT SKIP
-                    if permanently_skipped:  # PERMANENT SKIP
-                        saved_ids.add(tid)  # PERMANENT SKIP — mark as done so it never retries
-                    logger.warning(f"[ingest] FAILED (auto-download failed & file missing): {title} - {artist} | {result.get('message', '')}")
-                    _emit("download_error", {"title": title, "artist": artist, "error": result.get("message", "No strict match"), "source": "ingest"})
-                else:
-                    # File exists even though status != success (manual fallback but file exists)
-                    skip_count[0] += 1
-                    with _registry_lock:
-                        _downloaded_registry.add(track_key)
-                    saved_ids.add(tid)
-                    logger.info(f"[ingest] File exists despite fallback status: {title} - {artist}")
-                    _emit("download_complete", {"title": title, "artist": artist, "status": "completed (manual)", "filename": filename + ".mp3", "source": "ingest"})
+                fail_count[0] += 1
+                permanently_skipped = _record_failure(tid, title, artist, failure_counts)  # PERMANENT SKIP
+                if permanently_skipped:  # PERMANENT SKIP
+                    saved_ids.add(tid)  # PERMANENT SKIP — mark as done so it never retries
+                logger.warning(f"[ingest] FAILED (auto-download failed): {title} - {artist} | {result.get('message', '')}")
+                _emit("download_error", {"title": title, "artist": artist, "error": result.get("message", "No strict match"), "source": "ingest"})
 
         except Exception as e:
             fail_count[0] += 1
@@ -503,6 +529,20 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     # Persist history
     _save_ingest_history(saved_ids)
     _save_failure_counts(failure_counts)  # PERMANENT SKIP — persist failure counts to disk
+
+    # Clean up Staging folder — move any leftover files to Uncategorized
+    try:
+        staging = Path(STAGING_FOLDER)
+        if staging.exists():
+            leftover = list(staging.glob("*.mp3"))
+            if leftover:
+                logger.warning(f"[ingest] {len(leftover)} file(s) left in Staging/ — moving to Uncategorized/")
+                uncategorized = Path(target_base) / "Uncategorized"
+                uncategorized.mkdir(exist_ok=True)
+                for f in leftover:
+                    shutil.move(str(f), str(uncategorized / f.name))
+    except Exception as e:
+        logger.warning(f"[ingest] Staging cleanup failed: {e}")
     AUTO_STATUS["status"] = "completed"
     AUTO_STATUS["current"] = ""
     AUTO_STATUS["progress"] = 100

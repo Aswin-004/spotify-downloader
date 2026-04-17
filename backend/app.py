@@ -909,6 +909,17 @@ def clear_history_for_playlist():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/clear-genre-cache', methods=['POST'])
+def clear_genre_cache_endpoint():
+    """Clear the in-memory genre cache after updating SPOTIFY_GENRE_MAP."""
+    try:
+        from services.genre_router import clear_genre_cache as _clear
+        _clear()
+        return jsonify({"status": "ok", "message": "Genre cache cleared"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""

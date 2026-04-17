@@ -24,6 +24,25 @@ from services.organizer_service import clean_folder_name
 _genre_cache: dict = {}
 
 
+def map_genre_string(genre_str: str) -> str:
+    """
+    Map a raw genre string to a folder name.
+    Checks SPOTIFY_GENRE_MAP first (for grouped genres),
+    then falls back to cleaned raw genre string.
+    Returns empty string if input is empty.
+    """
+    if not genre_str:
+        return ""
+    genre_lower = genre_str.lower().strip()
+    # Check map first (longer keys first for specificity)
+    sorted_keys = sorted(config.SPOTIFY_GENRE_MAP.keys(), key=len, reverse=True)
+    for key in sorted_keys:
+        if key in genre_lower:
+            return config.SPOTIFY_GENRE_MAP[key]
+    # Raw fallback — use genre as-is, cleaned
+    return clean_folder_name(genre_str.title())
+
+
 def _matches_devanagari(text: str) -> bool:
     """True if `text` contains any Devanagari character (U+0900..U+097F).
 
@@ -130,18 +149,34 @@ def resolve_genre_folder(artist_id: str, artist_name: str, sp: Any) -> str:
         genre_folder = "Indian"
         matched_tag = "devanagari-artist-name"
 
-    # Tertiary: give up and bucket as Uncategorized.
+    # Tertiary: use first Spotify genre tag via map_genre_string
+    # Only fall back to Uncategorized if Spotify has NO genres at all
     if not genre_folder:
-        genre_folder = "Uncategorized"
+        if genres:
+            raw_folder = map_genre_string(genres[0])
+            genre_folder = raw_folder
+            matched_tag = f"raw-genre: {genres[0]}"
+        else:
+            genre_folder = "Uncategorized"
 
     result = f"{genre_folder}/{clean_artist_name}"
     _genre_cache[artist_id] = result
 
-    if matched_tag:
+    if matched_tag and "raw-genre" not in str(matched_tag):
         logger.info(
             f"[genre_router] {artist_name} → {result} (matched: '{matched_tag}')"
         )
-    else:
-        logger.info(f"[genre_router] {artist_name} → {result} (no genre match)")
 
-    return result
+    if genres:
+        raw_folder = map_genre_string(genres[0])
+        logger.info(f"[genre_router] {artist_name} → {raw_folder}/{clean_artist_name} (raw: '{genres[0]}')")
+        return f"{raw_folder}/{clean_artist_name}"
+    logger.info(f"[genre_router] {artist_name} → Uncategorized/{clean_artist_name} (no genres)")
+    return f"Uncategorized/{clean_artist_name}"
+
+
+def clear_genre_cache():
+    """Clear the in-memory genre cache — call after updating SPOTIFY_GENRE_MAP."""
+    global _genre_cache
+    _genre_cache = {}
+    logger.info("[genre_router] Genre cache cleared")
