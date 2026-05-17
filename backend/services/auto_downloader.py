@@ -76,6 +76,7 @@ AUTO_STATUS = {
 # Thread-safe registry of downloaded file keys
 _registry_lock = threading.Lock()
 _downloaded_registry: set = set()
+_in_progress_registry: set = set()  # keys currently being downloaded — TOCTOU guard
 _download_semaphore = threading.Semaphore(2)  # DISCONNECT FIX: limit concurrent yt-dlp processes
 
 
@@ -241,6 +242,138 @@ def _extract_retry_seconds(*sources):
     return None
 
 
+def _write_retry_manifest(staged_path: str, intended_dest: str, track_info: dict,
+                          pipeline_stage_failed: str = "move"):
+    """Write a JSON manifest so a failed atomic move can be replayed without data loss.
+
+    The staged file is intentionally left in Staging/ — it is NEVER deleted on
+    move failure.  Manifests live in  Ingest/.retry_queue/<ts>_<id>.json  and
+    are auto-replayed by _process_retry_queue() at the start of each ingest cycle.
+
+    Fields added for Phase 9 retry hardening:
+      sha256               — hex digest of staged file (integrity verification)
+      filesize_bytes       — byte size at failure time
+      pipeline_stage_failed — "download" | "tagging" | "move"
+      retry_count          — how many times this manifest has been attempted
+    """
+    retry_dir = Path(STAGING_FOLDER).parent / ".retry_queue"
+    try:
+        retry_dir.mkdir(exist_ok=True)
+        # Compute sha256 of the staged file for integrity verification on replay
+        sha256_hex = ""
+        filesize = 0
+        try:
+            import hashlib as _hl
+            h = _hl.sha256()
+            with open(staged_path, "rb") as _f:
+                for _chunk in iter(lambda: _f.read(65536), b""):
+                    h.update(_chunk)
+            sha256_hex = h.hexdigest()
+            filesize = os.path.getsize(staged_path)
+        except Exception:
+            pass
+        manifest = {
+            "staged_path": staged_path,
+            "intended_dest": intended_dest,
+            "spotify_id": track_info.get("id", ""),
+            "artist": track_info.get("artist", ""),
+            "title": track_info.get("title", ""),
+            "duration_ms": track_info.get("duration_ms", 0),
+            "sha256": sha256_hex,
+            "filesize_bytes": filesize,
+            "pipeline_stage_failed": pipeline_stage_failed,
+            "retry_count": 0,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        retry_file = retry_dir / f"{int(time.time())}_{track_info.get('id', 'unknown')}.json"
+        retry_file.write_text(json.dumps(manifest, indent=2))
+        logger.info(f"[ingest] Retry manifest written: {retry_file.name}")
+    except Exception as _e:
+        logger.warning(f"[ingest] Failed to write retry manifest: {_e}")
+
+
+def _process_retry_queue():
+    """
+    Replay pending retry manifests from .retry_queue/.
+
+    Called at the start of each ingest_download cycle.  Attempts to move
+    any staged files whose manifests are present.  On success the manifest
+    is deleted; on failure the retry_count is incremented.  Manifests that
+    have failed >= MAX_RETRY_ATTEMPTS times are moved to .retry_queue/dead/
+    so they don't block the queue indefinitely.
+    """
+    MAX_RETRY_ATTEMPTS = 5
+    retry_dir = Path(STAGING_FOLDER).parent / ".retry_queue"
+    if not retry_dir.is_dir():
+        return
+    manifests = list(retry_dir.glob("*.json"))
+    if not manifests:
+        return
+    logger.info(f"[ingest] Retry queue: {len(manifests)} pending manifest(s)")
+    for mf in manifests:
+        try:
+            data = json.loads(mf.read_text())
+        except Exception as _e:
+            logger.warning(f"[ingest] Bad retry manifest {mf.name}: {_e}")
+            continue
+
+        staged = data.get("staged_path", "")
+        dest = data.get("intended_dest", "")
+        if not staged or not dest:
+            mf.unlink(missing_ok=True)
+            continue
+
+        if not os.path.isfile(staged):
+            logger.warning(f"[ingest] Retry manifest {mf.name}: staged file missing — discarding")
+            mf.unlink(missing_ok=True)
+            continue
+
+        # Integrity check: verify sha256 if available
+        expected_sha = data.get("sha256", "")
+        if expected_sha:
+            try:
+                import hashlib as _hl
+                h = _hl.sha256()
+                with open(staged, "rb") as _f:
+                    for _chunk in iter(lambda: _f.read(65536), b""):
+                        h.update(_chunk)
+                if h.hexdigest() != expected_sha:
+                    logger.error(f"[ingest] Retry {mf.name}: sha256 mismatch — file corrupted, discarding")
+                    mf.unlink(missing_ok=True)
+                    continue
+            except Exception:
+                pass  # skip integrity check on error
+
+        retry_count = data.get("retry_count", 0)
+        if retry_count >= MAX_RETRY_ATTEMPTS:
+            dead_dir = retry_dir / "dead"
+            dead_dir.mkdir(exist_ok=True)
+            mf.rename(dead_dir / mf.name)
+            logger.warning(f"[ingest] Retry {mf.name}: exceeded {MAX_RETRY_ATTEMPTS} attempts — moved to dead/")
+            continue
+
+        # Attempt atomic move
+        try:
+            dest_dir = os.path.dirname(dest)
+            os.makedirs(dest_dir, exist_ok=True)
+            _staged_st = os.stat(staged)
+            _dest_st = os.stat(dest_dir)
+            if _staged_st.st_dev == _dest_st.st_dev:
+                os.replace(staged, dest)
+            else:
+                shutil.copy2(staged, dest)
+                if os.path.getsize(dest) != os.path.getsize(staged):
+                    os.remove(dest)
+                    raise OSError("Cross-device copy size mismatch on retry")
+                os.remove(staged)
+            logger.info(f"[ingest] Retry succeeded: {os.path.basename(dest)}")
+            mf.unlink(missing_ok=True)
+        except Exception as _re:
+            logger.warning(f"[ingest] Retry {mf.name} attempt {retry_count + 1} failed: {_re}")
+            data["retry_count"] = retry_count + 1
+            mf.write_text(json.dumps(data, indent=2))
+
+
 def ingest_download(download_dir=None, force_folder=None, force_redownload=False):
     """Download new tracks from the ingest playlist with parallel workers.
 
@@ -260,6 +393,12 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     if not INGEST_PLAYLIST_ID:
         logger.warning("[ingest] No INGEST_PLAYLIST_ID configured. Skipping.")
         return
+
+    # RETRY HARDENING — replay any pending manifests from previous failed moves
+    try:
+        _process_retry_queue()
+    except Exception as _rq_err:
+        logger.warning(f"[ingest] Retry queue processing failed: {_rq_err}")
 
     # Skip if globally rate-limited
     if is_rate_limited():
@@ -370,18 +509,26 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
         tid = track_info["id"]
         title = track_info["title"]
         artist = track_info["artist"]
-        track_key = normalize(sanitize_filename(title))
+        # DEDUP — strong identity: spotify_id primary, content-hash secondary
+        try:
+            from services.dedup_service import duplicate_identity_key as _dik
+            track_key = _dik(tid, title, artist, track_info.get("duration_ms"))
+        except Exception:
+            track_key = normalize(sanitize_filename(title))  # legacy fallback
 
-        # --- Duplicate check 1: file registry ---
+        # --- Duplicate check 1: file registry (atomic check-and-reserve) ---
         # FORCE REDOWNLOAD — skip the registry dedup so redownloads aren't swallowed
+        _reserved = False
         if not force_redownload:
             with _registry_lock:
-                if track_key in _downloaded_registry:
+                if track_key in _downloaded_registry or track_key in _in_progress_registry:
                     skip_count[0] += 1
-                    logger.debug(f"[ingest] Skipping (exists): {title} - {artist}")
-                    _emit("download_skipped", {"title": title, "artist": artist, "reason": "Already downloaded", "source": "ingest"})
+                    logger.debug(f"[ingest] Skipping (exists/in-progress): {title} - {artist}")
+                    _emit("download_skipped", {"title": title, "artist": artist, "reason": "Already downloaded or in progress", "source": "ingest"})
                     saved_ids.add(tid)
                     return
+                _in_progress_registry.add(track_key)  # reserve the slot — no other worker can claim it
+                _reserved = True
 
         filename = sanitize_filename(title)
 
@@ -433,28 +580,56 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     return
 
                 # PASS 2: Determine final folder using best available genre
+                # Tracks below NEEDS_REVIEW_THRESHOLD confidence land in
+                # NeedsReview/<artist>/ for manual inspection instead of being
+                # silently mis-filed.
+                NEEDS_REVIEW_THRESHOLD = 0.5  # configurable per-run if needed
+
                 if force_folder:
                     # Manual override always wins — flat, no artist subfolder
                     final_folder = os.path.join(target_base, force_folder)
                 else:
-                    # Try MusicBrainz genre first (most accurate)
+                    from services.genre_router import resolve_genre_folder_with_confidence
+                    # Try MusicBrainz genre first (conf=0.9 — most accurate)
                     mb_genre = (result.get("tagging_report") or {}).get("genre", "")
                     if mb_genre:
                         mapped = map_genre_string(mb_genre)
                         if mapped:
-                            final_folder = os.path.join(target_base, mapped, clean_folder_name(artist))
-                            logger.info(f"[ingest] MB genre routing: {title} → {mapped}/{artist} (genre: '{mb_genre}')")
+                            # CANONICAL-BASE: map_genre_string now returns Library/ paths;
+                            # anchor to BASE_DOWNLOAD_DIR to prevent Ingest/Library/ nesting.
+                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, mapped, clean_folder_name(artist))
+                            logger.info(f"[ingest] MB genre routing: {title} → {mapped}/{artist} (conf=0.9)")
                         else:
-                            final_folder = os.path.join(target_base, "Uncategorized", clean_folder_name(artist))
+                            # No map match → NeedsReview (never Uncategorized)
+                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, "NeedsReview", clean_folder_name(artist))
                     else:
-                        # Fallback to Spotify artist genres
-                        folder_structure = resolve_genre_folder(
+                        # Spotify artist genres with confidence scoring
+                        folder_structure, genre_confidence, genre_source = resolve_genre_folder_with_confidence(
                             artist_id=track_info.get("artist_id", ""),
                             artist_name=artist,
                             sp=sp_service.sp,
                         )
-                        final_folder = os.path.join(target_base, folder_structure)
-                        logger.info(f"[ingest] Spotify genre routing: {title} → {folder_structure}")
+                        if genre_confidence >= NEEDS_REVIEW_THRESHOLD:
+                            # CANONICAL-BASE: folder_structure is a Library/ path;
+                            # anchor to BASE_DOWNLOAD_DIR, not INGEST_FOLDER.
+                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, folder_structure)
+                            logger.info(f"[ingest] Genre routing: {title} → {folder_structure} "
+                                        f"(conf={genre_confidence:.2f}, src={genre_source})")
+                        else:
+                            # Low-confidence decision — route to NeedsReview for manual triage
+                            _clean_artist = clean_folder_name(artist)
+                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, "NeedsReview", _clean_artist)
+                            logger.warning(
+                                f"[ingest] Low-confidence genre ({genre_confidence:.2f}, src={genre_source}) "
+                                f"for {title} — routing to NeedsReview/{_clean_artist}"
+                            )
+                            _emit("download_needs_review", {
+                                "title": title, "artist": artist,
+                                "genre_source": genre_source,
+                                "confidence": genre_confidence,
+                                "suggested_folder": folder_structure,
+                                "source": "ingest",
+                            })
 
                 os.makedirs(final_folder, exist_ok=True)
 
@@ -469,7 +644,31 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                         n += 1
                     final_filepath = os.path.join(final_folder, f"{base}_{n}.mp3")
 
-                shutil.move(staged_filepath, final_filepath)
+                # Atomic move — os.replace (same device) or copy+verify+delete (cross-device).
+                # On failure: staged file is preserved and a retry manifest is written.
+                try:
+                    _staged_st = os.stat(staged_filepath)
+                    _dest_st = os.stat(final_folder)
+                    if _staged_st.st_dev == _dest_st.st_dev:
+                        os.replace(staged_filepath, final_filepath)
+                    else:
+                        shutil.copy2(staged_filepath, final_filepath)
+                        if (not os.path.isfile(final_filepath) or
+                                os.path.getsize(final_filepath) != os.path.getsize(staged_filepath)):
+                            if os.path.exists(final_filepath):
+                                os.remove(final_filepath)
+                            raise OSError("Cross-device copy verification failed (size mismatch)")
+                        os.remove(staged_filepath)
+                    if not os.path.isfile(final_filepath) or os.path.getsize(final_filepath) < 1000:
+                        raise OSError(f"Post-move integrity check failed: {final_filepath}")
+                except OSError as _move_err:
+                    logger.error(f"[ingest] Move failed for '{title}': {_move_err}")
+                    _write_retry_manifest(staged_filepath, final_filepath, track_info)
+                    fail_count[0] += 1
+                    _record_failure(tid, title, artist, failure_counts)
+                    _emit("download_error", {"title": title, "artist": artist, "error": f"Move failed: {str(_move_err)[:80]}", "source": "ingest"})
+                    return
+
                 logger.info(f"[ingest] Moved: {result.get('filename')} → {final_folder}")
 
                 # Update result with final path
@@ -480,6 +679,23 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 success_count[0] += 1
                 saved_ids.add(tid)
                 logger.info(f"[ingest] Downloaded: {result['filename']}")
+                # LIBRARY INDEX — register in MongoDB for persistent O(1) dedup
+                try:
+                    from database import index_track as _idx
+                    from services.dedup_service import content_hash as _ch
+                    _genre_folder = os.path.relpath(final_folder, BASE_DOWNLOAD_DIR)
+                    _idx(
+                        identity_key=track_key,
+                        spotify_id=tid,
+                        content_hash=_ch(title, artist, track_info.get("duration_ms")),
+                        title=title,
+                        artist=artist,
+                        filename=result.get("filename", ""),
+                        final_path=final_filepath,
+                        genre_folder=_genre_folder,
+                    )
+                except Exception as _idx_err:
+                    logger.warning(f"[ingest] library_index write failed: {_idx_err}")
                 _emit("download_complete", {"title": title, "artist": artist, "status": "completed", "filename": result.get("filename", ""), "source": "ingest"})
 
                 # Post-processing warning (file downloaded but tagging/organizing failed)
@@ -502,6 +718,9 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
             _emit("download_error", {"title": title, "artist": artist, "error": str(e)[:100], "source": "ingest"})
 
         finally:
+            if _reserved:  # release in-progress reservation so the slot is freed for future cycles
+                with _registry_lock:
+                    _in_progress_registry.discard(track_key)
             completed_count[0] += 1
             pct = int((completed_count[0] / total) * 100)
             AUTO_STATUS["completed"] = completed_count[0]

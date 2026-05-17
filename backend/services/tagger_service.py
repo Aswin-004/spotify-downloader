@@ -15,8 +15,13 @@ import time  # MUSICBRAINZ
 import threading  # MUSICBRAINZ
 from difflib import SequenceMatcher  # MUSICBRAINZ
 
-# MUSICBRAINZ — MusicBrainz client
-import musicbrainzngs  # MUSICBRAINZ
+# MUSICBRAINZ — MusicBrainz client (optional — app degrades gracefully if absent)
+try:
+    import musicbrainzngs  # MUSICBRAINZ
+    _MB_AVAILABLE = True
+except ImportError:
+    musicbrainzngs = None  # type: ignore[assignment]
+    _MB_AVAILABLE = False
 
 # MUSICBRAINZ — Mutagen for ID3 tagging
 from mutagen.mp3 import MP3  # MUSICBRAINZ
@@ -62,11 +67,18 @@ except ImportError:  # MUSICBRAINZ
 # ═══════════════════════════════════════════════════════════════════
 # MUSICBRAINZ — Configuration
 # ═══════════════════════════════════════════════════════════════════
-musicbrainzngs.set_useragent(  # MUSICBRAINZ
-    "SpotifyDownloader",  # MUSICBRAINZ
-    "1.0",  # MUSICBRAINZ
-    "aswin.abhinab22@gmail.com",  # MUSICBRAINZ
-)  # MUSICBRAINZ
+if _MB_AVAILABLE:  # MUSICBRAINZ — only configure if import succeeded
+    musicbrainzngs.set_useragent(  # MUSICBRAINZ
+        "SpotifyDownloader",  # MUSICBRAINZ
+        "1.0",  # MUSICBRAINZ
+        "aswin.abhinab22@gmail.com",  # MUSICBRAINZ
+    )  # MUSICBRAINZ
+else:
+    logger.warning(
+        "[tagger] musicbrainzngs not installed — MusicBrainz enrichment disabled. "
+        "Run: pip install musicbrainzngs>=0.7.1  "
+        "Spotify tagging (BPM, key, camelot, artwork, TXXX) remains fully operational."
+    )
 
 # MUSICBRAINZ — Rate limiter: max 1 request per second (strict)
 _mb_lock = threading.Lock()  # MUSICBRAINZ
@@ -78,6 +90,24 @@ _PITCH_CLASS_MAP = {  # MUSICBRAINZ
     6: "F#", 7: "G", 8: "G#", 9: "A", 10: "A#", 11: "B",  # MUSICBRAINZ
 }  # MUSICBRAINZ
 _MODE_MAP = {0: "m", 1: ""}  # MUSICBRAINZ — 0=minor, 1=major
+
+# Camelot Wheel — (key_num, mode_num) → Camelot notation for harmonic mixing.
+# mode_num: 1 = major (B suffix), 0 = minor (A suffix).
+# Source: standard Camelot Wheel / Open Key mapping.
+_CAMELOT_MAP = {  # CAMELOT
+    (0,  1): "8B",  (0,  0): "5A",   # C  major / C  minor
+    (1,  1): "3B",  (1,  0): "12A",  # C# major / C# minor
+    (2,  1): "10B", (2,  0): "7A",   # D  major / D  minor
+    (3,  1): "5B",  (3,  0): "2A",   # D# major / D# minor
+    (4,  1): "12B", (4,  0): "9A",   # E  major / E  minor
+    (5,  1): "7B",  (5,  0): "4A",   # F  major / F  minor
+    (6,  1): "2B",  (6,  0): "11A",  # F# major / F# minor
+    (7,  1): "9B",  (7,  0): "6A",   # G  major / G  minor
+    (8,  1): "4B",  (8,  0): "1A",   # G# major / G# minor
+    (9,  1): "11B", (9,  0): "8A",   # A  major / A  minor
+    (10, 1): "6B",  (10, 0): "3A",   # A# major / A# minor
+    (11, 1): "1B",  (11, 0): "10A",  # B  major / B  minor
+}  # CAMELOT
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -158,6 +188,10 @@ def lookup_musicbrainz(title: str, artist: str, duration_ms: int = None) -> dict
     Returns best match dict if score > 60, else None.  # MUSICBRAINZ
     Results are cached in MongoDB with 30-day TTL.  # MUSICBRAINZ
     """  # MUSICBRAINZ
+    if not _MB_AVAILABLE:  # MUSICBRAINZ — graceful degraded mode
+        logger.debug("[tagger] musicbrainzngs unavailable — skipping MusicBrainz lookup")
+        return None
+
     cache_id = _cache_key(title, artist)  # MUSICBRAINZ
 
     # MUSICBRAINZ — Check cache first
@@ -279,12 +313,25 @@ def lookup_musicbrainz(title: str, artist: str, duration_ms: int = None) -> dict
 # MUSICBRAINZ — Spotify audio features (BPM + Key)
 # ═══════════════════════════════════════════════════════════════════
 
+_PITCH_CLASS_REVERSE = {v: k for k, v in _PITCH_CLASS_MAP.items()}  # MUSICBRAINZ
+
+
 def _get_audio_features(spotify_service, track_id: str) -> dict:  # MUSICBRAINZ
-    """Fetch BPM and musical key from Spotify audio features API."""  # MUSICBRAINZ
-    result = {"bpm": None, "key": None}  # MUSICBRAINZ
+    """
+    Fetch BPM, standard key, Camelot key, energy, and danceability from Spotify.
+
+    Returns dict with a '_source' key: 'spotify' | 'unavailable'.
+    Sets '_403' = True when the endpoint is deprecated for this auth flow.
+    """  # MUSICBRAINZ
+    result = {  # MUSICBRAINZ
+        "bpm": None, "key": None, "camelot": None,
+        "energy": None, "danceability": None,
+        "_source": "unavailable", "_403": False,
+    }
     if not spotify_service or not track_id:  # MUSICBRAINZ
         return result  # MUSICBRAINZ
     try:  # MUSICBRAINZ
+        import spotipy.exceptions  # MUSICBRAINZ
         sp = spotify_service.sp  # MUSICBRAINZ
         features = sp.audio_features([track_id])  # MUSICBRAINZ
         if features and features[0]:  # MUSICBRAINZ
@@ -292,10 +339,30 @@ def _get_audio_features(spotify_service, track_id: str) -> dict:  # MUSICBRAINZ
             tempo = f.get("tempo")  # MUSICBRAINZ
             if tempo and tempo > 0:  # MUSICBRAINZ
                 result["bpm"] = round(tempo)  # MUSICBRAINZ
-            key_num = f.get("key", -1)  # MUSICBRAINZ
+            key_num  = f.get("key",  -1)  # MUSICBRAINZ
             mode_num = f.get("mode", -1)  # MUSICBRAINZ
             if key_num >= 0 and mode_num >= 0:  # MUSICBRAINZ
-                result["key"] = _PITCH_CLASS_MAP.get(key_num, "") + _MODE_MAP.get(mode_num, "")  # MUSICBRAINZ
+                result["key"]     = _PITCH_CLASS_MAP.get(key_num, "") + _MODE_MAP.get(mode_num, "")  # MUSICBRAINZ
+                result["camelot"] = _CAMELOT_MAP.get((key_num, mode_num))  # CAMELOT
+            energy = f.get("energy")  # MUSICBRAINZ
+            if energy is not None:  # MUSICBRAINZ
+                result["energy"] = round(float(energy), 3)  # MUSICBRAINZ
+            danceability = f.get("danceability")  # MUSICBRAINZ
+            if danceability is not None:  # MUSICBRAINZ
+                result["danceability"] = round(float(danceability), 3)  # MUSICBRAINZ
+            result["_source"] = "spotify"  # MUSICBRAINZ
+    except spotipy.exceptions.SpotifyException as e:  # MUSICBRAINZ
+        if e.http_status == 403:
+            # Spotify deprecated GET /v1/audio-features for Client Credentials
+            # tokens on November 27, 2024. Caller should use librosa fallback.
+            result["_403"] = True
+            logger.warning(
+                "[tagger] Spotify audio-features returned 403 — endpoint deprecated "
+                "for app-only (client_credentials) tokens since Nov 2024. "
+                "BPM/key will be derived from local librosa analysis."
+            )
+        else:
+            logger.warning(f"[tagger] Spotify audio features failed (HTTP {e.http_status}): {e}")  # MUSICBRAINZ
     except Exception as e:  # MUSICBRAINZ
         logger.warning(f"[tagger] Spotify audio features failed: {e}")  # MUSICBRAINZ
     return result  # MUSICBRAINZ
@@ -349,9 +416,17 @@ def tag_file(  # MUSICBRAINZ
     needs_review = False  # MUSICBRAINZ
     bpm_val = None  # MUSICBRAINZ
     key_val = None  # MUSICBRAINZ
+    camelot_val = None  # CAMELOT
+    energy_val = None  # MUSICBRAINZ
+    danceability_val = None  # MUSICBRAINZ
     genre_val = ""  # MUSICBRAINZ
 
     # MUSICBRAINZ — Attempt MusicBrainz lookup if not provided
+    if not _MB_AVAILABLE and musicbrainz_data is None:
+        logger.warning(
+            "[tagger] Degraded mode — musicbrainzngs unavailable. "
+            "Tagging with Spotify metadata only (BPM/key/camelot/artwork still written)."
+        )
     if musicbrainz_data is None:  # MUSICBRAINZ
         try:  # MUSICBRAINZ
             musicbrainz_data = lookup_musicbrainz(  # MUSICBRAINZ
@@ -384,8 +459,40 @@ def tag_file(  # MUSICBRAINZ
     # MUSICBRAINZ — Fetch Spotify audio features (BPM, Key)
     track_id = spotify_metadata.get("id", "")  # MUSICBRAINZ
     audio_features = _get_audio_features(spotify_service_instance, track_id)  # MUSICBRAINZ
-    bpm_val = audio_features.get("bpm")  # MUSICBRAINZ
-    key_val = audio_features.get("key")  # MUSICBRAINZ
+    bpm_val      = audio_features.get("bpm")  # MUSICBRAINZ
+    key_val      = audio_features.get("key")  # MUSICBRAINZ
+    camelot_val  = audio_features.get("camelot")  # CAMELOT
+    energy_val   = audio_features.get("energy")  # MUSICBRAINZ
+    danceability_val = audio_features.get("danceability")  # MUSICBRAINZ
+
+    # LIBROSA FALLBACK — Spotify audio-features deprecated for client_credentials
+    # tokens (Nov 2024 → HTTP 403). Use local Krumhansl-Schmuckler analysis instead.
+    if bpm_val is None and file_path:
+        try:
+            from bpm_key_service import detect_bpm_and_key as _local_bpm, persist_audio_features as _persist_af
+            _path_lower = file_path.lower().replace("\\", "/")
+            _genre_hint = "dnb" if any(k in _path_lower for k in ("/dnb/", "/drum and bass/", "/d&b/")) else ""
+            local = _local_bpm(file_path, genre_hint=_genre_hint)
+            if local.get("analyzed"):
+                bpm_val = local.get("bpm")
+                key_root = local.get("key_root", "")
+                key_mode_str = local.get("key_mode", "")
+                camelot_val = local.get("camelot")
+                if key_root and key_mode_str:
+                    mode_num = 1 if key_mode_str == "maj" else 0
+                    key_num  = _PITCH_CLASS_REVERSE.get(key_root, -1)
+                    key_val  = key_root + ("m" if mode_num == 0 else "")
+                    if key_num >= 0 and not camelot_val:
+                        camelot_val = _CAMELOT_MAP.get((key_num, mode_num))
+                logger.info(
+                    f"[tagger] librosa fallback: BPM={bpm_val} key={key_val} "
+                    f"camelot={camelot_val}"
+                )
+                _sp_id = (spotify_metadata or {}).get("id", "")
+                if _sp_id:
+                    _persist_af(f"sp:{_sp_id}", local)
+        except Exception as _lb_exc:
+            logger.debug(f"[tagger] librosa fallback failed: {_lb_exc}")
 
     # MUSICBRAINZ — Merge metadata: MusicBrainz takes priority, Spotify fills gaps
     mb = musicbrainz_data or {}  # MUSICBRAINZ
@@ -446,14 +553,44 @@ def tag_file(  # MUSICBRAINZ
             tags_written.append("TCON")  # MUSICBRAINZ
 
         if bpm_val:  # MUSICBRAINZ
+            _bpm_int = str(round(float(bpm_val)))  # DJ HARDENING — integer BPM (Rekordbox rejects decimals)
             audio.delall("TBPM")  # MUSICBRAINZ
-            audio.add(TBPM(encoding=3, text=[str(bpm_val)]))  # MUSICBRAINZ
+            audio.add(TBPM(encoding=3, text=[_bpm_int]))  # MUSICBRAINZ
             tags_written.append("TBPM")  # MUSICBRAINZ
+            audio.delall("TXXX:BPM")  # DJ HARDENING — Rekordbox TXXX alias
+            audio.add(TXXX(encoding=3, desc="BPM", text=[_bpm_int]))  # DJ HARDENING
+            tags_written.append("TXXX:BPM")  # DJ HARDENING
 
         if key_val:  # MUSICBRAINZ
             audio.delall("TKEY")  # MUSICBRAINZ
             audio.add(TKEY(encoding=3, text=[key_val]))  # MUSICBRAINZ
             tags_written.append("TKEY")  # MUSICBRAINZ
+            audio.delall("TXXX:KEY")  # DJ HARDENING — Rekordbox 6+ reads TXXX:KEY
+            audio.add(TXXX(encoding=3, desc="KEY", text=[key_val]))  # DJ HARDENING
+            tags_written.append("TXXX:KEY")  # DJ HARDENING
+
+        if camelot_val:  # CAMELOT — Rekordbox/Serato read TXXX:INITIALKEY for harmonic key
+            audio.delall("TXXX:INITIALKEY")  # CAMELOT
+            audio.add(TXXX(encoding=3, desc="INITIALKEY", text=[camelot_val]))  # CAMELOT
+            tags_written.append("TXXX:INITIALKEY")  # CAMELOT
+            audio.delall("TXXX:CAMELOT")  # DJ HARDENING — explicit Camelot alias for Mixed In Key / VDJ
+            audio.add(TXXX(encoding=3, desc="CAMELOT", text=[camelot_val]))  # DJ HARDENING
+            tags_written.append("TXXX:CAMELOT")  # DJ HARDENING
+
+        if track_id:  # CAMELOT — persist Spotify ID for future re-routing/dedup
+            audio.delall("TXXX:SPOTIFY_ID")  # CAMELOT
+            audio.add(TXXX(encoding=3, desc="SPOTIFY_ID", text=[track_id]))  # CAMELOT
+            tags_written.append("TXXX:SPOTIFY_ID")  # CAMELOT
+
+        if energy_val is not None:  # CAMELOT
+            audio.delall("TXXX:ENERGY")  # CAMELOT
+            audio.add(TXXX(encoding=3, desc="ENERGY", text=[str(energy_val)]))  # CAMELOT
+            tags_written.append("TXXX:ENERGY")  # CAMELOT
+
+        if danceability_val is not None:  # CAMELOT
+            audio.delall("TXXX:DANCEABILITY")  # CAMELOT
+            audio.add(TXXX(encoding=3, desc="DANCEABILITY", text=[str(danceability_val)]))  # CAMELOT
+            tags_written.append("TXXX:DANCEABILITY")  # CAMELOT
 
         if tag_isrc:  # MUSICBRAINZ
             audio.delall("TSRC")  # MUSICBRAINZ
@@ -500,6 +637,9 @@ def tag_file(  # MUSICBRAINZ
         "needs_review": needs_review,  # MUSICBRAINZ
         "bpm": bpm_val,  # MUSICBRAINZ
         "key": key_val,  # MUSICBRAINZ
+        "camelot": camelot_val,  # CAMELOT
+        "energy": energy_val,  # MUSICBRAINZ
+        "danceability": danceability_val,  # MUSICBRAINZ
         "genre": genre_val,  # MUSICBRAINZ
     }  # MUSICBRAINZ
 
@@ -510,9 +650,9 @@ def tag_file(  # MUSICBRAINZ
 # MUSICBRAINZ — Store tagging report in download_history (MongoDB)
 # ═══════════════════════════════════════════════════════════════════
 
-def save_tagging_report(filename: str, report: dict):  # MUSICBRAINZ
+def save_tagging_report(filename: str, report: dict, spotify_id: str = None):  # MUSICBRAINZ
     """Persist tagging report to the download_history collection in MongoDB."""  # MUSICBRAINZ
     try:  # MUSICBRAINZ
-        update_tagging_report(filename, report)  # MUSICBRAINZ
+        update_tagging_report(filename, report, spotify_id=spotify_id)  # MUSICBRAINZ
     except Exception as e:  # MUSICBRAINZ
         logger.warning(f"[tagger] Failed to save tagging report to history: {e}")  # MUSICBRAINZ

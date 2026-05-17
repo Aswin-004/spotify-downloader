@@ -106,6 +106,44 @@ def _ensure_indexes():  # MUSICBRAINZ
         sparse=True,  # MUSICBRAINZ — sparse because user_id is optional
     )  # MUSICBRAINZ
 
+    # LIBRARY INDEX — O(1) dedup, replaces os.walk scan
+    db.library_index.create_index(
+        [("identity_key", 1)],
+        unique=True,
+        name="idx_identity_key",
+    )
+    db.library_index.create_index(
+        [("spotify_id", 1)],
+        sparse=True,
+        name="idx_lib_spotify_id",
+    )
+    db.library_index.create_index(
+        [("content_hash", 1)],
+        sparse=True,
+        name="idx_lib_content_hash",
+    )
+    # FINGERPRINT INDEX — Phase 13 audio fingerprinting
+    db.library_index.create_index(
+        [("audio_fingerprint", 1), ("fingerprint_source", 1)],
+        sparse=True,
+        name="idx_lib_fingerprint",
+    )
+
+    # ARTIST MEMORY — Phase 2 genre learning
+    db.artist_memory.create_index(
+        [("artist_key", 1)],
+        unique=True,
+        name="idx_am_artist_key",
+    )
+    db.artist_memory.create_index(
+        [("genre", 1), ("family", 1)],
+        name="idx_am_genre_family",
+    )
+    db.artist_memory.create_index(
+        [("last_seen", DESCENDING)],
+        name="idx_am_last_seen",
+    )
+
     logger.info("[database] MongoDB indexes ensured")  # MUSICBRAINZ
 
 
@@ -140,6 +178,11 @@ def get_musicbrainz_cache_collection():  # MUSICBRAINZ
 def get_tagging_failures_collection():  # MUSICBRAINZ
     """Return the tagging_failures collection."""  # MUSICBRAINZ
     return _get_db().tagging_failures  # MUSICBRAINZ
+
+
+def get_artist_memory_collection():
+    """Return the artist_memory collection (Phase 2 genre learning)."""
+    return _get_db().artist_memory
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -199,12 +242,23 @@ def get_recent_reports(limit: int = 50) -> list:  # MUSICBRAINZ
     return results  # MUSICBRAINZ
 
 
-def update_tagging_report(filename: str, tagging_report: dict):  # MUSICBRAINZ
-    """Attach a tagging report to an existing download_history document."""  # MUSICBRAINZ
+def update_tagging_report(filename: str, tagging_report: dict, spotify_id: str = None):  # MUSICBRAINZ
+    """Attach a tagging report to an existing download_history document.
+
+    Uses spotify_id as the primary lookup when provided — this survives
+    collision-suffix renames (_1, _2) applied during PASS 3 of the ingest
+    pipeline.  Falls back to filename so pre-patch records still update.
+    Never upserts — avoids creating phantom history entries.
+    """  # MUSICBRAINZ
     col = get_download_history_collection()  # MUSICBRAINZ
+    if spotify_id:  # MUSICBRAINZ
+        query = {"$or": [{"spotify_id": spotify_id}, {"filename": filename}]}  # MUSICBRAINZ
+    else:  # MUSICBRAINZ
+        query = {"filename": filename}  # MUSICBRAINZ
     col.update_one(  # MUSICBRAINZ
-        {"filename": filename},  # MUSICBRAINZ
+        query,  # MUSICBRAINZ
         {"$set": {"tagging_report": tagging_report}},  # MUSICBRAINZ
+        upsert=False,  # MUSICBRAINZ — never create phantom history entries
     )  # MUSICBRAINZ
 
 
@@ -301,3 +355,97 @@ def log_tagging_failure(  # MUSICBRAINZ
         },  # MUSICBRAINZ
         upsert=True,  # MUSICBRAINZ
     )  # MUSICBRAINZ
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LIBRARY INDEX — persistent O(1) dedup (Phase 5)
+# ═══════════════════════════════════════════════════════════════════
+
+def get_library_index_collection():
+    """Return the library_index collection."""
+    return _get_db().library_index
+
+
+def index_track(
+    identity_key: str,
+    spotify_id: str,
+    content_hash: str,
+    title: str,
+    artist: str,
+    filename: str,
+    final_path: str,
+    genre_folder: str = "",
+    genre_confidence: float = 0.0,
+    # Phase 13 — optional fingerprint fields
+    audio_fingerprint: str = "",
+    fingerprint_source: str = "",
+    fingerprint_confidence: float = 0.0,
+) -> bool:
+    """
+    Add or update a track in the library index.
+
+    Uses identity_key as the unique key (upsert). Returns True on insert
+    (new track), False on update (already indexed).
+    """
+    col = get_library_index_collection()
+    now = datetime.now(timezone.utc)
+    fields: dict = {
+        "spotify_id": spotify_id,
+        "content_hash": content_hash,
+        "title": title,
+        "artist": artist,
+        "filename": filename,
+        "final_path": final_path,
+        "genre_folder": genre_folder,
+        "genre_confidence": genre_confidence,
+        "last_seen": now,
+    }
+    # Only write fingerprint fields when provided — avoids overwriting good
+    # fingerprints with empty strings on routine metadata-only updates.
+    if audio_fingerprint:
+        fields["audio_fingerprint"] = audio_fingerprint
+        fields["fingerprint_source"] = fingerprint_source
+        fields["fingerprint_confidence"] = fingerprint_confidence
+    result = col.update_one(
+        {"identity_key": identity_key},
+        {"$set": fields, "$setOnInsert": {"indexed_at": now}},
+        upsert=True,
+    )
+    return result.upserted_id is not None
+
+
+def is_indexed(identity_key: str) -> bool:
+    """Return True if identity_key exists in the library index."""
+    col = get_library_index_collection()
+    return col.count_documents({"identity_key": identity_key}, limit=1) > 0
+
+
+def lookup_by_spotify_id(spotify_id: str) -> dict | None:
+    """Return the library_index document for a Spotify ID, or None."""
+    if not spotify_id:
+        return None
+    col = get_library_index_collection()
+    return col.find_one({"spotify_id": spotify_id}, {"_id": 0})
+
+
+def lookup_by_content_hash(ch: str) -> dict | None:
+    """Return the library_index document matching the content hash, or None."""
+    if not ch:
+        return None
+    col = get_library_index_collection()
+    return col.find_one({"content_hash": ch}, {"_id": 0})
+
+
+def remove_from_index(identity_key: str) -> bool:
+    """Remove a track from the library index. Returns True if a doc was deleted."""
+    col = get_library_index_collection()
+    result = col.delete_one({"identity_key": identity_key})
+    return result.deleted_count > 0
+
+
+def get_library_stats() -> dict:
+    """Return summary statistics for the library index."""
+    col = get_library_index_collection()
+    total = col.count_documents({})
+    genres = col.distinct("genre_folder")
+    return {"total_indexed": total, "genre_folders": sorted(genres)}

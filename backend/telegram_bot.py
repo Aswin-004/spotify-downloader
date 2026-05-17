@@ -304,6 +304,8 @@ HELP_TEXT = (
     "/reset_skipped — unblock all skipped tracks\n"
     "/storage       — disk usage of download directory\n"
     "/organize      — reorganise library into language/genre folders\n"
+    "/similar key   — top-5 similar tracks for an identity_key\n"
+    "/playlist key  — generate sequenced playlist (key [length] [flow])\n"
     "/help          — show this message\n\n"
     "Or send any Spotify link to download immediately."
 )
@@ -832,6 +834,143 @@ async def cmd_organize(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     t.start()
 
 
+# ─── /similar <identity_key> ──────────────────────────────────────
+
+@handle_command_error("cmd_similar")
+async def cmd_similar(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    if not await _auth_check(update):
+        return
+
+    user_id = update.effective_user.id
+    if not _rate_limiter.is_allowed(user_id):
+        reset = _rate_limiter.get_reset_time(user_id)
+        await update.message.reply_text(f"⏱️ Rate limited. Wait {reset}s.")
+        logger.warning(f"[cmd_similar] Rate limit: user {user_id}")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /similar &lt;identity_key&gt;", parse_mode="HTML"
+        )
+        return
+
+    identity_key = context.args[0]
+    try:
+        from library_analytics import find_similar_tracks
+        matches = find_similar_tracks(identity_key, top_k=5)
+    except Exception as e:
+        logger.error(f"[cmd_similar] error: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
+        return
+
+    if not matches:
+        await update.message.reply_text(
+            f"🔍 No similar tracks found for <code>{identity_key}</code>.",
+            parse_mode="HTML",
+        )
+        return
+
+    lines = [f"🎵 <b>Similar to</b> <code>{identity_key}</code>:\n"]
+    for i, m in enumerate(matches, 1):
+        cam  = (m.get("camelot") or "?")[:3]
+        bpm  = m.get("bpm") or "?"
+        harm = "✅" if m["harmonic_compatible"] else "⚪"
+        delt = m.get("bpm_delta")
+        delta_str = f"  Δbpm={delt}" if delt is not None else ""
+        lines.append(
+            f"{i}. {harm} <b>{m['title']}</b> — {m['artist']}\n"
+            f"   [{cam}] {bpm} bpm  score={m['score']}{delta_str}"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+# ─── /playlist <identity_key> [length] [flow] ─────────────────────
+
+@handle_command_error("cmd_playlist_seq")
+async def cmd_playlist_seq(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    if not await _auth_check(update):
+        return
+
+    user_id = update.effective_user.id
+    if not _rate_limiter.is_allowed(user_id):
+        reset = _rate_limiter.get_reset_time(user_id)
+        await update.message.reply_text(f"⏱️ Rate limited. Wait {reset}s.")
+        logger.warning(f"[cmd_playlist_seq] Rate limit: user {user_id}")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /playlist &lt;identity_key&gt; [length] [warmup|peak|cooldown|mixed]",
+            parse_mode="HTML",
+        )
+        return
+
+    identity_key = context.args[0]
+    length = 15
+    flow   = "mixed"
+    for arg in context.args[1:]:
+        if arg.isdigit():
+            length = max(5, min(30, int(arg)))
+        elif arg in ("warmup", "peak", "cooldown", "mixed"):
+            flow = arg
+
+    await update.message.reply_text(
+        f"🎧 Building <b>{flow}</b> playlist ({length} tracks) from seed...",
+        parse_mode="HTML",
+    )
+
+    chat_id = update.effective_chat.id
+    t = threading.Thread(
+        target=_run_playlist_thread,
+        args=(identity_key, length, flow, chat_id),
+        daemon=True,
+        name="tg-playlist",
+    )
+    t.start()
+
+
+def _run_playlist_thread(identity_key: str, length: int, flow: str, chat_id: int) -> None:
+    def _send(msg: str) -> None:
+        _send_message_sync(chat_id, msg)
+
+    try:
+        from library_analytics import generate_playlist_sequence
+        result = generate_playlist_sequence(identity_key, length=length, flow=flow)
+
+        if "error" in result:
+            _send(f"❌ {result['error']}")
+            return
+
+        q   = result["quality"]
+        seq = result["sequence"]
+        wt  = result["weak_transitions"]
+
+        lines = [
+            f"🎧 <b>Playlist [{flow.upper()}]</b>  {result['length_achieved']} tracks\n"
+            f"Score: {q['avg_transition_score']}  "
+            f"Harmonic: {q['harmonic_compatible_pct']}%  "
+            f"Weak: {q['weak_transitions']}\n",
+        ]
+        for tr in seq:
+            cam = (tr.get("camelot") or "?  ")[:3]
+            bpm = str(tr.get("bpm") or "?").rjust(5)
+            art = (tr.get("artist") or "")[:18]
+            ttl = (tr.get("title")  or "")[:22]
+            lines.append(f"{tr['position']:>2}. [{cam}] {bpm}  {art} — {ttl}")
+
+        if wt:
+            step_list = ", ".join(str(w["step"]) for w in wt[:5])
+            lines.append(f"\n⚠️ Weak transitions at steps: {step_list}")
+
+        _send("\n".join(lines))
+        logger.info(
+            f"[telegram_bot] /playlist done: {result['length_achieved']} tracks, flow={flow}"
+        )
+    except Exception as e:
+        logger.exception(f"[telegram_bot] /playlist thread error: {e}")
+        _send(f"❌ Playlist generation failed: {str(e)[:200]}")
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SPOTIFY LINK HANDLER
 # ═══════════════════════════════════════════════════════════════════
@@ -1064,6 +1203,8 @@ def _run_bot() -> None:
     ptb_app.add_handler(CommandHandler("reset_skipped", cmd_reset_skipped))
     ptb_app.add_handler(CommandHandler("storage",       cmd_storage))
     ptb_app.add_handler(CommandHandler("organize",      cmd_organize))
+    ptb_app.add_handler(CommandHandler("similar",       cmd_similar))
+    ptb_app.add_handler(CommandHandler("playlist",      cmd_playlist_seq))
 
     # ── /library Prev / Next pagination ──────────────────────────
     ptb_app.add_handler(

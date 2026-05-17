@@ -3,15 +3,34 @@ BPM and musical key detection service.
 Uses librosa to analyze downloaded MP3 files.
 Writes results to ID3 tags and MongoDB.
 """
-import os
+from datetime import datetime, timezone
 import numpy as np
 from pathlib import Path
 from loguru import logger
 from mutagen.id3 import ID3, TBPM, TKEY, error as ID3Error
 
+ANALYSIS_VERSION = "librosa-1.0"
+
 # Key detection constants
 PITCH_CLASSES = ['C', 'C#', 'D', 'D#', 'E', 'F',
                  'F#', 'G', 'G#', 'A', 'A#', 'B']
+
+_PITCH_TO_IDX = {p: i for i, p in enumerate(PITCH_CLASSES)}
+
+_CAMELOT_MAP = {
+    (0,  "maj"): "8B",  (0,  "min"): "5A",
+    (1,  "maj"): "3B",  (1,  "min"): "12A",
+    (2,  "maj"): "10B", (2,  "min"): "7A",
+    (3,  "maj"): "5B",  (3,  "min"): "2A",
+    (4,  "maj"): "12B", (4,  "min"): "9A",
+    (5,  "maj"): "7B",  (5,  "min"): "4A",
+    (6,  "maj"): "2B",  (6,  "min"): "11A",
+    (7,  "maj"): "9B",  (7,  "min"): "6A",
+    (8,  "maj"): "4B",  (8,  "min"): "1A",
+    (9,  "maj"): "11B", (9,  "min"): "8A",
+    (10, "maj"): "6B",  (10, "min"): "3A",
+    (11, "maj"): "1B",  (11, "min"): "10A",
+}
 
 # Krumhansl-Schmuckler key profiles
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
@@ -20,7 +39,7 @@ MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
                  2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 
 
-def detect_bpm_and_key(filepath: str) -> dict:
+def detect_bpm_and_key(filepath: str, genre_hint: str = "") -> dict:
     """
     Analyze an MP3 file and return BPM + musical key.
     Returns: {
@@ -81,8 +100,15 @@ def detect_bpm_and_key(filepath: str) -> dict:
             bpm = None
         else:
             # handle half/double tempo common in librosa
-            if bpm > 160:
-                bpm = bpm // 2
+            _dnb = genre_hint.lower() in ("dnb", "drum and bass", "drum & bass", "d&b")
+            if bpm > 190:
+                bpm = bpm // 2  # extreme double-tempo, safe for all genres
+            elif 155 <= bpm <= 190:
+                if not _dnb:
+                    bpm = bpm // 2  # double-tempo for non-DnB genres (house, bollywood, etc.)
+                # DnB: keep native tempo (160-180 BPM is correct)
+            elif 78 <= bpm <= 95 and _dnb:
+                bpm = bpm * 2  # librosa half-time lock on DnB snare pattern (×2 stays ≤190)
             elif bpm < 70:
                 bpm = bpm * 2
             logger.debug(f"BPM detected: {bpm}")
@@ -146,14 +172,28 @@ def detect_bpm_and_key(filepath: str) -> dict:
 
         logger.info(f"Key detected: {key_str} (confidence: {confidence:.2f})")
 
+        # --- Optional lightweight features (all scalars — no arrays stored) ---
+        camelot = None
+        if key_root and key_mode:
+            camelot = _CAMELOT_MAP.get((_PITCH_TO_IDX.get(key_root, -1), key_mode))
+
+        rms_energy            = float(np.mean(librosa.feature.rms(y=y)))
+        spectral_centroid_mean= float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
+        zero_crossing_rate    = float(np.mean(librosa.feature.zero_crossing_rate(y=y)))
+
         result.update({
-            "bpm":        bpm,
-            "key":        key_str,
-            "key_root":   key_root,
-            "key_mode":   key_mode,
-            "confidence": round(confidence, 3),
-            "analyzed":   True,
-            "error":      None
+            "bpm":                   bpm,
+            "key":                   key_str,
+            "key_root":              key_root,
+            "key_mode":              key_mode,
+            "camelot":               camelot,
+            "confidence":            round(confidence, 3),
+            "duration_sec":          round(duration, 2),
+            "rms_energy":            round(rms_energy, 6),
+            "spectral_centroid_mean":round(spectral_centroid_mean, 2),
+            "zero_crossing_rate":    round(zero_crossing_rate, 6),
+            "analyzed":              True,
+            "error":                 None,
         })
 
     except Exception as e:
@@ -161,6 +201,50 @@ def detect_bpm_and_key(filepath: str) -> dict:
         result["error"] = str(e)
 
     return result
+
+
+def persist_audio_features(identity_key: str, result: dict) -> bool:
+    """
+    Write audio analysis features to library_index as an additive sub-document.
+    Never touches final_path, genre_folder, routing, or identity fields.
+    Returns True on successful write, False if skipped or failed.
+    """
+    if not result.get("analyzed") or not identity_key:
+        return False
+    try:
+        from database import get_library_index_collection
+        col = get_library_index_collection()
+
+        if not col.count_documents({"identity_key": identity_key}, limit=1):
+            logger.debug(f"[bpm_key_service] identity_key not in library_index — skip persist: {identity_key}")
+            return False
+
+        now = datetime.now(timezone.utc)
+        audio_features: dict = {
+            "bpm":              result.get("bpm"),
+            "key":              result.get("key"),
+            "key_root":         result.get("key_root"),
+            "key_mode":         result.get("key_mode"),
+            "camelot":          result.get("camelot"),
+            "confidence":       result.get("confidence"),
+            "analysis_source":  "librosa",
+            "analysis_version": ANALYSIS_VERSION,
+            "analysis_timestamp": now.isoformat(),
+        }
+        for opt in ("duration_sec", "rms_energy", "spectral_centroid_mean", "zero_crossing_rate"):
+            val = result.get(opt)
+            if val is not None:
+                audio_features[opt] = val
+
+        col.update_one(
+            {"identity_key": identity_key},
+            {"$set": {"audio_features": audio_features}},
+        )
+        logger.debug(f"[bpm_key_service] audio_features persisted for {identity_key}")
+        return True
+    except Exception as e:
+        logger.error(f"[bpm_key_service] persist_audio_features failed for {identity_key}: {e}")
+        return False
 
 
 def write_bpm_key_to_tags(filepath: str, bpm: int, key: str) -> bool:

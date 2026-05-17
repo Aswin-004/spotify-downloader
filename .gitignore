@@ -67,3 +67,18 @@ build/
 
 # ── Legacy frontend (removed) ─────────────────────────────────────────────────
 frontend/
+
+# ── Generated analytics reports (produced by audit/analytics scripts) ─────────
+backend/reports/
+backend/reconciliation_report.json
+backend/sanitize_report.json
+backend/sanitize_verification.json
+
+# ── Migration runtime state (path lists, not source config) ───────────────────
+backend/migration_excludes.json
+
+# ── pyvis vendor assets (auto-copied alongside generated HTML output) ─────────
+# Regenerated each time library_analytics.py produces graph HTML via pyvis.
+# Source is: .venv/lib/site-packages/pyvis/lib/
+backend/lib/
+lib/

@@ -155,6 +155,18 @@ class SpotifyService:
             logger.warning(f"User OAuth failed: {e}")
             return None
     
+    def get_artist_genres(self, artist_name: str) -> list:
+        try:
+            results = self._call_with_backoff(
+                self.sp.search, q=artist_name, type="artist", limit=1
+            )
+            items = results.get("artists", {}).get("items", [])
+            if items:
+                return items[0].get("genres", [])
+        except Exception:
+            pass
+        return []
+
     def get_track_metadata(self, spotify_url):
         """
         Fetch track metadata from Spotify (cache-first).
@@ -445,3 +457,164 @@ def get_spotify_service():
     if spotify_service is None:
         spotify_service = SpotifyService()
     return spotify_service
+
+
+def diagnose_audio_features(track_id: str | None = None) -> dict:
+    """
+    Probe GET /v1/audio-features and document why it returns 403.
+
+    Writes reports/spotify_audio_features_diagnostics.json.
+    Returns the diagnostics dict.
+    """
+    import json
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    _FALLBACK_TRACK_ID = "4iV5W9uYEdYUVa79Axb7Rh"   # The Weeknd — Blinding Lights
+    probe_id = track_id or _FALLBACK_TRACK_ID
+
+    diag: dict = {
+        "generated_at":        datetime.now(timezone.utc).isoformat(),
+        "probe_track_id":      probe_id,
+        "auth_flow":           "SpotifyClientCredentials (app-only, no user scopes)",
+        "token_type":          "client_credentials",
+        "scopes_granted":      [],
+        "oauth_user_available": False,
+        "oauth_user_scopes":   [],
+        "failing_endpoint":    f"GET /v1/audio-features?ids={probe_id}",
+        "response_body":       {},
+        "http_status":         None,
+        "successful_endpoints": [],
+        "failed_endpoints":    [],
+        "root_cause":          "",
+        "exact_fix":           "",
+        "fallback":            "",
+    }
+
+    try:
+        svc = get_spotify_service()
+        sp  = svc.sp
+
+        # ── 1. Token introspection ─────────────────────────────────────────
+        try:
+            token_info = sp.auth_manager.get_access_token(as_dict=True)
+            diag["scopes_granted"] = (token_info.get("scope") or "").split() or []
+        except Exception as e:
+            diag["scopes_granted"] = [f"(could not read: {e})"]
+
+        # ── 2. Probe a working endpoint: GET /v1/tracks/{id} ──────────────
+        try:
+            track = svc._call_with_backoff(sp.track, probe_id)
+            title  = (track or {}).get("name", "unknown")
+            diag["successful_endpoints"].append({
+                "endpoint": f"GET /v1/tracks/{probe_id}",
+                "status":   200,
+                "note":     f"returned: '{title}'",
+            })
+        except Exception as e:
+            diag["successful_endpoints"].append({
+                "endpoint": f"GET /v1/tracks/{probe_id}",
+                "status":   "error",
+                "note":     str(e),
+            })
+
+        # ── 3. Probe the failing endpoint: GET /v1/audio-features ─────────
+        try:
+            import spotipy.exceptions
+            features = svc._call_with_backoff(sp.audio_features, [probe_id])
+            diag["http_status"] = 200
+            diag["response_body"] = features[0] if features and features[0] else {}
+            diag["successful_endpoints"].append({
+                "endpoint": f"GET /v1/audio-features?ids={probe_id}",
+                "status":   200,
+                "note":     "succeeded — endpoint may still be live for this app",
+            })
+        except spotipy.exceptions.SpotifyException as e:
+            diag["http_status"]  = e.http_status
+            diag["response_body"] = {"error": {"status": e.http_status, "message": str(e.msg)}}
+            diag["failed_endpoints"].append({
+                "endpoint": f"GET /v1/audio-features?ids={probe_id}",
+                "status":   e.http_status,
+                "message":  str(e),
+            })
+        except Exception as e:
+            diag["http_status"]  = "unknown"
+            diag["response_body"] = {"error": str(e)}
+            diag["failed_endpoints"].append({
+                "endpoint": f"GET /v1/audio-features?ids={probe_id}",
+                "status":   "exception",
+                "message":  str(e),
+            })
+
+        # ── 4. Check user OAuth availability and its scopes ───────────────
+        try:
+            user_sp = svc._get_user_sp()
+            if user_sp:
+                diag["oauth_user_available"] = True
+                try:
+                    token_info = user_sp.auth_manager.get_cached_token()
+                    diag["oauth_user_scopes"] = (
+                        (token_info or {}).get("scope", "").split()
+                    )
+                except Exception:
+                    diag["oauth_user_scopes"] = ["(could not read)"]
+            else:
+                diag["oauth_user_available"] = False
+        except Exception:
+            diag["oauth_user_available"] = False
+
+    except Exception as outer:
+        diag["root_cause"] = f"SpotifyService initialisation failed: {outer}"
+
+    # ── 5. Root cause analysis ─────────────────────────────────────────────
+    status = diag["http_status"]
+    if status == 403:
+        diag["root_cause"] = (
+            "Spotify deprecated GET /v1/audio-features for Client Credentials "
+            "(app-only) tokens effective November 27, 2024. "
+            "The endpoint now returns HTTP 403 Forbidden for all requests that "
+            "carry an app token (client_credentials flow) instead of a user OAuth "
+            "token. Track lookups (GET /v1/tracks) are unaffected."
+        )
+        diag["exact_fix"] = (
+            "In tagger_service._get_audio_features, catch SpotifyException(403) and "
+            "fall back to bpm_key_service.detect_bpm_and_key(file_path) (librosa). "
+            "Pass the file_path through _get_audio_features or call librosa directly "
+            "from tag_file after audio_features returns all-null."
+        )
+        diag["fallback"] = (
+            "Use bpm_key_service.detect_bpm_and_key() — Krumhansl-Schmuckler "
+            "librosa-based local analysis already present in the codebase. "
+            "No network access required. BPM accuracy ~±2–3 BPM vs Spotify's ±1 BPM."
+        )
+    elif status == 200:
+        diag["root_cause"] = (
+            "audio-features returned 200 for this app/token. "
+            "The endpoint may still be live for apps registered before Nov 27, 2024 "
+            "but is at risk of deprecation. Monitor for future 403s."
+        )
+        diag["exact_fix"] = "Add 403 fallback to librosa as a precaution (see fallback field)."
+        diag["fallback"]  = (
+            "bpm_key_service.detect_bpm_and_key() as defensive fallback."
+        )
+    elif status is None:
+        diag["root_cause"] = "Spotify service could not be initialised — check credentials."
+        diag["exact_fix"]  = "Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in .env."
+        diag["fallback"]   = "bpm_key_service.detect_bpm_and_key() works offline with no Spotify required."
+    else:
+        diag["root_cause"] = f"Unexpected HTTP {status} — see response_body."
+        diag["exact_fix"]  = "Inspect response_body for Spotify error detail."
+        diag["fallback"]   = "bpm_key_service.detect_bpm_and_key() as fallback."
+
+    # ── 6. Persist report ──────────────────────────────────────────────────
+    reports_dir = Path(__file__).resolve().parent.parent / "reports"
+    try:
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        rpath = reports_dir / "spotify_audio_features_diagnostics.json"
+        rpath.write_text(json.dumps(diag, indent=2, default=str), encoding="utf-8")
+        logger.info(f"[diag] Audio-features report → {rpath}")
+        diag["report_path"] = str(rpath)
+    except Exception as e:
+        logger.warning(f"[diag] Failed to write report: {e}")
+
+    return diag

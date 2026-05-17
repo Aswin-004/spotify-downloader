@@ -164,6 +164,25 @@ def normalize(text):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# FILE ACCESS RETRY HELPER (WinError 32 — file locked by yt-dlp/ffmpeg)
+# ═══════════════════════════════════════════════════════════════════
+
+def _retry_file_op(fn, *args, attempts=3, delay=0.5, **kwargs):
+    """Retry a file operation up to `attempts` times with `delay` seconds between tries.
+    Handles WinError 32 (file in use) and other transient OS errors."""
+    last_err = None
+    for i in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except (OSError, PermissionError) as e:
+            last_err = e
+            if i < attempts - 1:
+                logger.warning(f"File op retry {i+1}/{attempts}: {e}")
+                time.sleep(delay)
+    raise last_err
+
+
+# ═══════════════════════════════════════════════════════════════════
 # AUDIO POST-PROCESSING HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
@@ -598,19 +617,20 @@ class DownloaderService:
                     output_dir=actual_dir, duration_ms=duration_ms,
                     spotify_title=title, artist=artist,
                 )
-                filepath = os.path.join(actual_dir, filename)
+                filepath = os.path.abspath(os.path.join(actual_dir, filename))
+                logger.info(f"[stage:download] filepath={filepath}")
 
-                # ── CHANGED: post-download file-size check now uses 320 kbps ──
+                # Post-download file-size check (5× threshold — wrong-track guard only)
                 if duration_ms and duration_ms > 0 and os.path.isfile(filepath):
                     expected_bytes = (duration_ms / 1000.0) * (320_000 / 8)
-                    actual_bytes = os.path.getsize(filepath)
-                    if actual_bytes > expected_bytes * 3:
+                    actual_bytes = _retry_file_op(os.path.getsize, filepath)
+                    if actual_bytes > expected_bytes * 5:
                         logger.warning(f"File too large: {actual_bytes}B vs ~{expected_bytes:.0f}B expected")
                         os.remove(filepath)
                         raise Exception(f"Downloaded file too large ({actual_bytes/1024/1024:.1f}MB) — wrong track")
 
                 download_success = True
-                logger.info(f"Track downloaded successfully: {filename}")
+                logger.info(f"Track downloaded successfully: {filename} | path={filepath}")
 
             except Exception as download_error:
                 logger.error(f"Auto-download FAILED for '{title}' by '{artist}': {download_error}")
@@ -639,10 +659,31 @@ class DownloaderService:
             # STAGE 2+: POST-PROCESSING (errors here DON'T cause retry)
             # ────────────────────────────────────────────────────────────────
             
-            if not download_success or not filepath or not os.path.isfile(filepath):
+            if not download_success or not filepath:
                 return {
                     "status": "failed",
                     "error": "Download succeeded but file not found at expected location",
+                    "filename": filename,
+                }
+
+            # Rescue: if file exists and is non-trivial, treat as success regardless
+            # of any intermediate flag state (guards against WinError path race)
+            if not os.path.isfile(filepath):
+                # Last chance — check with abspath in case path drift occurred
+                abs_fp = os.path.abspath(filepath)
+                if os.path.isfile(abs_fp) and os.path.getsize(abs_fp) > 1000:
+                    logger.info(f"[rescue] File found via abspath: {abs_fp}")
+                    filepath = abs_fp
+                else:
+                    return {
+                        "status": "failed",
+                        "error": "Download succeeded but file not found at expected location",
+                        "filename": filename,
+                    }
+            elif os.path.getsize(filepath) <= 1000:
+                return {
+                    "status": "failed",
+                    "error": "Downloaded file is too small (likely corrupt)",
                     "filename": filename,
                 }
 
@@ -652,15 +693,19 @@ class DownloaderService:
 
             # ── NEW: Post-processing pipeline ──────────────────────────
             ffmpeg_bin = _find_ffmpeg_binary()
+            logger.info(f"[stage:post-process] filepath={filepath}")
 
             # 1. Silence trimming
             trim_ok = _trim_silence(filepath, ffmpeg_bin)  # QUALITY UPGRADE
+            logger.info(f"[stage:trim] ok={trim_ok} filepath={filepath}")
 
             # 2. Loudness normalisation
             norm_ok = _apply_loudnorm(filepath, ffmpeg_bin)
+            logger.info(f"[stage:loudnorm] ok={norm_ok} filepath={filepath}")
 
             # 3. Embed album art
             art_ok = _embed_album_art(filepath, album_art_url)
+            logger.info(f"[stage:art-embed] ok={art_ok} filepath={filepath}")
 
             # ── NEW: Build + persist + emit quality report ─────────────
             expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
@@ -699,6 +744,7 @@ class DownloaderService:
             _emit_quality_report(report)
 
             # ─── STAGE 2A: TAGGING (errors captured, not fatal) ─────────────
+            logger.info(f"[stage:tagging] filepath={filepath}")
             tagging_report = None  # TAGGING INTEGRATION
             if _TAGGER_AVAILABLE:  # TAGGING INTEGRATION
                 try:  # TAGGING INTEGRATION
@@ -711,14 +757,19 @@ class DownloaderService:
                         "duration_ms": duration_ms,  # TAGGING INTEGRATION
                         "release_date": getattr(self, '_last_release_date', ''),  # TAGGING INTEGRATION
                     }  # TAGGING INTEGRATION
+                    try:  # TAGGING INTEGRATION — lazy import; avoids circular dep at module load
+                        from services.spotify_service import get_spotify_service as _gss  # TAGGING INTEGRATION
+                        _sp_for_tagger = _gss()  # TAGGING INTEGRATION
+                    except Exception:  # TAGGING INTEGRATION
+                        _sp_for_tagger = None  # TAGGING INTEGRATION
                     tagging_report = _tag_file(  # TAGGING INTEGRATION
                         filepath,  # TAGGING INTEGRATION
                         spotify_meta,  # TAGGING INTEGRATION
-                        spotify_service_instance=None,  # TAGGING INTEGRATION
+                        spotify_service_instance=_sp_for_tagger,  # TAGGING INTEGRATION
                     )  # TAGGING INTEGRATION
                     logger.info(f"[tagger] Tagging complete: {filename} — source={tagging_report.get('source')}, tags={len(tagging_report.get('tags_written', []))}")  # TAGGING INTEGRATION
                     # TAGGING INTEGRATION — Persist tagging report to download_history
-                    _save_tagging_report(filename, tagging_report)  # TAGGING INTEGRATION
+                    _save_tagging_report(filename, tagging_report, spotify_id=spotify_meta.get("id", ""))  # TAGGING INTEGRATION
                     # TAGGING INTEGRATION — Emit tagging_complete event via Socket.IO
                     if _socketio:  # TAGGING INTEGRATION
                         _socketio.emit("tagging_complete", {  # TAGGING INTEGRATION
@@ -738,6 +789,7 @@ class DownloaderService:
                 except Exception as _bpm_err:  # BPM/KEY
                     logger.warning(f"BPM/key analysis failed (non-critical): {_bpm_err}")  # BPM/KEY
 
+            logger.info(f"[stage:complete] final filepath={filepath}")
             # ─── BUILD SUCCESS RESPONSE (file exists = success, even if post-processing failed) ───
             result = {
                 "status": "success",
@@ -892,19 +944,22 @@ class DownloaderService:
             _info_entry = info.get('entries', [info])[0] if info.get('entries') else info  # QUALITY UPGRADE
             self._last_format_downloaded = _info_entry.get('ext', 'unknown') if _info_entry else 'unknown'  # QUALITY UPGRADE
 
+        # Allow yt-dlp/ffmpeg to release file handles before we touch the file (WinError 32)
+        time.sleep(1.5)
+
         # Resolve filename
         if output_filename:
-            expected_path = os.path.join(actual_dir, f'{output_filename}.mp3')
-            if os.path.isfile(expected_path) and os.path.getsize(expected_path) > 1000:
+            expected_path = os.path.abspath(os.path.join(actual_dir, f'{output_filename}.mp3'))
+            if _retry_file_op(os.path.isfile, expected_path) and _retry_file_op(os.path.getsize, expected_path) > 1000:
                 result_name = f'{output_filename}.mp3'
-                logger.info(f"Downloaded via {source_name}: {result_name} ({os.path.getsize(expected_path)} bytes)")
+                logger.info(f"Downloaded via {source_name}: {result_name} ({os.path.getsize(expected_path)} bytes) | path={expected_path}")
                 return result_name
         else:
             filename = self._resolve_downloaded_filename(info, actual_dir)
             if filename:
-                filepath = os.path.join(actual_dir, filename)
-                if os.path.getsize(filepath) > 1000:
-                    logger.info(f"Downloaded via {source_name}: {filename} ({os.path.getsize(filepath)} bytes)")
+                filepath = os.path.abspath(os.path.join(actual_dir, filename))
+                if _retry_file_op(os.path.getsize, filepath) > 1000:
+                    logger.info(f"Downloaded via {source_name}: {filename} ({os.path.getsize(filepath)} bytes) | path={filepath}")
                     return filename
 
         raise Exception(f"[{source_name}] Audio file not created or too small")
@@ -1077,7 +1132,7 @@ class DownloaderService:
             spotify_title=spotify_title or query,
             artist=artist or "",
             expected_duration_sec=int(expected_secs) if expected_secs else None,
-            min_score=0.5,
+            min_score=0.35,
         )
 
         if not best_candidate:
@@ -1145,6 +1200,47 @@ class DownloaderService:
         except Exception as e:
             logger.error(f"Error deleting file: {e}")
             return {"success": False, "message": f"Error deleting file: {e}"}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# GENRE ENRICHMENT HELPER
+# ═══════════════════════════════════════════════════════════════════
+
+def infer_genre_from_title(title: str):
+    t = (title or "").lower()
+    if "techno" in t: return "techno"
+    if "house" in t: return "house"
+    if "afro" in t: return "afro house"
+    if "garage" in t: return "uk garage"
+    if "dnb" in t or "drum and bass" in t: return "dnb"
+    if "dubstep" in t: return "dubstep"
+    return None
+
+
+def enrich_metadata_with_genres(metadata: dict) -> dict:
+    """Attach Spotify artist genres to a metadata dict. Fails silently."""
+    try:
+        from services.spotify_service import spotify_service
+        artist = metadata.get("artist")
+        artist_genres = spotify_service.get_artist_genres(artist)
+        metadata["genres"] = artist_genres or []
+        metadata["genres"] = [g for g in metadata["genres"] if isinstance(g, str) and g.strip()]
+        # logger.info(f"[genre-source] spotify={metadata['genres']}")
+    except Exception:
+        metadata.setdefault("genres", [])
+
+    if not isinstance(metadata.get("genres"), list):
+        metadata["genres"] = []
+
+    yt_genre = infer_genre_from_title(metadata.get("title", ""))
+    if yt_genre:
+        metadata.setdefault("genres", [])
+        yt_genre = yt_genre.strip()
+        existing = {g.lower() for g in metadata["genres"]}
+        if yt_genre.lower() not in existing:
+            metadata["genres"].append(yt_genre)
+
+    return metadata
 
 
 # ═══════════════════════════════════════════════════════════════════

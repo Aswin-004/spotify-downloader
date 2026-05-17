@@ -31,7 +31,7 @@ except ImportError:
 
 # Hard duration ceiling — reject any candidate with diff > this many seconds
 # Applied as final validation BEFORE download (Step 10).
-HARD_DURATION_LIMIT_SEC = 30
+HARD_DURATION_LIMIT_SEC = 60
 
 # ═══════════════════════════════════════════════════════════════════
 # STRICT REJECTION KEYWORDS — mandatory hard filter (Step 2)
@@ -39,7 +39,7 @@ HARD_DURATION_LIMIT_SEC = 30
 # ═══════════════════════════════════════════════════════════════════
 
 REJECT_KEYWORDS = [
-    "remix", "karaoke", "instrumental", "lofi", "lo-fi",
+    "karaoke", "instrumental", "lofi", "lo-fi",
     "slowed", "reverb", "8d", "nightcore",
     "cover", "edit", "version",
     "bass boosted", "sped up", "tiktok", "clip",
@@ -51,7 +51,7 @@ REJECT_KEYWORDS = [
 BLACKLISTED_KEYWORDS = [  # QUALITY UPGRADE
     'cover', 'karaoke', 'nightcore',  # QUALITY UPGRADE
     'sped up', 'reverb', 'slowed',  # QUALITY UPGRADE
-    'remix', 'mashup', 'parody',  # QUALITY UPGRADE
+    'mashup', 'parody',  # QUALITY UPGRADE
 ]  # QUALITY UPGRADE
 
 
@@ -78,6 +78,16 @@ TITLE_NOISE_PATTERNS = [
     (r'\[audio\]', '', re.IGNORECASE),
     (r'\s*-\s*(official|audio|music)\s*(video|audio)?\s*$', '', re.IGNORECASE),
     (r'\s*feat\.?\s+.*$', '', re.IGNORECASE),
+    # ── Event-rip / DJ-city noise ─────────────────────────────────────────
+    (r'\bdjcity\b',            '', re.IGNORECASE),
+    (r'\bfree\s*download\b',   '', re.IGNORECASE),
+    (r'\bout\s*now\b',         '', re.IGNORECASE),
+    (r'\bofficial\s*video\b',  '', re.IGNORECASE),
+    (r'\bvisualizer\b',        '', re.IGNORECASE),
+    (r'\b320\s*kbps\b',        '', re.IGNORECASE),
+    (r'\bdj\s*version\b',      '', re.IGNORECASE),
+    (r'\byt\s*rip\b',          '', re.IGNORECASE),
+    (r'\byoutube\s*rip\b',     '', re.IGNORECASE),
 ]
 
 # ═══════════════════════════════════════════════════════════════════
@@ -170,15 +180,17 @@ def duration_score(actual_sec: Optional[int], expected_sec: Optional[int]) -> fl
 
     diff = abs(actual_sec - expected_sec)
 
-    # QUALITY UPGRADE: tighter tiered scoring — ±2/5/10/30
-    if diff <= 2:  # QUALITY UPGRADE
-        return 1.0  # QUALITY UPGRADE — perfect match
-    elif diff <= 5:  # QUALITY UPGRADE
-        return 0.8  # QUALITY UPGRADE — good match
-    elif diff <= 10:  # QUALITY UPGRADE
-        return 0.5  # QUALITY UPGRADE — acceptable
-    elif diff <= 30:  # QUALITY UPGRADE
-        return 0.2  # QUALITY UPGRADE — poor match
+    # Tiered scoring — ±2/5/10/30/60
+    if diff <= 2:
+        return 1.0  # perfect match
+    elif diff <= 5:
+        return 0.8  # good match
+    elif diff <= 10:
+        return 0.5  # acceptable
+    elif diff <= 30:
+        return 0.2  # poor match
+    elif diff <= 60:
+        return 0.1  # marginal — within tolerance
     else:
         return 0.0
 
@@ -197,7 +209,7 @@ def duration_match(actual_duration_sec: int, expected_duration_sec: int) -> Tupl
 def final_duration_check(actual_sec: Optional[int], expected_sec: Optional[int]) -> bool:
     """
     Step 10: Final hard validation before download.
-    Reject if duration difference exceeds HARD_DURATION_LIMIT_SEC (30s).
+    Reject if duration difference exceeds HARD_DURATION_LIMIT_SEC (60s).
     """
     if not actual_sec or not expected_sec:
         return True  # Can't check — allow
@@ -286,20 +298,14 @@ def score_candidate(
     if 'vevo' in uploader_lower:
         official_bonus += 0.10  # VEVO verified partner
 
-    # ── CHANGED: Heavy penalty when duration exceeds ±2 s ──
-    tight_penalty = 0.0
-    if actual_duration_sec and expected_duration_sec:
-        if abs(actual_duration_sec - expected_duration_sec) > 2:
-            tight_penalty = -0.50  # heavy penalty
-
     # ── STEP 5: Weighted final score ──
-    final = (0.5 * title_score) + (0.3 * artist_score) + (0.2 * dur_score) + official_bonus + verified_bonus + tight_penalty
+    final = (0.5 * title_score) + (0.3 * artist_score) + (0.2 * dur_score) + official_bonus + verified_bonus
     final = max(0.0, min(1.0, final))
 
     logger.info(
         f"Candidate: \"{yt_title}\" | "
         f"title={title_score:.2f} artist={artist_score:.2f} dur={dur_score:.2f} "
-        f"official={official_bonus:.2f} verified={verified_bonus:.2f} tight_pen={tight_penalty:.2f} → score={final:.2f}"
+        f"official={official_bonus:.2f} verified={verified_bonus:.2f} → score={final:.2f}"
     )
 
     return final, rejections
@@ -310,7 +316,7 @@ def select_best_candidate(
     spotify_title: str,
     artist: str,
     expected_duration_sec: Optional[int],
-    min_score: float = 0.5,
+    min_score: float = 0.35,
 ) -> Tuple[Optional[Dict], str]:
     """
     Step 7+8: Accept candidates >= min_score, sort descending, pick best.

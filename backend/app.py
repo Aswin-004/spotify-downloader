@@ -1385,6 +1385,37 @@ def _storage_monitor():  # NOTIFICATION
         time.sleep(1800)  # NOTIFICATION — check every 30 minutes
 
 
+@app.route('/api/library/organize', methods=['POST'])
+def library_organize():
+    data = request.get_json(silent=True) or {}
+    mode = data.get('mode', 'artist')
+    if mode not in ('artist', 'genre', 'artist_genre'):
+        return jsonify({"success": False, "error": f"Invalid mode: {mode}"}), 400
+    try:
+        from services.organizer_service import organize_library
+        result = organize_library(mode=mode)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        logger.error(f"[library/organize] {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/library/organize-recent', methods=['POST'])
+def library_organize_recent():
+    data  = request.get_json(silent=True) or {}
+    mode  = data.get('mode', 'artist')
+    hours = int(data.get('hours', 24))
+    if mode not in ('artist', 'genre', 'artist_genre'):
+        return jsonify({"success": False, "error": f"Invalid mode: {mode}"}), 400
+    try:
+        from services.organizer_service import organize_recent
+        result = organize_recent(mode=mode, hours=hours)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        logger.error(f"[library/organize-recent] {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.errorhandler(404)
 def not_found(e):
     """Handle 404 errors"""
@@ -1434,6 +1465,21 @@ if __name__ == '__main__':
         # NOTIFICATION — Start storage monitor background task
         socketio.start_background_task(target=_storage_monitor)  # NOTIFICATION
         logger.info("Storage monitor background task started")  # NOTIFICATION
+
+        # BACKGROUND SERVICES — metrics indexes + maintenance daemon
+        try:
+            from services.metrics_service import _ensure_once as _metrics_init
+            _metrics_init()
+            logger.info("[startup] Metrics service: TTL indexes ensured")
+        except Exception as _svc_err:
+            logger.warning(f"[startup] Metrics service skipped: {_svc_err}")
+
+        try:
+            from services.maintenance_worker import start_maintenance
+            start_maintenance()
+            # fingerprint_service and reclassification_service run as maintenance tasks
+        except Exception as _svc_err:
+            logger.warning(f"[startup] Maintenance worker skipped: {_svc_err}")
 
         # START TELEGRAM BOT
         _telegram_bot_started = False
