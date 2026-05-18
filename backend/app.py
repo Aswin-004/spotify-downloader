@@ -10,6 +10,9 @@ from flask_socketio import SocketIO, emit
 import json
 import logging
 import os
+import re as _re
+import subprocess
+import sys as _sys
 import threading
 import time
 from pathlib import Path
@@ -246,6 +249,75 @@ socketio.start_background_task(target=_auto_status_emitter)
 def index():
     """Serve the frontend"""
     return send_from_directory('../frontend-react/dist', 'index.html')
+
+
+@app.route('/api/maintenance/status', methods=['GET'])
+def maintenance_status():
+    return jsonify({"running": _maintenance_running})
+
+
+@app.route('/api/maintenance/run', methods=['POST'])
+def maintenance_run():
+    global _maintenance_running
+    data   = request.get_json() or {}
+    task   = (data.get("task") or "").strip()
+    dry    = bool(data.get("dry_run", False))
+    passes = data.get("passes", [1, 2, 3, 4])
+    limit  = int(data.get("limit") or 0)
+
+    if task not in _MAINTENANCE_SCRIPTS:
+        return jsonify({"error": "unknown task"}), 400
+
+    with _maintenance_lock:
+        if _maintenance_running:
+            return jsonify({"error": "A maintenance task is already running"}), 409
+        _maintenance_running = True
+
+    script = _MAINTENANCE_SCRIPTS[task]
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+
+    def _emit(line, done=False, exit_code=None):
+        payload = {"task": task, "line": line, "done": done}
+        if exit_code is not None:
+            payload["exit_code"] = exit_code
+        socketio.emit("maintenance_log", payload)
+
+    def run_task():
+        global _maintenance_running
+        args = [_sys.executable, script]
+        if dry:
+            args.append("--dry-run")
+        if task == "backfill_gemini":
+            for p in passes:
+                args.append(f"--pass{p}")
+            if limit:
+                args += ["--limit", str(limit)]
+
+        try:
+            proc = subprocess.Popen(
+                args,
+                cwd=backend_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            _emit(f"▶ Started: {' '.join(args[1:])}")
+            for raw in proc.stdout:
+                line = _strip_line(raw)
+                if line:
+                    _emit(line)
+            proc.wait()
+            _emit(f"{'✓ Done' if proc.returncode == 0 else '✗ Failed'} (exit {proc.returncode})",
+                  done=True, exit_code=proc.returncode)
+        except Exception as exc:
+            _emit(f"Error: {exc}", done=True, exit_code=1)
+        finally:
+            with _maintenance_lock:
+                _maintenance_running = False
+
+    threading.Thread(target=run_task, daemon=True).start()
+    return jsonify({"started": True, "task": task}), 202
 
 
 @app.route('/<path:filename>', methods=['GET'])
@@ -1552,10 +1624,6 @@ _MAINTENANCE_SCRIPTS = {
     "backfill_gemini": "backfill_gemini.py",
 }
 
-import subprocess
-import sys as _sys
-import re as _re
-
 _ANSI_RE = _re.compile(r'\x1b\[[0-9;]*m')
 _LOGURU_RE = _re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \| (DEBUG|INFO)\s+\|')
 
@@ -1564,74 +1632,6 @@ def _strip_line(raw: str) -> str:
     if _LOGURU_RE.match(clean):
         return ''
     return clean
-
-@app.route('/api/maintenance/status', methods=['GET'])
-def maintenance_status():
-    return jsonify({"running": _maintenance_running})
-
-
-@app.route('/api/maintenance/run', methods=['POST'])
-def maintenance_run():
-    global _maintenance_running
-    data   = request.get_json() or {}
-    task   = (data.get("task") or "").strip()
-    dry    = bool(data.get("dry_run", False))
-    passes = data.get("passes", [1, 2, 3, 4])
-    limit  = int(data.get("limit") or 0)
-
-    if task not in _MAINTENANCE_SCRIPTS:
-        return jsonify({"error": "unknown task"}), 400
-
-    with _maintenance_lock:
-        if _maintenance_running:
-            return jsonify({"error": "A maintenance task is already running"}), 409
-        _maintenance_running = True
-
-    script = _MAINTENANCE_SCRIPTS[task]
-    backend_dir = os.path.dirname(os.path.abspath(__file__))
-
-    def _emit(line, done=False, exit_code=None):
-        payload = {"task": task, "line": line, "done": done}
-        if exit_code is not None:
-            payload["exit_code"] = exit_code
-        socketio.emit("maintenance_log", payload)
-
-    def run_task():
-        global _maintenance_running
-        args = [_sys.executable, script]
-        if dry:
-            args.append("--dry-run")
-        if task == "backfill_gemini":
-            for p in passes:
-                args.append(f"--pass{p}")
-            if limit:
-                args += ["--limit", str(limit)]
-
-        try:
-            proc = subprocess.Popen(
-                args,
-                cwd=backend_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            _emit(f"▶ Started: {' '.join(args[1:])}")
-            for raw in proc.stdout:
-                line = _strip_line(raw)
-                if line:
-                    _emit(line)
-            proc.wait()
-            _emit(f"{'✓ Done' if proc.returncode == 0 else '✗ Failed'} (exit {proc.returncode})",
-                  done=True, exit_code=proc.returncode)
-        except Exception as exc:
-            _emit(f"Error: {exc}", done=True, exit_code=1)
-        finally:
-            with _maintenance_lock:
-                _maintenance_running = False
-
-    threading.Thread(target=run_task, daemon=True).start()
-    return jsonify({"started": True, "task": task}), 202
 
 
 @app.errorhandler(404)
