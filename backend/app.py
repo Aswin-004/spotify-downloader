@@ -7,6 +7,7 @@ Main application entry point
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
+import json
 import logging
 import os
 import threading
@@ -34,7 +35,7 @@ from routes import library_bp
 
 # MUSICBRAINZ — import tagger service
 try:  # MUSICBRAINZ
-    from services.tagger_service import tag_file as tagger_tag_file, lookup_musicbrainz, _ensure_tables as tagger_ensure_tables  # MUSICBRAINZ
+    from services.tagger_service import tag_file as tagger_tag_file  # MUSICBRAINZ
     _tagger_available = True  # MUSICBRAINZ
 except ImportError as _tag_err:  # MUSICBRAINZ
     _tagger_available = False  # MUSICBRAINZ
@@ -46,7 +47,7 @@ _celery_app = None
 try:
     from celery_app import is_redis_available
     if is_redis_available():
-        from tasks import download_track_task, sync_playlist_task, retry_failed_task
+        from tasks import download_track_task
         from celery_app import celery_app as _celery_app
         _celery_available = True
         logging.getLogger(__name__).info("Celery + Redis detected — task queue enabled")
@@ -90,6 +91,9 @@ _active_downloads_lock = threading.Lock()
 download_history = []
 history_lock = threading.Lock()
 MAX_HISTORY = 100
+
+# Lock protecting concurrent writes to user_config.json
+_user_config_lock = threading.Lock()
 
 
 def load_existing_files():
@@ -169,7 +173,11 @@ app.config['SECRET_KEY'] = config.SECRET_KEY
 socketio = SocketIO(
     app,
     async_mode="threading",
-    cors_allowed_origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173"],
+    cors_allowed_origins=[
+        "http://localhost:5173", "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://localhost:5000", "http://127.0.0.1:5000",
+    ],
     ping_timeout=300,
     ping_interval=10,
     max_http_buffer_size=1e8,
@@ -182,7 +190,11 @@ set_downloader_socketio(socketio)  # quality_report events
 # Enable CORS for all API routes
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173"],  # DISCONNECT FIX: added 127.0.0.1
+        "origins": [
+            "http://localhost:5173", "http://localhost:5174",
+            "http://127.0.0.1:5173",
+            "http://localhost:5000", "http://127.0.0.1:5000",
+        ],
         "methods": ["GET", "POST", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type"],
         "supports_credentials": False
@@ -263,8 +275,12 @@ def get_track_metadata():
             return jsonify({"error": "URL missing"}), 400
         
         url = data["url"].strip()
-        
-        if "spotify.com" not in url and not url.startswith("spotify:"):
+
+        import re as _re
+        _SPOTIFY_RE = _re.compile(
+            r'^(https://open\.spotify\.com/(track|album|playlist|artist)/[A-Za-z0-9]+|spotify:(track|album|playlist|artist):[A-Za-z0-9]+)'
+        )
+        if not _SPOTIFY_RE.match(url):
             return jsonify({"error": "Invalid Spotify URL"}), 400
         
         logger.info(f"Metadata request for: {url[:60]}...")
@@ -560,10 +576,9 @@ def _download_background(url):
             duration_ms = metadata.get("duration_ms")
             album_art_url = metadata.get("album_art_url")  # highest-res Spotify image
 
-            # Route to Artists/{artist}/ folder for manual downloads
-            artists_root = os.path.join(os.path.dirname(downloader_service.download_dir), "Artists")
-            artist_folder = os.path.join(artists_root, sanitize_filename(artist))
-            os.makedirs(artist_folder, exist_ok=True)
+            # Route to Manual/ folder for manual downloads
+            manual_folder = os.path.join(os.path.dirname(downloader_service.download_dir), "Manual")
+            os.makedirs(manual_folder, exist_ok=True)
 
             # Update global queue for manual download
             update_queue(total=1, completed=0, current=f"{title} - {artist}")
@@ -578,7 +593,7 @@ def _download_background(url):
                     "duration_ms": duration_ms,
                     "album_art_url": album_art_url,
                 }
-                task = download_track_task.delay(task_meta, artist_folder)
+                task = download_track_task.delay(task_meta, manual_folder)
                 with status_lock:
                     download_status["status"] = "queued"
                     download_status["current"] = f"{title} - {artist} (queued)"
@@ -597,7 +612,7 @@ def _download_background(url):
                     download_status["current"] = f"{title} - {artist}"
                     download_status["progress"] = 10
 
-                result = downloader_service.download_track(title, artist, progress_callback=track_progress_cb, duration_ms=duration_ms, output_dir=artist_folder, album_art_url=album_art_url)
+                result = downloader_service.download_track(title, artist, progress_callback=track_progress_cb, duration_ms=duration_ms, output_dir=manual_folder, album_art_url=album_art_url)
 
                 # Update queue as completed
                 update_queue(completed=1)
@@ -617,6 +632,7 @@ def _download_background(url):
                         download_status["status"] = "failed"
                         download_status["current"] = "Download failed"
                         download_status["match_quality"] = ""
+                emit_status()
                 add_history_entry(title, artist, result['status'], result.get('filename', ''))
     
     except Exception as e:
@@ -789,12 +805,37 @@ def api_usage():
     return jsonify(get_api_usage()), 200
 
 
-@app.route('/api/ingest-config', methods=['GET'])
+def _extract_playlist_id(raw: str) -> str:
+    import re
+    m = re.search(r'playlist/([A-Za-z0-9]+)', raw)
+    return m.group(1) if m else raw
+
+def _save_user_config(data: dict) -> None:
+    p = Path(__file__).parent / "user_config.json"
+    with _user_config_lock:
+        existing = {}
+        try:
+            existing = json.loads(p.read_text())
+        except Exception:
+            pass
+        existing.update(data)
+        p.write_text(json.dumps(existing, indent=2))
+
+@app.route('/api/ingest-config', methods=['GET', 'POST'])
 def ingest_config():
-    """Get ingest playlist configuration"""
+    """Get or update ingest playlist configuration"""
+    if request.method == 'POST':
+        data = request.get_json() or {}
+        raw = (data.get("playlist_id") or "").strip()
+        playlist_id = _extract_playlist_id(raw)
+        _save_user_config({"ingest_playlist_id": playlist_id})
+        import services.auto_downloader as _ad
+        _ad.INGEST_PLAYLIST_ID = playlist_id
+        return jsonify({"ok": True, "playlist_id": playlist_id}), 200
+    from services.auto_downloader import INGEST_PLAYLIST_ID as _pid
     return jsonify({
-        "enabled": bool(INGEST_PLAYLIST_ID),
-        "playlist_id": INGEST_PLAYLIST_ID or None,
+        "enabled": bool(_pid),
+        "playlist_id": _pid or None,
     }), 200
 
 
@@ -1389,7 +1430,7 @@ def _storage_monitor():  # NOTIFICATION
 def library_organize():
     data = request.get_json(silent=True) or {}
     mode = data.get('mode', 'artist')
-    if mode not in ('artist', 'genre', 'artist_genre'):
+    if mode not in ('artist', 'genre', 'artist_genre', 'dj'):
         return jsonify({"success": False, "error": f"Invalid mode: {mode}"}), 400
     try:
         from services.organizer_service import organize_library
@@ -1414,6 +1455,90 @@ def library_organize_recent():
     except Exception as e:
         logger.error(f"[library/organize-recent] {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/retag-catchall-track', methods=['POST'])
+def retag_catchall_track():
+    """Immediately retry Gemini genre identification for one catch-all track."""
+    data = request.get_json() or {}
+    filepath = (data.get("filepath") or "").strip()
+    if not filepath:
+        return jsonify({"error": "filepath required"}), 400
+    full_path = os.path.join(BASE_DOWNLOAD_DIR, filepath) if not os.path.isabs(filepath) else filepath
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "File not found"}), 404
+    try:
+        from services.gemini_service import identify_audio
+        from services.genre_router import normalize_genre, _library_path
+        import shutil as _shutil
+        from mutagen.id3 import ID3, TXXX
+        gemini = identify_audio(full_path)
+        raw = gemini.get("gemini_genre", "")
+        if not raw:
+            return jsonify({"moved": False, "reason": "Gemini returned no genre"}), 200
+        canonical = normalize_genre(raw)
+        genre_path = _library_path(canonical) if canonical else None
+        if not genre_path or genre_path == "Library/Electronic":
+            return jsonify({"moved": False, "reason": f"Genre '{raw}' still unmapped"}), 200
+        dest_dir = Path(BASE_DOWNLOAD_DIR) / genre_path
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        src = Path(full_path)
+        dest = dest_dir / src.name
+        _shutil.move(str(src), str(dest))
+        # Remove catchall tag
+        try:
+            tags = ID3(str(dest))
+            tags.delall("TXXX:routing_source")
+            tags.save()
+        except Exception:
+            pass
+        # Update MongoDB index
+        try:
+            from database import get_library_index_collection
+            col = get_library_index_collection()
+            if col is not None:
+                col.update_one(
+                    {"final_path": full_path},
+                    {"$set": {"final_path": str(dest), "genre_folder": genre_path}},
+                )
+        except Exception:
+            pass
+        return jsonify({"moved": True, "new_folder": genre_path}), 200
+    except Exception as e:
+        logger.error(f"[retag-catchall-track] {e}")
+        return jsonify({"moved": False, "reason": str(e)}), 200
+
+
+@app.route('/api/stop-sync', methods=['POST'])
+def stop_sync():
+    """Signal the ingest monitor to stop after the current track."""
+    import services.auto_downloader as _ad
+    _ad.request_stop()
+    return jsonify({"ok": True}), 200
+
+
+@app.route('/api/download/retry', methods=['POST'])
+def retry_download():
+    """Reset a track's failure count so the next ingest cycle re-attempts it."""
+    from services.auto_downloader import (
+        _load_failure_counts, _save_failure_counts,
+        _load_ingest_history, _save_ingest_history,
+    )
+    data = request.get_json() or {}
+    track_id = (data.get("track_id") or "").strip()
+    if not track_id:
+        return jsonify({"error": "track_id required"}), 400
+    try:
+        failures = _load_failure_counts()
+        if track_id in failures:
+            del failures[track_id]
+            _save_failure_counts(failures)
+        history = _load_ingest_history()
+        history.discard(track_id)
+        _save_ingest_history(history)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"queued": True, "track_id": track_id}), 200
 
 
 @app.errorhandler(404)

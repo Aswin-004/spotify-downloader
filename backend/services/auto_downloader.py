@@ -43,7 +43,16 @@ try:
 except ImportError:
     logger = logging.getLogger(__name__)  # type: ignore[assignment]
 
-INGEST_PLAYLIST_ID = config.INGEST_PLAYLIST_ID
+_USER_CONFIG_PATH = Path(__file__).parent.parent / "user_config.json"
+
+def _load_user_config() -> dict:
+    try:
+        return json.loads(_USER_CONFIG_PATH.read_text())
+    except Exception:
+        return {}
+
+_uc = _load_user_config()
+INGEST_PLAYLIST_ID = _uc.get("ingest_playlist_id") or config.INGEST_PLAYLIST_ID
 BASE_DOWNLOAD_DIR = config.BASE_DOWNLOAD_DIR
 INGEST_FOLDER = os.path.join(BASE_DOWNLOAD_DIR, "Ingest")
 STAGING_FOLDER = os.path.join(BASE_DOWNLOAD_DIR, "Ingest", "Staging")
@@ -78,6 +87,18 @@ _registry_lock = threading.Lock()
 _downloaded_registry: set = set()
 _in_progress_registry: set = set()  # keys currently being downloaded — TOCTOU guard
 _download_semaphore = threading.Semaphore(2)  # DISCONNECT FIX: limit concurrent yt-dlp processes
+
+# Stop-sync flag — set by /api/stop-sync to cancel mid-run
+_stop_requested = threading.Event()
+
+def request_stop() -> None:
+    """Signal the ingest monitor to stop after the current track."""
+    _stop_requested.set()
+    logger.info("[ingest] Stop requested by user")
+
+def clear_stop() -> None:
+    """Clear the stop flag (called at start of each sync cycle)."""
+    _stop_requested.clear()
 
 
 # ── SocketIO bridge for real-time events ─────────────────────────────────────
@@ -502,6 +523,28 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
         from services.genre_router import map_genre_string, resolve_genre_folder
         from services.organizer_service import clean_folder_name
 
+        def _gemini_genre_fallback(filepath: str) -> str:
+            """
+            Try Gemini identify_audio() on the staged file.
+            Returns a Library/-prefixed path or '' only when Gemini itself fails/unavailable.
+            Sub-genres collapse to parent via normalize_genre(). Truly unknown genre → 'Library/Electronic'.
+            Never raises.
+            """
+            try:
+                from services.gemini_service import identify_audio
+                from services.genre_router import normalize_genre, _library_path
+                gemini = identify_audio(filepath)
+                raw = gemini.get("gemini_genre", "")
+                if not raw:
+                    return ""
+                canonical = normalize_genre(raw)
+                if canonical:
+                    return _library_path(canonical)   # e.g. "Library/House"
+                return "Library/Electronic"           # Gemini identified something but it's not in taxonomy
+            except Exception as _ge:
+                logger.debug(f"[ingest] Gemini fallback unavailable: {_ge}")
+            return ""
+
         # Yield to manual downloads (priority)
         if wait_if_manual_active():
             logger.info("[ingest] Yielded to manual download, resuming")
@@ -566,6 +609,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     output_dir=staging_dir,
                     output_filename=filename,
                     duration_ms=track_info.get("duration_ms"),
+                    album_art_url=track_info.get("album_art_url"),
                 )
 
             if result["status"] == "success":
@@ -585,6 +629,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 # silently mis-filed.
                 NEEDS_REVIEW_THRESHOLD = 0.5  # configurable per-run if needed
 
+                _is_catchall = False  # set True when routed to Electronic as fallback
                 if force_folder:
                     # Manual override always wins — flat, no artist subfolder
                     final_folder = os.path.join(target_base, force_folder)
@@ -595,13 +640,24 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     if mb_genre:
                         mapped = map_genre_string(mb_genre)
                         if mapped:
-                            # CANONICAL-BASE: map_genre_string now returns Library/ paths;
-                            # anchor to BASE_DOWNLOAD_DIR to prevent Ingest/Library/ nesting.
-                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, mapped, clean_folder_name(artist))
-                            logger.info(f"[ingest] MB genre routing: {title} → {mapped}/{artist} (conf=0.9)")
+                            # map_genre_string returns a Library/-prefixed path — flat, no artist subfolder.
+                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, mapped)
+                            logger.info(f"[ingest] MB genre routing: {title} → {mapped} (conf=0.9)")
                         else:
-                            # No map match → NeedsReview (never Uncategorized)
-                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, "NeedsReview", clean_folder_name(artist))
+                            # MB genre not in map — Gemini fallback then Electronic catch-all
+                            gemini_path = _gemini_genre_fallback(staged_filepath)
+                            if gemini_path:
+                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
+                                logger.info(f"[ingest] Gemini fallback (MB miss): {title} → {gemini_path}")
+                                _emit("download_auto_classified", {
+                                    "title": title, "artist": artist,
+                                    "folder": gemini_path, "method": "gemini",
+                                    "source": "ingest",
+                                })
+                            else:
+                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
+                                _is_catchall = True
+                                logger.info(f"[ingest] Electronic catch-all (MB miss, Gemini unavail): {title}")
                     else:
                         # Spotify artist genres with confidence scoring
                         folder_structure, genre_confidence, genre_source = resolve_genre_folder_with_confidence(
@@ -616,20 +672,37 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                             logger.info(f"[ingest] Genre routing: {title} → {folder_structure} "
                                         f"(conf={genre_confidence:.2f}, src={genre_source})")
                         else:
-                            # Low-confidence decision — route to NeedsReview for manual triage
-                            _clean_artist = clean_folder_name(artist)
-                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, "NeedsReview", _clean_artist)
-                            logger.warning(
-                                f"[ingest] Low-confidence genre ({genre_confidence:.2f}, src={genre_source}) "
-                                f"for {title} — routing to NeedsReview/{_clean_artist}"
-                            )
-                            _emit("download_needs_review", {
-                                "title": title, "artist": artist,
-                                "genre_source": genre_source,
-                                "confidence": genre_confidence,
-                                "suggested_folder": folder_structure,
-                                "source": "ingest",
-                            })
+                            # Low-confidence — try Gemini before falling back to catch-all.
+                            # Never routes to NeedsReview for genre failures.
+                            gemini_path = _gemini_genre_fallback(staged_filepath)
+                            if gemini_path:
+                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
+                                logger.info(
+                                    f"[ingest] Gemini fallback: {title} → {gemini_path} "
+                                    f"(Spotify conf={genre_confidence:.2f} was too low)"
+                                )
+                                _emit("download_auto_classified", {
+                                    "title": title, "artist": artist,
+                                    "folder": gemini_path, "method": "gemini",
+                                    "spotify_confidence": genre_confidence,
+                                    "source": "ingest",
+                                })
+                            else:
+                                # Gemini unavailable (quota/error) → Electronic catch-all.
+                                # Song is never lost — always lands somewhere in Library/.
+                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
+                                _is_catchall = True
+                                logger.warning(
+                                    f"[ingest] Electronic catch-all: {title} "
+                                    f"(Spotify conf={genre_confidence:.2f}, Gemini unavail)"
+                                )
+                                _emit("download_needs_review", {
+                                    "title": title, "artist": artist,
+                                    "genre_source": genre_source,
+                                    "confidence": genre_confidence,
+                                    "suggested_folder": "Library/Electronic",
+                                    "source": "ingest",
+                                })
 
                 os.makedirs(final_folder, exist_ok=True)
 
@@ -670,6 +743,16 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     return
 
                 logger.info(f"[ingest] Moved: {result.get('filename')} → {final_folder}")
+
+                # Tag catch-all files so maintenance worker can retry Gemini later
+                if _is_catchall:
+                    try:
+                        from mutagen.id3 import ID3, TXXX
+                        _audio = ID3(final_filepath)
+                        _audio.add(TXXX(encoding=3, desc="routing_source", text=["catchall"]))
+                        _audio.save()
+                    except Exception:
+                        pass
 
                 # Update result with final path
                 result["filepath"] = final_filepath
@@ -736,9 +819,19 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     update_queue(total=total, completed=0, pending=pending_names)
     _ingest_start_time = time.time()  # NOTIFICATION — track elapsed time
 
+    clear_stop()  # reset any leftover stop flag from a previous run
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(_download_single, t, force_folder, force_redownload): t for t in new_tracks}
         for future in as_completed(futures):
+            if _stop_requested.is_set():
+                logger.info("[ingest] Stop requested — cancelling remaining tracks")
+                executor.shutdown(wait=False, cancel_futures=True)
+                AUTO_STATUS["status"] = "idle"
+                AUTO_STATUS["current"] = "Stopped by user"
+                _emit_auto_status()
+                _save_ingest_history(saved_ids)
+                _save_failure_counts(failure_counts)
+                return
             try:
                 future.result()
             except Exception as e:

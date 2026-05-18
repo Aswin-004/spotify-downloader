@@ -14,11 +14,14 @@ class Config:
     # Server settings
     PORT = 5000
     HOST = "0.0.0.0"
-    SECRET_KEY = os.getenv("SECRET_KEY", "spotify-downloader-secret")
+    SECRET_KEY = os.getenv("SECRET_KEY", "")
     
     # Spotify API
     SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
     SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+
+    # Gemini API
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     
     # Playlist configuration (single ingest playlist)
     INGEST_PLAYLIST_ID = os.getenv("INGEST_PLAYLIST_ID", "")

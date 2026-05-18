@@ -54,6 +54,26 @@ export const api = {
     return fetch('/api/ingest-config').then(handleResponse);
   },
 
+  setIngestPlaylist(playlistId) {
+    return fetch('/api/ingest-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playlist_id: playlistId }),
+    }).then(handleResponse);
+  },
+
+  retagCatchallTrack(filepath) {
+    return fetch('/api/retag-catchall-track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filepath }),
+    }).then(handleResponse);
+  },
+
+  stopSync() {
+    return fetch('/api/stop-sync', { method: 'POST' }).then(handleResponse);
+  },
+
   refreshPlaylist(options = {}) {
     // Optional per-trigger folder override. When present, every track in the
     // sync is pinned to Ingest/{forceFolder}/ regardless of artist routing.
@@ -75,12 +95,11 @@ export const api = {
 
   clearHistoryForPlaylist: async (playlistId = null) => {
     const body = playlistId ? { playlist_id: playlistId } : {};
-    const res = await fetch('/api/clear-history-for-playlist', {
+    return fetch('/api/clear-history-for-playlist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    });
-    return res.json();
+    }).then(handleResponse);
   },
 
   deleteFile(filename) {

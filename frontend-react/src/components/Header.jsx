@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, RefreshCw, Menu, FolderInput, X } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Menu, FolderInput, X, Settings2, CheckCircle2, StopCircle } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,25 @@ export default function Header({ onMenuToggle }) {
   const [submitting, setSubmitting] = useState(false);
   const panelRef = useRef(null);
   const inputRef = useRef(null);
+
+  // Two-click confirmation for destructive clear action
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  // Auto-reset confirm state after 4 seconds
+  useEffect(() => {
+    if (!confirmClear) return;
+    const t = setTimeout(() => setConfirmClear(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirmClear]);
+
+  // Playlist config popover
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [playlistInput, setPlaylistInput] = useState('');
+  const [playlistConfig, setPlaylistConfig] = useState(null); // { enabled, playlist_id }
+  const [savingPlaylist, setSavingPlaylist] = useState(false);
+  const [playlistError, setPlaylistError] = useState('');
+  const settingsPanelRef = useRef(null);
+  const playlistInputRef = useRef(null);
 
   // Rate-limit status derived from auto status (pushed via socket)
   const rateLimited =
@@ -47,6 +66,48 @@ export default function Header({ onMenuToggle }) {
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
+
+  // Load playlist config when settings popover opens
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const t = setTimeout(() => playlistInputRef.current?.focus(), 80);
+    api.getIngestConfig().then(setPlaylistConfig).catch(() => {});
+    return () => clearTimeout(t);
+  }, [settingsOpen]);
+
+  // Close settings on outside click / Escape
+  useEffect(() => {
+    if (!settingsOpen) return;
+    function onClick(e) {
+      if (settingsPanelRef.current && !settingsPanelRef.current.contains(e.target)) {
+        setSettingsOpen(false);
+      }
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') setSettingsOpen(false);
+    }
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [settingsOpen]);
+
+  async function savePlaylist() {
+    if (savingPlaylist) return;
+    setSavingPlaylist(true);
+    setPlaylistError('');
+    try {
+      const result = await api.setIngestPlaylist(playlistInput.trim());
+      setPlaylistConfig({ enabled: true, playlist_id: result.playlist_id });
+      setPlaylistInput('');
+    } catch (err) {
+      setPlaylistError(err.message || 'Failed to save');
+    } finally {
+      setSavingPlaylist(false);
+    }
+  }
 
   async function triggerRefresh() {
     if (submitting) return;
@@ -85,6 +146,14 @@ export default function Header({ onMenuToggle }) {
       </div>
 
       <div className="flex items-center gap-3">
+        {/* Connection status dot */}
+        <div
+          title={connected ? 'Connected' : 'Disconnected — reconnecting…'}
+          className={`w-2 h-2 rounded-full transition-colors ${
+            connected ? 'bg-emerald-400' : 'bg-red-400 animate-pulse'
+          }`}
+        />
+
         {rateLimited && (
           <motion.div
             initial={{ opacity: 0, x: 20 }}
@@ -95,6 +164,133 @@ export default function Header({ onMenuToggle }) {
             <span className="text-xs text-amber-400">Rate limited</span>
           </motion.div>
         )}
+
+        {/* Stop Sync button — visible while a sync is actively downloading */}
+        <AnimatePresence>
+          {autoStatus.status === 'downloading' && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              transition={{ duration: 0.15 }}
+            >
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => api.stopSync().catch(() => {})}
+                className="text-red-400 hover:text-red-300 hover:bg-red-500/10 gap-1.5"
+                title="Stop the current sync"
+              >
+                <StopCircle className="w-4 h-4" />
+                <span className="text-xs hidden sm:inline">Stop</span>
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Playlist config popover */}
+        <div className="relative" ref={settingsPanelRef}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setSettingsOpen((v) => !v)}
+            title="Configure ingest playlist"
+            aria-expanded={settingsOpen}
+            aria-haspopup="dialog"
+          >
+            <Settings2 className="w-4 h-4" />
+          </Button>
+
+          <AnimatePresence>
+            {settingsOpen && (
+              <motion.div
+                role="dialog"
+                aria-label="Ingest playlist configuration"
+                initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+                className="absolute right-0 top-full mt-2 w-80 origin-top-right glass rounded-2xl border border-white/10 shadow-xl p-4 z-40"
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Settings2 className="w-4 h-4 text-primary" />
+                    <h3 className="text-sm font-semibold">Ingest Playlist</h3>
+                  </div>
+                  <button
+                    onClick={() => setSettingsOpen(false)}
+                    className="text-gray-500 hover:text-white transition-colors"
+                    aria-label="Close"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Current status */}
+                {playlistConfig && (
+                  <div className={`flex items-center gap-2 mb-3 text-xs px-2 py-1.5 rounded-lg ${
+                    playlistConfig.enabled
+                      ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
+                      : 'bg-amber-500/10 border border-amber-500/20 text-amber-400'
+                  }`}>
+                    {playlistConfig.enabled ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span className="font-mono truncate">{playlistConfig.playlist_id}</span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span>No playlist configured</span>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <label
+                  htmlFor="playlist-url-input"
+                  className="block text-xs font-medium text-gray-300 mb-1.5"
+                >
+                  Spotify playlist URL or ID
+                </label>
+                <Input
+                  id="playlist-url-input"
+                  ref={playlistInputRef}
+                  value={playlistInput}
+                  onChange={(e) => setPlaylistInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && savePlaylist()}
+                  placeholder="https://open.spotify.com/playlist/..."
+                  className="h-9 bg-background/60 border-white/10 text-sm"
+                  disabled={savingPlaylist}
+                />
+                {playlistError && (
+                  <p className="mt-1.5 text-[11px] text-red-400">{playlistError}</p>
+                )}
+                <p className="mt-1.5 text-[11px] text-gray-500">
+                  Paste a full URL or bare playlist ID — takes effect immediately, no restart needed.
+                </p>
+
+                <div className="mt-4 flex justify-end gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSettingsOpen(false)}
+                    disabled={savingPlaylist}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={savePlaylist}
+                    disabled={savingPlaylist || !playlistInput.trim()}
+                  >
+                    Save
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
         {/* Refresh trigger + force_folder popover */}
         <div className="relative" ref={panelRef}>
@@ -158,16 +354,25 @@ export default function Header({ onMenuToggle }) {
 
                 <button
                   onClick={async () => {
+                    if (!confirmClear) {
+                      setConfirmClear(true);
+                      return;
+                    }
+                    setConfirmClear(false);
                     setSubmitting(true);
                     await api.clearHistoryForPlaylist();
                     await triggerRefresh();
                     setSubmitting(false);
                     setOpen(false);
                   }}
-                  className="w-full text-xs text-amber-400 hover:text-amber-300 py-1 transition-colors mt-3"
+                  className={`w-full text-xs py-1 transition-colors mt-3 ${
+                    confirmClear
+                      ? 'text-red-400 hover:text-red-300 font-semibold'
+                      : 'text-amber-400 hover:text-amber-300'
+                  }`}
                   disabled={submitting}
                 >
-                  ↺ Clear history & re-download all
+                  {confirmClear ? '⚠ Click again to confirm — this clears all history' : '↺ Clear history & re-download all'}
                 </button>
 
                 <div className="mt-4 flex justify-end gap-2">

@@ -6,12 +6,11 @@ Spotify artist genre tags. Single source of truth for all
 folder routing decisions.
 
 Target structure (flat — genre-only, no artist subfolder):
-  Library/Electronic/House/{song}.mp3
-  Library/Electronic/UKG/{song}.mp3
-  Library/Indian/Bollywood/{song}.mp3
-  Library/HipHop/{song}.mp3
+  Library/House/{song}.mp3
+  Library/UK Garage/{song}.mp3
+  Library/Bollywood/{song}.mp3
+  Library/Hip Hop/{song}.mp3
   NeedsReview/{artist}/       ← unknown genre or low confidence (keeps artist folder)
-  Quarantine/                 ← broken/temp/corrupt only (NOT for unknown music)
 
 Confidence levels:
   1.0 — ARTIST_GENRE_OVERRIDE  (explicit manual mapping)
@@ -62,46 +61,55 @@ CONFIDENCE_UNCATEGORIZED    = 0.0
 # Global genres sit directly under Library/ (no intermediate family folder).
 
 GENRE_TAXONOMY: dict[str, tuple[str, str]] = {
-    # ── Electronic ────────────────────────────────────────────────────────
-    "House":         ("Electronic", "Electronic/House"),
-    "Afro House":    ("Electronic", "Electronic/Afro House"),
-    "UK Garage":     ("Electronic", "Electronic/UKG"),
-    "UK Bass":       ("Electronic", "Electronic/UKG"),
-    "Grime":         ("Electronic", "Electronic/UKG"),
-    "Drum and Bass": ("Electronic", "Electronic/Drum and Bass"),
-    "Dubstep":       ("Electronic", "Electronic/Dubstep"),
-    "Bass":          ("Electronic", "Electronic/Bass"),
-    "Electronic":    ("Electronic", "Electronic/Electronic"),
-    "Techno":        ("Electronic", "Electronic/Techno"),
-    "Trance":        ("Electronic", "Electronic/Electronic"),
-    "Dance":         ("Electronic", "Electronic/Electronic"),
-    "Ambient":       ("Electronic", "Electronic/Electronic"),
-    "Lo-Fi":         ("Electronic", "Electronic/Electronic"),
-    # ── Indian ────────────────────────────────────────────────────────────
-    "Bollywood":     ("Indian",     "Indian/Bollywood"),
-    "Punjabi":       ("Indian",     "Indian/Punjabi"),
-    "Indian":        ("Indian",     "Indian/Hindi Pop"),
-    "Tamil":         ("Indian",     "Indian/Tamil"),
-    "Telugu":        ("Indian",     "Indian/Telugu"),
-    "Indian Hip Hop": ("Indian",    "Indian/HipHop"),
-    "Desi Hip Hop":  ("Indian",    "Indian/HipHop"),
-    # ── Global (directly under Library/) ─────────────────────────────────
-    "Hip Hop":       ("Global",     "HipHop"),
-    "R&B":           ("Global",     "OpenFormat"),
+    # ── Electronic — each sub-genre gets its own DJ crate ─────────────────
+    "Electronic":    ("Electronic", "Electronic"),
+    "Trance":        ("Electronic", "Trance"),
+    "Psytrance":     ("Electronic", "Trance"),
+    "House":         ("Electronic", "House"),
+    "Afro House":    ("Electronic", "House"),
+    "Deep House":    ("Electronic", "House"),
+    "UK Garage":     ("Electronic", "UK Garage"),
+    "Speed Garage":  ("Electronic", "UK Garage"),
+    "UK Bass":       ("Electronic", "UK Garage"),
+    "Grime":         ("Electronic", "Grime"),
+    "UK Drill":      ("Electronic", "Grime"),
+    "Drum and Bass": ("Electronic", "Drum & Bass"),
+    "Jungle":        ("Electronic", "Drum & Bass"),
+    "Dubstep":       ("Electronic", "Dubstep"),
+    "Brostep":       ("Electronic", "Dubstep"),
+    "Techno":        ("Electronic", "Techno"),
+    "Industrial":    ("Electronic", "Techno"),
+    "Bass":          ("Electronic", "Electronic"),   # generic → catch-all
+    "Dance":         ("Electronic", "Electronic"),
+    "Ambient":       ("Electronic", "Electronic"),
+    "Lo-Fi":         ("Electronic", "Electronic"),
+    # ── Indian (flat) ─────────────────────────────────────────────────────
+    "Bollywood":     ("Indian",     "Bollywood"),
+    "Punjabi":       ("Indian",     "Punjabi"),
+    "Indian":        ("Indian",     "Punjabi"),      # ambiguous → Punjabi crate
+    "Tamil":         ("Indian",     "Tamil"),
+    "Telugu":        ("Indian",     "Bollywood"),    # → Bollywood crate
+    "Indian Hip Hop":("Indian",     "Punjabi"),
+    "Desi Hip Hop":  ("Indian",     "Punjabi"),
+    # ── Global (flat) ─────────────────────────────────────────────────────
+    "Hip Hop":       ("Global",     "Hip Hop"),
+    "R&B":           ("Global",     "R&B"),
+    "Soul":          ("Global",     "R&B"),
     "Pop":           ("Global",     "Pop"),
     "K-Pop":         ("Global",     "Pop"),
     "J-Pop":         ("Global",     "Pop"),
     "Asian Pop":     ("Global",     "Pop"),
-    "Rock":          ("Global",     "Rock"),
-    "Metal":         ("Global",     "Rock"),
-    "Jazz":          ("Global",     "OpenFormat"),
-    "Blues":         ("Global",     "OpenFormat"),
-    "Classical":     ("Global",     "OpenFormat"),
-    "Reggae":        ("Global",     "OpenFormat"),
-    "Afrobeats":     ("Global",     "OpenFormat"),
-    "Latin":         ("Global",     "OpenFormat"),
-    "Folk":          ("Global",     "OpenFormat"),
-    "Country":       ("Global",     "OpenFormat"),
+    "Latin":         ("Global",     "Latin"),
+    "Afrobeats":     ("Global",     "Latin"),
+    "Reggae":        ("Global",     "Latin"),
+    "Reggaeton":     ("Global",     "Latin"),
+    "Rock":          ("Global",     "Electronic"),   # → Electronic for DJ
+    "Metal":         ("Global",     "Electronic"),
+    "Folk":          ("Global",     "Bollywood"),    # → Bollywood (Nimbooda etc)
+    "Country":       ("Global",     "Pop"),
+    "Jazz":          ("Global",     "R&B"),
+    "Blues":         ("Global",     "R&B"),
+    "Classical":     ("Global",     "Pop"),
 }
 
 
@@ -153,24 +161,24 @@ def _library_path(genre_folder: str) -> str:
     """
     Convert a canonical genre folder name to a Library/-prefixed subpath.
 
-      "UK Garage"  → "Library/Electronic/UKG"
-      "Bollywood"  → "Library/Indian/Bollywood"
-      "Hip Hop"    → "Library/HipHop"
-      "(unknown)"  → "Library/OpenFormat"
+      "UK Garage"  → "Library/UK Garage"
+      "Bollywood"  → "Library/Bollywood"
+      "Hip Hop"    → "Library/Hip Hop"
+      "(unknown)"  → "Library/Electronic"  (catch-all)
 
-    Never returns Uncategorized — unknown genres go to OpenFormat or NeedsReview.
+    Never returns Uncategorized — unknown genres fall back to Electronic.
     """
     if not genre_folder:
-        return f"{LIBRARY_ROOT}/OpenFormat"
+        return f"{LIBRARY_ROOT}/Electronic"
     entry = GENRE_TAXONOMY.get(genre_folder)
     if entry:
         return f"{LIBRARY_ROOT}/{entry[1]}"
     # Fallback: search by subpath suffix (handles partial matches)
     gf_lower = genre_folder.lower()
     for key, (family, subpath) in GENRE_TAXONOMY.items():
-        if subpath.split("/")[-1].lower() == gf_lower or key.lower() == gf_lower:
+        if subpath.lower() == gf_lower or key.lower() == gf_lower:
             return f"{LIBRARY_ROOT}/{subpath}"
-    return f"{LIBRARY_ROOT}/OpenFormat"
+    return f"{LIBRARY_ROOT}/Electronic"
 
 
 # ── Phase 9: Routing explanation for UI ───────────────────────────────────────
@@ -236,7 +244,7 @@ def map_genre_string(genre_str: str) -> str:
     # Raw fallback → OpenFormat
     cleaned = clean_folder_name(genre_str.title())
     lib = _library_path(cleaned)
-    return lib or f"{LIBRARY_ROOT}/OpenFormat"
+    return lib or f"{LIBRARY_ROOT}/Electronic"
 
 
 def _matches_devanagari(text: str) -> bool:

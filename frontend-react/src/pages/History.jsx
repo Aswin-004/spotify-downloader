@@ -50,6 +50,14 @@ export default function History() {
   const [history, setHistory] = useState([]);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  // Auto-reset confirmation after 4s
+  useEffect(() => {
+    if (!confirmClear) return;
+    const t = setTimeout(() => setConfirmClear(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirmClear]);
 
   // Merge socket history with initial load
   useEffect(() => {
@@ -79,6 +87,11 @@ export default function History() {
   }, [history, search, filter]);
 
   async function handleClear() {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      return;
+    }
+    setConfirmClear(false);
     try {
       await api.clearHistory();
       setHistory([]);
@@ -111,9 +124,15 @@ export default function History() {
             <p className="text-sm text-gray-500">{history.length} entries</p>
           </div>
         </div>
-        <Button variant="destructive" size="sm" onClick={handleClear}>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={handleClear}
+          className={confirmClear ? 'animate-pulse' : ''}
+          title={confirmClear ? 'Click again to confirm' : 'Clear all history'}
+        >
           <Trash2 className="w-3.5 h-3.5" />
-          Clear
+          {confirmClear ? 'Confirm?' : 'Clear'}
         </Button>
       </motion.div>
 

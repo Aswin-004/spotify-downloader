@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Download, ListMusic, TrendingUp, XCircle } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { useSocket } from '@/hooks/useSocket';
+import { api } from '@/services/api';
 import { cn } from '@/lib/utils';
 
 function AnimatedNumber({ value }) {
@@ -73,12 +74,21 @@ const cards = [
 
 export default function StatsCards() {
   const { history, queueStatus, downloads } = useSocket();
+  const [dbTotal, setDbTotal] = useState(null);
 
   const ingestCompleted = Object.keys(downloads.completed).length;
   const ingestFailed = Object.keys(downloads.failed).length;
   const ingestDownloading = Object.keys(downloads.downloading).length;
 
-  const total = history.length + ingestCompleted;
+  // Fetch real total from MongoDB on mount and whenever session downloads increase
+  useEffect(() => {
+    api.getAnalyticsOverview()
+      .then((data) => setDbTotal(data.total_downloads ?? null))
+      .catch(() => {});
+  }, [ingestCompleted]);
+
+  const baseTotal = dbTotal !== null ? dbTotal : history.length;
+  const total = baseTotal;
   const successCount = history.filter((h) => h.status === 'success').length + ingestCompleted;
   const failedCount = history.filter(
     (h) => h.status !== 'success' && h.status !== 'skipped'

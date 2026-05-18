@@ -1846,6 +1846,18 @@ def _rms_to_node_size(rms) -> int:
     return max(10, min(38, int(float(rms) * 100 + 10)))
 
 
+def _leaf_genre(genre_folder: str) -> str:
+    """Strip common 'Library/' prefix; return meaningful taxonomy segment.
+
+    'Library/Electronic/House' → 'Electronic/House'
+    'Library/Indian/Punjabi'   → 'Indian/Punjabi'
+    'House'                    → 'House'
+    """
+    parts = [p for p in genre_folder.replace("\\", "/").split("/")
+             if p and p.lower() not in ("library", "dj music", "dj_music")]
+    return "/".join(parts) if parts else (genre_folder or "Unknown")
+
+
 # Distinct community palette — intentionally different from genre neons
 _COMMUNITY_PALETTE = [
     "#ff6b6b", "#ffd93d", "#6bcb77", "#4d96ff", "#ff922b",
@@ -1945,30 +1957,53 @@ def build_similarity_graph_pyvis(
     except Exception:
         centrality = {i: 0.0 for i in range(n)}
 
-    # ── track dominant genre + avg BPM per community ─────────────────────────
-    comm_genre_count: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    comm_bpm_vals:    dict[int, list[float]]     = defaultdict(list)
+    # ── per-community signal aggregation ─────────────────────────────────────
+    comm_genre_count:  dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    comm_artist_count: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    comm_bpm_vals:     dict[int, list[float]]    = defaultdict(list)
     for idx, doc in enumerate(nodes):
-        cid   = partition.get(idx, 0)
-        genre = doc.get("genre_folder", "Unknown")
-        comm_genre_count[cid][genre] += 1
-        bpm_v = doc.get("audio_features", {}).get("bpm")
-        if bpm_v is not None:
-            comm_bpm_vals[cid].append(float(bpm_v))
+        cid    = partition.get(idx, 0)
+        genre  = _leaf_genre(doc.get("genre_folder", "Unknown"))
+        artist = (doc.get("artist") or "").strip()
+        bpm_v  = doc.get("audio_features", {}).get("bpm")
+        comm_genre_count[cid][genre]           += 1
+        if artist: comm_artist_count[cid][artist] += 1
+        if bpm_v is not None: comm_bpm_vals[cid].append(float(bpm_v))
 
     community_meta = []
+    _seen_labels: set[str] = set()
     for cid in range(num_comms):
-        genre_counts = comm_genre_count.get(cid, {"Unknown": 1})
-        top_genre    = max(genre_counts, key=lambda g: genre_counts[g])
-        bpm_list     = comm_bpm_vals.get(cid, [])
-        avg_bpm      = round(sum(bpm_list) / len(bpm_list)) if bpm_list else None
+        genre_counts  = comm_genre_count.get(cid,  {"Unknown": 1})
+        artist_counts = comm_artist_count.get(cid, {})
+        bpm_list      = comm_bpm_vals.get(cid,     [])
+
+        top_genre  = max(genre_counts,  key=lambda g: genre_counts[g])
+        top_artist = max(artist_counts, key=lambda a: artist_counts[a]) if artist_counts else ""
+        avg_bpm    = round(sum(bpm_list) / len(bpm_list)) if bpm_list else None
+
+        # semantic label: Genre/Subgenre · DominantArtist · AvgBPM
+        parts = [top_genre]
+        if top_artist:
+            parts.append(top_artist[:22])
+        if avg_bpm:
+            parts.append(f"{avg_bpm} BPM")
+        base_label = " · ".join(parts)
+
+        # uniqueness pass — suffix (A), (B)... on collision
+        label = base_label
+        suffix = 0
+        while label in _seen_labels:
+            suffix += 1
+            label = f"{base_label} ({chr(64 + suffix)})"
+        _seen_labels.add(label)
+
         community_meta.append({
             "id":      cid,
             "color":   comm_colors[cid],
             "size":    len(raw_comms[cid]),
             "genre":   top_genre,
             "avg_bpm": avg_bpm,
-            "label":   f"Cluster {cid + 1}  {top_genre}  ({len(raw_comms[cid])} tracks)",
+            "label":   f"{label}  ({len(raw_comms[cid])} tracks)",
         })
 
     # ── build PyVis network ───────────────────────────────────────────────────
@@ -2030,6 +2065,7 @@ def build_similarity_graph_pyvis(
 """)
 
     # ── add nodes ─────────────────────────────────────────────────────────────
+    _node_tooltip_html: dict = {}   # keyed by identity_key; fed into NODE_META
     for idx, doc in enumerate(nodes):
         ik     = doc["identity_key"]
         af     = doc.get("audio_features", {})
@@ -2128,11 +2164,11 @@ def build_similarity_graph_pyvis(
             f"<span style='color:{c_color}'>{cluster_label}</span>"
             f"</div></div>"
         )
+        _node_tooltip_html[ik] = tooltip   # stored; rendered via custom JS overlay
 
         net.add_node(
             ik,
             label=label,
-            title=tooltip,
             color=node_color,
             size=size,
             opacity=opacity,
@@ -2171,13 +2207,10 @@ def build_similarity_graph_pyvis(
             value=width,
             color=edge_color,
             title=(
-                f"<span style='font-family:monospace;font-size:11px;color:#99aacc'>"
-                f"score <b style='color:#aaddff'>{s}</b>"
-                f"{'  &#9836; harmonic' if harmonic else ''}"
-                f"{'  &#128279; same cluster' if ci == cj else ''}"
-                f"<br>camelot <b>{sim['camelot_score']}</b> &nbsp; "
-                f"bpm <b>{sim['bpm_score']}</b> &nbsp; "
-                f"energy <b>{sim['energy_score']}</b></span>"
+                f"score {s}"
+                f"{'  ♪ harmonic' if harmonic else ''}"
+                f"{'  ⧓ cluster' if ci == cj else ''}"
+                f"  · bpm {sim['bpm_score']}  energy {sim['energy_score']}"
             ),
         )
         edge_count += 1
@@ -2193,6 +2226,7 @@ def build_similarity_graph_pyvis(
             "bpm":    af.get("bpm"),
             "cid":    partition.get(idx, 0),
             "cent":   round(centrality.get(idx, 0.0), 4),
+            "tt":     _node_tooltip_html.get(doc["identity_key"], ""),
         })
 
     edge_metas = []
@@ -2204,6 +2238,10 @@ def build_similarity_graph_pyvis(
                 "from":  nodes[i2]["identity_key"],
                 "to":    nodes[j2]["identity_key"],
                 "score": round(sim2["score"], 3),
+                "cam":   round(sim2.get("camelot_score", 0), 3),
+                "bpm":   round(sim2.get("bpm_score", 0), 3),
+                "eng":   round(sim2.get("energy_score", 0), 3),
+                "spc":   round(sim2.get("spectral_score", 0), 3),
             })
 
     sorted_cents = sorted([(centrality.get(i, 0.0), i) for i in range(n)], reverse=True)
@@ -2387,10 +2425,18 @@ def _inject_pyvis_controls(
     hint_html = (
         '<div id="hint-bar" class="gc-panel">'
         '<b>Hover</b> node → label &nbsp;|&nbsp; '
-        '<b>Click</b> node → focus mode<br>'
+        '<b>Click</b> node → focus &nbsp;|&nbsp; '
+        '<b>Click</b> edge → similarity<br>'
         '<b>Drag</b> to reposition &nbsp;|&nbsp; '
         '<b>Scroll</b> to zoom &nbsp;|&nbsp; '
         '<b>Bright</b> nodes = bridge tracks'
+        '</div>'
+    )
+
+    sim_panel_html = (
+        '<div id="sim-panel" class="gc-panel" style="display:none">'
+        '<h4>&#x2194; Edge Similarity</h4>'
+        '<div id="sp-body"></div>'
         '</div>'
     )
 
@@ -2497,13 +2543,49 @@ input[type=range] {
 #fp-body .fp-label { color: #3a5070; }
 
 .vis-tooltip {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
+  font-family: 'Courier New', monospace !important;
+  font-size: 11px !important;
+  color: #99aacc !important;
+  background: rgba(8,8,18,0.93) !important;
+  border: 1px solid rgba(60,90,150,0.55) !important;
+  border-radius: 5px !important;
+  padding: 3px 8px !important;
+  box-shadow: 0 0 10px rgba(20,60,140,0.28) !important;
+  white-space: nowrap !important;
   max-width: none !important;
-  white-space: normal !important;
 }
+
+#gc-tooltip {
+  position: fixed;
+  z-index: 99999;
+  pointer-events: none;
+  display: none;
+}
+
+#sim-panel {
+  bottom: 14px; left: 50%; transform: translateX(-50%);
+  min-width: 340px; max-width: 420px;
+}
+.sp-tracks {
+  font-size: 10px; color: #6688aa; margin-bottom: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sp-row {
+  display: flex; align-items: center; gap: 6px; margin: 5px 0;
+}
+.sp-label  { font-size: 10px; color: #3a5070; width: 68px; flex-shrink: 0; }
+.sp-weight { font-size: 9px;  color: #2a3a50; margin-left: 2px; flex-shrink: 0; }
+.sp-bar-bg { flex: 1; height: 5px; background: rgba(20,40,80,0.7); border-radius: 3px; }
+.sp-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+.sp-score  { font-size: 10px; color: #88aacc; width: 34px; text-align: right; flex-shrink: 0; }
+.sp-total  {
+  margin-top: 8px; padding-top: 6px;
+  border-top: 1px solid rgba(40,80,140,0.28);
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px;
+}
+.sp-total-label { color: #3a5070; }
+.sp-total-score { color: #88ddff; font-weight: bold; }
 </style>"""
 
     js = """\
@@ -2518,7 +2600,7 @@ input[type=range] {
   var _bpmMin = null, _bpmMax = null;
   var _density = 1;
   var _bridgePulseTimer = null;
-  var _tooltipFixed = false;
+  var _mX = 0, _mY = 0;
 
   /* ── helpers ──────────────────────────────────────────────────────────── */
   function safeNet(fn) {
@@ -2641,7 +2723,52 @@ input[type=range] {
     if (panel) panel.style.display = 'none';
     var btn = document.getElementById('btn-reset-focus');
     if (btn) btn.style.display = 'none';
+    hideSimilarityPanel();
     applyFilters();
+  }
+
+  /* ── similarity panel ─────────────────────────────────────────────────── */
+  function _scoreBar(label, weight, value, color) {
+    var pct = Math.round(value * 100);
+    return (
+      '<div class="sp-row">' +
+      '<span class="sp-label">' + label + '</span>' +
+      '<div class="sp-bar-bg"><div class="sp-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>' +
+      '<span class="sp-score">' + pct + '%</span>' +
+      '<span class="sp-weight">×' + weight + '</span>' +
+      '</div>'
+    );
+  }
+
+  function showSimilarityPanel(edgeId) {
+    if (typeof edges === 'undefined') return;
+    var e   = edges.get(edgeId);
+    if (!e) return;
+    var em  = EDGE_META.find(function(m) { return m.from === e.from && m.to === e.to || m.from === e.to && m.to === e.from; });
+    if (!em) return;
+    var ma  = NODE_META.find(function(m) { return m.id === e.from; });
+    var mb  = NODE_META.find(function(m) { return m.id === e.to; });
+    var ta  = ma ? (ma.title.length > 20 ? ma.title.slice(0,20)+'…' : ma.title) : e.from;
+    var tb  = mb ? (mb.title.length > 20 ? mb.title.slice(0,20)+'…' : mb.title) : e.to;
+    var panel = document.getElementById('sim-panel');
+    var body  = document.getElementById('sp-body');
+    if (!panel || !body) return;
+    body.innerHTML =
+      '<div class="sp-tracks">' + ta + ' ↔ ' + tb + '</div>' +
+      _scoreBar('Camelot', '0.40', em.cam || 0, '#a070ff') +
+      _scoreBar('BPM',     '0.30', em.bpm || 0, '#4499ff') +
+      _scoreBar('Energy',  '0.20', em.eng || 0, '#44cc88') +
+      _scoreBar('Spectral','0.10', em.spc || 0, '#ffaa44') +
+      '<div class="sp-total">' +
+      '<span class="sp-total-label">Weighted Score</span>' +
+      '<span class="sp-total-score">' + Math.round((em.score || 0) * 100) + '%</span>' +
+      '</div>';
+    panel.style.display = 'block';
+  }
+
+  function hideSimilarityPanel() {
+    var panel = document.getElementById('sim-panel');
+    if (panel) panel.style.display = 'none';
   }
 
   /* ── bridge tracks ────────────────────────────────────────────────────── */
@@ -2750,37 +2877,54 @@ input[type=range] {
     applyEdgeDensity(_density);
   }
 
-  /* ── hover / select events ────────────────────────────────────────────── */
-  /* vis-network 9.x uses innerText for string titles (XSS guard).
-     Convert every HTML string title to a DOM element so appendChild is used. */
-  function fixTooltipHTML() {
-    if (typeof nodes === 'undefined') return;
-    var all = nodes.get();
-    var upd = [];
-    all.forEach(function(n) {
-      if (typeof n.title === 'string' && n.title.indexOf('<') !== -1) {
-        var el = document.createElement('div');
-        el.innerHTML = n.title;
-        upd.push({ id: n.id, title: el });
-      }
-    });
-    if (upd.length) nodes.update(upd);
+  /* ── custom tooltip overlay ───────────────────────────────────────────── */
+  /* vis-network 9.x renders string titles with innerText (XSS guard), which
+     displays raw HTML as text. We bypass this entirely: node titles are not
+     passed to vis-network; tooltip HTML is stored in NODE_META.tt and rendered
+     via a custom fixed-position div using innerHTML. */
+
+  function _positionTooltip(tt) {
+    var x = _mX + 18, y = _mY + 12;
+    var w = tt.offsetWidth  || 250;
+    var h = tt.offsetHeight || 200;
+    if (x + w > window.innerWidth  - 8) x = _mX - w - 12;
+    if (y + h > window.innerHeight - 8) y = _mY - h - 12;
+    tt.style.left = x + 'px';
+    tt.style.top  = y + 'px';
   }
+
+  document.addEventListener('mousemove', function(e) {
+    _mX = e.clientX; _mY = e.clientY;
+    var tt = document.getElementById('gc-tooltip');
+    if (tt && tt.style.display === 'block') _positionTooltip(tt);
+  });
 
   function attachEvents() {
     if (typeof network === 'undefined' || typeof nodes === 'undefined') return;
     network.on('hoverNode', function(p) {
-      if (!_tooltipFixed) { fixTooltipHTML(); _tooltipFixed = true; }
+      var meta = NODE_META.find(function(m) { return m.id === p.node; });
+      var tt   = document.getElementById('gc-tooltip');
+      if (tt && meta && meta.tt) {
+        tt.innerHTML     = meta.tt;
+        tt.style.display = 'block';
+        _positionTooltip(tt);
+      }
       nodes.update([{ id: p.node, font: { size: 11, color: '#ffffff' } }]);
     });
     network.on('blurNode', function(p) {
+      var tt = document.getElementById('gc-tooltip');
+      if (tt) tt.style.display = 'none';
       if (!_labelsOn) nodes.update([{ id: p.node, font: { size: 0 } }]);
     });
     network.on('click', function(p) {
       if (p.nodes && p.nodes.length > 0) {
+        hideSimilarityPanel();
         enterFocusMode(p.nodes[0]);
-      } else if (_focusMode) {
-        resetFocusMode();
+      } else if (p.edges && p.edges.length > 0) {
+        showSimilarityPanel(p.edges[0]);
+      } else {
+        hideSimilarityPanel();
+        if (_focusMode) resetFocusMode();
       }
     });
     network.on('selectNode', function(p) {
@@ -2829,13 +2973,13 @@ input[type=range] {
       attachEvents();
       startBridgePulse();
       setDensity(1);
-      fixTooltipHTML();
     }, 700);
   });
 })();
 </script>"""
 
-    overlay = "\n".join([data_js, css, controls_html, search_html, bpm_html, comm_panel_html, focus_panel_html, legend_html, hint_html, js])
+    tooltip_div = '<div id="gc-tooltip"></div>'
+    overlay = "\n".join([data_js, css, controls_html, search_html, bpm_html, comm_panel_html, focus_panel_html, legend_html, hint_html, sim_panel_html, tooltip_div, js])
 
     if "</body>" in html:
         patched = html.replace("</body>", overlay + "\n</body>", 1)

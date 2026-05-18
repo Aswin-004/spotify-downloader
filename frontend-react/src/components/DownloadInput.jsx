@@ -15,8 +15,14 @@ export default function DownloadInput() {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState('');
 
+  const SPOTIFY_URL_RE = /open\.spotify\.com\/(track|album|playlist)\/[A-Za-z0-9]+/;
+
   async function handleFetch() {
     if (!url.trim()) return;
+    if (!SPOTIFY_URL_RE.test(url.trim())) {
+      setError('Please enter a valid Spotify track, album, or playlist URL');
+      return;
+    }
     setLoading(true);
     setError('');
     setMetadata(null);
@@ -38,8 +44,9 @@ export default function DownloadInput() {
 
     try {
       const res = await api.startDownload(url.trim());
-      if (res.status !== 202) {
-        throw new Error('Download request failed');
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Download request failed (${res.status})`);
       }
       // Progress comes via WebSocket
     } catch (err) {

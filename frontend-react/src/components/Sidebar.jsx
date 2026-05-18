@@ -13,7 +13,8 @@ import {
   SkipForward,
   XCircle,
   Loader2,
-  BarChart3, // ANALYTICS
+  BarChart3,
+  AlertTriangle,
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { cn, capitalize } from '@/lib/utils';
@@ -23,12 +24,13 @@ const navItems = [
   { to: '/', icon: Download, label: 'Download' },
   { to: '/history', icon: History, label: 'History' },
   { to: '/files', icon: FolderOpen, label: 'Files' },
-  { to: '/library', icon: ListMusic, label: 'Library' }, // FILE ORGANIZER
-  { to: '/analytics', icon: BarChart3, label: 'Analytics' }, // ANALYTICS
+  { to: '/library', icon: ListMusic, label: 'Library' },
+  { to: '/analytics', icon: BarChart3, label: 'Analytics' },
+  { to: '/review', icon: AlertTriangle, label: 'Review' },
 ];
 
 export default function Sidebar({ collapsed, onToggle }) {
-  const { autoStatus, queueStatus, connected, downloads } = useSocket();
+  const { autoStatus, queueStatus, connected, downloads, needsReviewCount } = useSocket();
 
   const dlCounts = {
     downloading: Object.keys(downloads.downloading).length,
@@ -65,24 +67,37 @@ export default function Sidebar({ collapsed, onToggle }) {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {navItems.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) =>
-              cn(
-                'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200',
-                isActive
-                  ? 'bg-primary/15 text-primary'
-                  : 'text-gray-400 hover:text-white hover:bg-surface-light'
-              )
-            }
-          >
-            <Icon className="w-5 h-5 flex-shrink-0" />
-            {!collapsed && <span>{label}</span>}
-          </NavLink>
-        ))}
+        {navItems.map(({ to, icon: Icon, label }) => {
+          const showBadge = to === '/review' && needsReviewCount > 0;
+          return (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              className={({ isActive }) =>
+                cn(
+                  'relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200',
+                  isActive
+                    ? 'bg-primary/15 text-primary'
+                    : 'text-gray-400 hover:text-white hover:bg-surface-light'
+                )
+              }
+            >
+              <div className="relative flex-shrink-0">
+                <Icon className="w-5 h-5" />
+                {showBadge && collapsed && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400" />
+                )}
+              </div>
+              {!collapsed && <span className="flex-1">{label}</span>}
+              {!collapsed && showBadge && (
+                <span className="ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  {needsReviewCount}
+                </span>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
 
       {/* Bottom section */}

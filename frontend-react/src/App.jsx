@@ -6,7 +6,8 @@ import Dashboard from '@/pages/Dashboard';
 import History from '@/pages/History';
 import Files from '@/pages/Files';
 import LibraryPage from '@/pages/LibraryPage';
-import Analytics from '@/pages/Analytics'; // ANALYTICS
+import Analytics from '@/pages/Analytics';
+import ReviewPage from '@/pages/ReviewPage';
 
 export default function App() {
   return (
@@ -18,8 +19,9 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="/history" element={<History />} />
               <Route path="/files" element={<Files />} />
-              <Route path="/library" element={<LibraryPage />} /> {/* FILE ORGANIZER */}
-              <Route path="/analytics" element={<Analytics />} /> {/* ANALYTICS */}
+              <Route path="/library" element={<LibraryPage />} />
+              <Route path="/analytics" element={<Analytics />} />
+              <Route path="/review" element={<ReviewPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

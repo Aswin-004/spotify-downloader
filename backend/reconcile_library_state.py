@@ -184,12 +184,14 @@ def _reindex_file(filepath: str, dry_run: bool) -> bool:
     try:
         from mutagen.id3 import ID3, ID3NoHeaderError
         tags_data = _read_id3(filepath)
-        spotify_id = (tags_data or {}).get("spotify_id", "")
-        title  = (tags_data or {}).get("title", Path(filepath).stem)
-        artist = (tags_data or {}).get("artist", "Unknown")
+        spotify_id = (tags_data or {}).get("spotify_id", "") or ""
+        # Fall back to filename stem / parent folder when tags are empty strings
+        title  = (tags_data or {}).get("title",  "") or Path(filepath).stem
+        artist = (tags_data or {}).get("artist", "") or Path(filepath).parent.name
         rel = str(Path(filepath).relative_to(BASE_DIR))
         parts = Path(rel).parts
-        genre_folder = parts[0] if len(parts) > 1 else "Unknown"
+        # Preserve full taxonomy depth (e.g. Library/Electronic/House), not just parts[0]
+        genre_folder = "/".join(parts[:-1]) if len(parts) > 1 else "Unknown"
 
         if dry_run:
             logger.info(f"  [DRY] would reindex: {rel}")

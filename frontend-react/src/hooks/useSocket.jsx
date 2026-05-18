@@ -46,6 +46,7 @@ export function SocketProvider({ children }) {
   });
   const [downloads, setDownloads] = useState(EMPTY_DOWNLOADS);
   const [retagProgress, setRetagProgress] = useState(null); // MUSICBRAINZ
+  const [needsReviewItems, setNeedsReviewItems] = useState([]);
 
   const socketRef = useRef(null);
   const { addToast } = useToast();
@@ -53,7 +54,7 @@ export function SocketProvider({ children }) {
   toastRef.current = addToast;
 
   useEffect(() => {
-    const socket = io('http://localhost:5000', {  // SOCKET FIX — added polling fallback
+    const socket = io('', {  // connect to same origin — works via Vite proxy on dev and Flask directly in prod
       transports: ['websocket', 'polling'],
       autoConnect: true,
       reconnection: true,
@@ -251,6 +252,32 @@ export function SocketProvider({ children }) {
       }
     }, 15000);  // DISCONNECT FIX
 
+    // Gemini rescued an unknown genre — routed automatically, no action needed
+    socket.on('download_auto_classified', (data) => {
+      const folder = (data.folder || '').replace('Library/', '');
+      toastRef.current({
+        type: 'success',
+        title: 'Auto-classified by Gemini',
+        description: `${data.title} · ${data.artist} → ${folder}`,
+        duration: 5000,
+      });
+    });
+
+    // Unknown genre — Gemini unavailable, song landed in Electronic catch-all
+    socket.on('download_needs_review', (data) => {
+      const conf = Math.round((data.confidence || 0) * 100);
+      toastRef.current({
+        type: 'warning',
+        title: 'Genre unknown — saved to Electronic',
+        description: `${data.title} · ${data.artist} (${conf}% confidence) — Gemini offline, add to SPOTIFY_GENRE_MAP to fix`,
+        duration: 8000,
+      });
+      setNeedsReviewItems((prev) => [
+        { ...data, timestamp: new Date().toLocaleTimeString() },
+        ...prev.slice(0, 49),
+      ]);
+    });
+
     // MUSICBRAINZ — retag progress listener
     socket.on('retag_progress', (data) => {
       setRetagProgress(data);
@@ -279,6 +306,14 @@ export function SocketProvider({ children }) {
     socketRef.current?.emit('request_status');
   }, []);
 
+  const clearNeedsReviewItem = useCallback((title) => {
+    setNeedsReviewItems((prev) => prev.filter((item) => item.title !== title));
+  }, []);
+
+  const clearDownloads = useCallback((bucket) => {
+    setDownloads((prev) => ({ ...prev, [bucket]: {} }));
+  }, []);
+
   return (
     <SocketContext.Provider
       value={{
@@ -291,6 +326,10 @@ export function SocketProvider({ children }) {
         ingestProgress,
         downloads,
         retagProgress, // MUSICBRAINZ
+        needsReviewItems,
+        needsReviewCount: needsReviewItems.length,
+        clearNeedsReviewItem,
+        clearDownloads,
         requestStatus,
       }}
     >

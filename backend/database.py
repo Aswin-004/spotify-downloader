@@ -63,6 +63,9 @@ def _get_db():  # MUSICBRAINZ
         return _db  # MUSICBRAINZ
 
 
+get_db = _get_db  # public alias used by tagger_service and organizer_service
+
+
 def _ensure_indexes():  # MUSICBRAINZ
     """Create indexes on all collections (idempotent)."""  # MUSICBRAINZ
     db = _client[MONGODB_DB]  # MUSICBRAINZ

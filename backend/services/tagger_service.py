@@ -494,6 +494,24 @@ def tag_file(  # MUSICBRAINZ
         except Exception as _lb_exc:
             logger.debug(f"[tagger] librosa fallback failed: {_lb_exc}")
 
+    # GEMINI — Full audio analysis (non-blocking enrichment)
+    if file_path:
+        try:
+            from services.gemini_service import analyze_audio as _gemini_analyze
+            _gemini_data = _gemini_analyze(file_path)
+            if _gemini_data:
+                _sp_id = (spotify_metadata or {}).get("id", "")
+                _identity = f"sp:{_sp_id}" if _sp_id else None
+                if _identity:
+                    from database import get_library_index_collection
+                    get_library_index_collection().update_one(
+                        {"identity_key": _identity},
+                        {"$set": {f"audio_features.{k}": v for k, v in _gemini_data.items()}},
+                        upsert=False,
+                    )
+        except Exception as _gm_exc:
+            logger.debug(f"[tagger] gemini enrichment failed: {_gm_exc}")
+
     # MUSICBRAINZ — Merge metadata: MusicBrainz takes priority, Spotify fills gaps
     mb = musicbrainz_data or {}  # MUSICBRAINZ
     sp = spotify_metadata or {}  # MUSICBRAINZ

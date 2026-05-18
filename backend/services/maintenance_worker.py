@@ -171,6 +171,7 @@ class MaintenanceWorker:
             _Task("fingerprint_new",          self._task_fingerprint_new,           cooldown_sec=600),
             _Task("reconcile",                self._task_reconcile,                 cooldown_sec=1800),
             _Task("reclassify_needs_review",  self._task_reclassify,                cooldown_sec=3600),
+            _Task("retag_catchall",           self._task_retag_catchall,            cooldown_sec=3600),
             _Task("ingestion_cycle_report",   self._task_ingestion_cycle_report,    cooldown_sec=300),
         ]
 
@@ -318,6 +319,97 @@ class MaintenanceWorker:
                 logger.debug(f"[maintenance] Reclassification: {still_unknown} track(s) still unresolved")
         except Exception as exc:
             raise RuntimeError(f"reclassify task: {exc}") from exc
+
+    def _task_retag_catchall(self) -> None:
+        """
+        Retry Gemini genre identification for files tagged routing_source=catchall
+        in Library/Electronic/.  On success, move file to correct Library/{genre}/
+        and clear the tag.  Processes up to 20 files per run to stay rate-limit safe.
+        """
+        from config import config
+        import shutil as _shutil
+
+        electronic_dir = Path(config.BASE_DOWNLOAD_DIR) / "Library" / "Electronic"
+        if not electronic_dir.is_dir():
+            return
+
+        try:
+            from mutagen.id3 import ID3, TXXX
+        except ImportError:
+            return
+
+        candidates = [f for f in electronic_dir.glob("*.mp3") if f.is_file()]
+        if not candidates:
+            return
+
+        # Filter to only catchall-tagged files
+        catchall_files = []
+        for f in candidates:
+            try:
+                tags = ID3(str(f))
+                txxx = tags.get("TXXX:routing_source")
+                if txxx and "catchall" in (txxx.text or []):
+                    catchall_files.append(f)
+            except Exception:
+                continue
+
+        if not catchall_files:
+            return
+
+        logger.info(f"[maintenance] retag_catchall: {len(catchall_files)} file(s) to retry")
+
+        try:
+            from services.genre_router import normalize_genre, _library_path
+            from services.gemini_service import identify_audio
+        except ImportError as e:
+            logger.debug(f"[maintenance] retag_catchall: missing dependency: {e}")
+            return
+
+        moved = 0
+        for fp in catchall_files[:20]:
+            try:
+                gemini = identify_audio(str(fp))
+                raw = gemini.get("gemini_genre", "")
+                if not raw:
+                    continue
+                canonical = normalize_genre(raw)
+                genre_path = _library_path(canonical) if canonical else "Library/Electronic"
+                if genre_path == "Library/Electronic":
+                    continue  # still unknown — leave for next cycle
+                dest_dir = Path(config.BASE_DOWNLOAD_DIR) / genre_path
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest_fp = dest_dir / fp.name
+                _shutil.move(str(fp), str(dest_fp))
+                # Remove catchall tag from moved file
+                try:
+                    tags = ID3(str(dest_fp))
+                    tags.delall("TXXX:routing_source")
+                    tags.save()
+                except Exception:
+                    pass
+                # Update MongoDB library index
+                try:
+                    from database import get_library_index_collection
+                    col = get_library_index_collection()
+                    if col is not None:
+                        col.update_one(
+                            {"final_path": str(fp)},
+                            {"$set": {"final_path": str(dest_fp), "genre_folder": genre_path}},
+                        )
+                except Exception:
+                    pass
+                logger.info(f"[maintenance] retag_catchall: {fp.name} → {genre_path}")
+                moved += 1
+            except Exception as exc:
+                msg = str(exc).lower()
+                if any(k in msg for k in ("429", "quota", "resource exhausted", "rate limit")):
+                    logger.warning(f"[maintenance] retag_catchall: Gemini quota hit, aborting batch ({moved} moved so far)")
+                    break
+                logger.debug(f"[maintenance] retag_catchall error for {fp.name}: {exc}")
+                continue
+
+        if moved:
+            logger.info(f"[maintenance] retag_catchall: moved {moved} file(s) out of Electronic/")
 
     def _task_ingestion_cycle_report(self) -> None:
         """

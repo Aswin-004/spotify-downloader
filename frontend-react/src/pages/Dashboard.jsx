@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import {
   Loader2,
@@ -32,7 +32,7 @@ const emptyMessages = {
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('downloading');
-  const { downloads, ingestProgress } = useSocket();
+  const { downloads, ingestProgress, clearDownloads } = useSocket();
 
   const counts = useMemo(() => ({
     downloading: Object.keys(downloads.downloading).length,
@@ -45,6 +45,13 @@ export default function Dashboard() {
     () => Object.values(downloads[activeTab] || {}),
     [downloads, activeTab]
   );
+
+  // Auto-switch to Completed when all active downloads finish
+  useEffect(() => {
+    if (counts.downloading === 0 && activeTab === 'downloading' && counts.completed > 0) {
+      setActiveTab('completed');
+    }
+  }, [counts.downloading]);
 
   const totalActive = counts.downloading + counts.completed + counts.skipped + counts.failed;
   const empty = emptyMessages[activeTab];
@@ -95,6 +102,15 @@ export default function Dashboard() {
         <LayoutGroup>
         <div>
           <div className="relative flex gap-1 bg-surface/80 backdrop-blur rounded-xl p-1 border border-border">
+            {/* Clear button — visible on non-downloading tabs with items */}
+            {activeTab !== 'downloading' && counts[activeTab] > 0 && (
+              <button
+                onClick={() => clearDownloads(activeTab)}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-gray-500 hover:text-gray-300 px-2 py-1 rounded-md hover:bg-white/5 transition-colors z-20"
+              >
+                Clear
+              </button>
+            )}
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const count = counts[tab.id];
@@ -167,7 +183,7 @@ export default function Dashboard() {
                 <div className="space-y-2">
                   <AnimatePresence initial={false}>
                     {items.map((item, i) => (
-                      <DownloadCard key={item.title} item={item} index={i} />
+                      <DownloadCard key={`${item.title}__${item.artist}`} item={item} index={i} />
                     ))}
                   </AnimatePresence>
                 </div>

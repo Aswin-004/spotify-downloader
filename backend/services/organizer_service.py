@@ -315,16 +315,26 @@ def _run_organize(mode: str, since_hours: Optional[float]) -> dict:
     errors  = []
     cutoff  = (time.time() - since_hours * 3600) if since_hours is not None else None
 
+    _manual_root = BASE_DOWNLOAD_DIR / "Manual"
+
     for root, _dirs, filenames in os.walk(BASE_DOWNLOAD_DIR):
+        root_path = Path(root)
+        # Never touch files already inside Manual/ — those are hand-curated
+        try:
+            root_path.relative_to(_manual_root)
+            continue
+        except ValueError:
+            pass
+
         for fname in filenames:
             if not fname.lower().endswith(".mp3"):
                 continue
-            src = Path(root) / fname
+            src = root_path / fname
             if cutoff is not None and src.stat().st_mtime < cutoff:
                 continue
             try:
-                artist, genre = _read_tags(src)
-                folder_structure = _folder_structure(mode, artist, genre)
+                artist, genre, genre_folder_db = _read_tags(src)
+                folder_structure = _folder_structure(mode, artist, genre, genre_folder_db)
                 target_dir = BASE_DOWNLOAD_DIR / folder_structure
 
                 # Skip if already inside the target directory (or a remix subfolder of it)
@@ -350,19 +360,42 @@ def _run_organize(mode: str, since_hours: Optional[float]) -> dict:
     return {"moved": moved, "skipped": skipped, "errors": errors}
 
 
-def _read_tags(path: Path) -> Tuple[str, str]:
+def _read_tags(path: Path) -> tuple[str, str, str]:
+    """Returns (artist, tcon_genre, genre_folder_from_db)."""
+    artist, tcon, genre_folder_db = "Unknown", "Unknown", ""
     try:
         tags   = ID3(str(path))
         artist = str(tags.get("TPE1") or "Unknown").strip() or "Unknown"
-        genre  = str(tags.get("TCON") or "Unknown").strip() or "Unknown"
+        tcon   = str(tags.get("TCON") or "Unknown").strip() or "Unknown"
+        _txxx = tags.get("TXXX:SPOTIFY_ID")
+        sp_id = str(_txxx.text[0]).strip() if (_txxx and _txxx.text) else ""
+        if sp_id:
+            from database import get_library_index_collection
+            doc = get_library_index_collection().find_one(
+                {"identity_key": f"sp:{sp_id}"}, {"genre_folder": 1}
+            )
+            if doc:
+                genre_folder_db = doc.get("genre_folder", "")
     except ID3NoHeaderError:
-        artist, genre = "Unknown", "Unknown"
-    return artist, genre
+        pass
+    return artist, tcon, genre_folder_db
 
 
-def _folder_structure(mode: str, artist: str, genre: str) -> str:
+def _folder_structure(mode: str, artist: str, genre: str, genre_folder_db: str = "") -> str:
     a = clean_folder_name(artist)
     g = clean_folder_name(genre)
+    if mode == "dj":
+        # Priority 1: leaf genre from MongoDB genre_folder (most accurate)
+        if genre_folder_db:
+            leaf = genre_folder_db.replace("\\", "/").split("/")[-1]
+            if leaf and leaf.lower() not in ("library", "unknown", ""):
+                return f"Library/{clean_folder_name(leaf)}"
+        # Priority 2: normalize raw TCON tag
+        from services.genre_router import normalize_genre
+        canonical = normalize_genre(genre)
+        if canonical:
+            return f"Library/{clean_folder_name(canonical)}"
+        return f"NeedsReview/{a}"
     if mode == "genre":
         return g
     if mode == "artist_genre":
