@@ -365,8 +365,10 @@ class MaintenanceWorker:
             logger.debug(f"[maintenance] retag_catchall: missing dependency: {e}")
             return
 
+        import time as _time
+
         moved = 0
-        for fp in catchall_files[:20]:
+        for fp in catchall_files[:5]:  # cap at 5 to conserve 20/day free-tier quota
             try:
                 gemini = identify_audio(str(fp))
                 raw = gemini.get("gemini_genre", "")
@@ -400,6 +402,7 @@ class MaintenanceWorker:
                     pass
                 logger.info(f"[maintenance] retag_catchall: {fp.name} → {genre_path}")
                 moved += 1
+                _time.sleep(4)  # stay under burst rate limit between calls
             except Exception as exc:
                 msg = str(exc).lower()
                 if any(k in msg for k in ("429", "quota", "resource exhausted", "rate limit")):

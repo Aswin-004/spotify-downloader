@@ -274,10 +274,11 @@ export function SocketProvider({ children }) {
         description: `${data.title} · ${data.artist} (${conf}% confidence) — Gemini offline, add to SPOTIFY_GENRE_MAP to fix`,
         duration: 8000,
       });
-      setNeedsReviewItems((prev) => [
-        { ...data, timestamp: new Date().toLocaleTimeString() },
-        ...prev.slice(0, 49),
-      ]);
+      setNeedsReviewItems((prev) => {
+        const key = `${data.title}|${data.artist}`;
+        if (prev.some((i) => `${i.title}|${i.artist}` === key)) return prev;
+        return [{ ...data, timestamp: new Date().toLocaleTimeString() }, ...prev.slice(0, 49)];
+      });
     });
 
     // MUSICBRAINZ — retag progress listener

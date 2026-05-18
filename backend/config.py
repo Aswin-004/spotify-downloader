@@ -438,6 +438,17 @@ class Config:
         "tyler the creator":    "Hip Hop",
         "central cee":          "Hip Hop",
         "dave":                 "Hip Hop",
+        # ── House (Latin / Tech House) ────────────────────────────────────
+        "hugel":                "House",
+        "alok":                 "House",
+        "roger sanchez":        "House",
+        "matt sassari":         "House",
+        "jaden bojsen":         "House",
+        "meduza":               "House",
+        "twenty six":           "House",
+        "raffa fl":             "House",
+        # ── Pop ──────────────────────────────────────────────────────────
+        "teddy swims":          "Pop",
     }
 
 
