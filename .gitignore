@@ -21,6 +21,7 @@ env/
 
 # ── Runtime data & state files ────────────────────────────────────────────────
 backend/cache/
+backend/services/cache/
 backend/logs/
 backend/downloads/
 downloads/

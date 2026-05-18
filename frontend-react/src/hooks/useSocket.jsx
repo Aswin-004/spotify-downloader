@@ -47,6 +47,8 @@ export function SocketProvider({ children }) {
   const [downloads, setDownloads] = useState(EMPTY_DOWNLOADS);
   const [retagProgress, setRetagProgress] = useState(null); // MUSICBRAINZ
   const [needsReviewItems, setNeedsReviewItems] = useState([]);
+  const [maintenanceLogs, setMaintenanceLogs] = useState([]);
+  const [maintenanceRunning, setMaintenanceRunning] = useState(false);
 
   const socketRef = useRef(null);
   const { addToast } = useToast();
@@ -296,6 +298,11 @@ export function SocketProvider({ children }) {
       // silent — no toast for every download, just updates state
     });
 
+    socket.on('maintenance_log', (data) => {
+      setMaintenanceLogs((prev) => [...prev, data]);
+      if (data.done) setMaintenanceRunning(false);
+    });
+
     return () => {
       clearInterval(keepAlive);  // DISCONNECT FIX
       socket.disconnect();
@@ -312,6 +319,19 @@ export function SocketProvider({ children }) {
 
   const clearDownloads = useCallback((bucket) => {
     setDownloads((prev) => ({ ...prev, [bucket]: {} }));
+  }, []);
+
+  const startMaintenance = useCallback((task) => {
+    setMaintenanceLogs([]);
+    setMaintenanceRunning(true);
+    // logs will arrive via maintenance_log socket events
+    // done=true event sets maintenanceRunning back to false
+    // Reset if the task is for a different task (clear old logs)
+    setMaintenanceLogs([{ task, line: `Starting ${task}…`, done: false }]);
+  }, []);
+
+  const clearMaintenanceLogs = useCallback(() => {
+    setMaintenanceLogs([]);
   }, []);
 
   return (
@@ -331,6 +351,10 @@ export function SocketProvider({ children }) {
         clearNeedsReviewItem,
         clearDownloads,
         requestStatus,
+        maintenanceLogs,
+        maintenanceRunning,
+        startMaintenance,
+        clearMaintenanceLogs,
       }}
     >
       {children}

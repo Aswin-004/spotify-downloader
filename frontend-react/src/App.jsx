@@ -8,6 +8,7 @@ import Files from '@/pages/Files';
 import LibraryPage from '@/pages/LibraryPage';
 import Analytics from '@/pages/Analytics';
 import ReviewPage from '@/pages/ReviewPage';
+import MaintenancePage from '@/pages/MaintenancePage';
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/review" element={<ReviewPage />} />
+              <Route path="/maintenance" element={<MaintenancePage />} />
             </Route>
           </Routes>
         </BrowserRouter>

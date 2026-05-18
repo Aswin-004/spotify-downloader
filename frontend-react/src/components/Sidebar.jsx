@@ -15,6 +15,7 @@ import {
   Loader2,
   BarChart3,
   AlertTriangle,
+  Wrench,
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { cn, capitalize } from '@/lib/utils';
@@ -27,6 +28,7 @@ const navItems = [
   { to: '/library', icon: ListMusic, label: 'Library' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
   { to: '/review', icon: AlertTriangle, label: 'Review' },
+  { to: '/maintenance', icon: Wrench, label: 'Maintenance' },
 ];
 
 export default function Sidebar({ collapsed, onToggle }) {

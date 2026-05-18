@@ -181,4 +181,16 @@ export const api = {
       body: JSON.stringify({ mode, hours }),
     }).then(handleResponse);
   },
+
+  runMaintenance(task, opts = {}) {
+    return fetch('/api/maintenance/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task, ...opts }),
+    }).then(handleResponse);
+  },
+
+  getMaintenanceStatus() {
+    return fetch('/api/maintenance/status').then(handleResponse);
+  },
 };
