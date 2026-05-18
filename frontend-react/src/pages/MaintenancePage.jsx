@@ -270,7 +270,7 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
 }
 
 export default function MaintenancePage() {
-  const { maintenanceLogs, maintenanceRunning, startMaintenance, clearMaintenanceLogs } = useSocket();
+  const { maintenanceLogs, maintenanceRunning, startMaintenance, stopMaintenance, clearMaintenanceLogs } = useSocket();
   const [activeTask, setActiveTask] = useState(null);
   const [error, setError] = useState('');
 
@@ -284,6 +284,8 @@ export default function MaintenancePage() {
     } catch (err) {
       setError(err.message || 'Failed to start task');
       setActiveTask(null);
+      stopMaintenance();
+      clearMaintenanceLogs();
     }
   }
 

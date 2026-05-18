@@ -1554,6 +1554,16 @@ _MAINTENANCE_SCRIPTS = {
 
 import subprocess
 import sys as _sys
+import re as _re
+
+_ANSI_RE = _re.compile(r'\x1b\[[0-9;]*m')
+_LOGURU_RE = _re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \| (DEBUG|INFO)\s+\|')
+
+def _strip_line(raw: str) -> str:
+    clean = _ANSI_RE.sub('', raw).rstrip()
+    if _LOGURU_RE.match(clean):
+        return ''
+    return clean
 
 @app.route('/api/maintenance/status', methods=['GET'])
 def maintenance_status():
@@ -1580,7 +1590,7 @@ def maintenance_run():
     script = _MAINTENANCE_SCRIPTS[task]
     backend_dir = os.path.dirname(os.path.abspath(__file__))
 
-    def _emit(line: str, done: bool = False, exit_code: int | None = None):
+    def _emit(line, done=False, exit_code=None):
         payload = {"task": task, "line": line, "done": done}
         if exit_code is not None:
             payload["exit_code"] = exit_code
@@ -1608,7 +1618,7 @@ def maintenance_run():
             )
             _emit(f"▶ Started: {' '.join(args[1:])}")
             for raw in proc.stdout:
-                line = raw.rstrip("\n")
+                line = _strip_line(raw)
                 if line:
                     _emit(line)
             proc.wait()

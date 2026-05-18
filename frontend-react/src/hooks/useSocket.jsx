@@ -322,12 +322,12 @@ export function SocketProvider({ children }) {
   }, []);
 
   const startMaintenance = useCallback((task) => {
-    setMaintenanceLogs([]);
-    setMaintenanceRunning(true);
-    // logs will arrive via maintenance_log socket events
-    // done=true event sets maintenanceRunning back to false
-    // Reset if the task is for a different task (clear old logs)
     setMaintenanceLogs([{ task, line: `Starting ${task}…`, done: false }]);
+    setMaintenanceRunning(true);
+  }, []);
+
+  const stopMaintenance = useCallback(() => {
+    setMaintenanceRunning(false);
   }, []);
 
   const clearMaintenanceLogs = useCallback(() => {
@@ -354,6 +354,7 @@ export function SocketProvider({ children }) {
         maintenanceLogs,
         maintenanceRunning,
         startMaintenance,
+        stopMaintenance,
         clearMaintenanceLogs,
       }}
     >
