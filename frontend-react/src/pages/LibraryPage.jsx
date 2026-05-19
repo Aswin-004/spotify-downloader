@@ -1,12 +1,40 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Music, Search, ChevronRight, ChevronDown } from 'lucide-react';
+import { Music, Search, ChevronRight, ChevronDown, AlertTriangle, RotateCw, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
+
+function TrackArt({ path }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <Music className="w-4 h-4 text-blue-400 flex-shrink-0" />;
+  return (
+    <img
+      src={`/api/artwork?path=${encodeURIComponent(path)}`}
+      alt=""
+      className="w-8 h-8 rounded object-cover flex-shrink-0"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function FolderSkeleton() {
+  return (
+    <div className="rounded-xl border border-gray-700/50 bg-white/5 overflow-hidden animate-pulse">
+      <div className="px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-5 h-5 rounded bg-gray-700/60" />
+          <div className="w-32 h-4 rounded bg-gray-700/60" />
+        </div>
+        <div className="w-8 h-5 rounded-full bg-gray-700/60" />
+      </div>
+    </div>
+  );
+}
 
 // Main LibraryPage Component
 export default function LibraryPage() {
@@ -14,11 +42,23 @@ export default function LibraryPage() {
   const [files, setFiles] = useState([]);
   const [search, setSearch] = useState('');
   const [expandedFolders, setExpandedFolders] = useState(new Set());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
+  function loadFiles() {
+    setLoading(true);
+    setError('');
     api.getFiles().then((data) => {
       if (data.files) setFiles(data.files);
-    }).catch(() => {});
+    }).catch(() => {
+      setError('Failed to load library. Check that the backend is running.');
+    }).finally(() => {
+      setLoading(false);
+    });
+  }
+
+  useEffect(() => {
+    loadFiles();
   }, []);
 
   useEffect(() => {
@@ -79,11 +119,37 @@ export default function LibraryPage() {
             <p className="text-gray-400 mt-2">Manage your downloaded tracks</p>
           </div>
           <div className="text-right">
-            <div className="text-3xl font-bold text-purple-400">{totalFiles}</div>
-            <div className="text-sm text-gray-400">tracks</div>
+            {loading ? (
+              <Loader2 className="w-7 h-7 text-purple-400 animate-spin ml-auto" />
+            ) : (
+              <>
+                <div className="text-3xl font-bold text-purple-400">{totalFiles}</div>
+                <div className="text-sm text-gray-400">tracks</div>
+              </>
+            )}
           </div>
         </div>
       </motion.div>
+
+      {/* Error banner */}
+      <AnimatePresence>
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20"
+          >
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+              <span className="text-sm text-red-300">{error}</span>
+            </div>
+            <Button size="sm" variant="ghost" onClick={loadFiles} className="text-red-400 hover:text-red-300 shrink-0">
+              <RotateCw className="w-3.5 h-3.5 mr-1" /> Retry
+            </Button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Search */}
       <motion.div
@@ -104,7 +170,11 @@ export default function LibraryPage() {
       {/* Track List */}
       <ScrollArea className="h-[600px]">
         <div className="pr-4 space-y-3">
-          {folderNames.length === 0 ? (
+          {loading ? (
+            <>
+              {[...Array(6)].map((_, i) => <FolderSkeleton key={i} />)}
+            </>
+          ) : folderNames.length === 0 ? (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -163,7 +233,7 @@ export default function LibraryPage() {
                               className="px-4 py-3 flex items-center hover:bg-white/5 transition-colors"
                             >
                               <div className="flex items-center gap-3 flex-1 min-w-0">
-                                <Music className="w-4 h-4 text-blue-400 flex-shrink-0" />
+                                <TrackArt path={file.path} />
                                 <div className="min-w-0">
                                   <div className="text-sm font-medium text-gray-200 truncate">
                                     {file.name}

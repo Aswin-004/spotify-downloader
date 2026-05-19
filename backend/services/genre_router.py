@@ -140,6 +140,7 @@ def normalize_genre(raw: str) -> str:
     for canonical in GENRE_TAXONOMY:
         if canonical.lower() in raw_lower or raw_lower in canonical.lower():
             return canonical
+    logger.warning(f"[genre_router] Unknown genre — not in taxonomy or SPOTIFY_GENRE_MAP: {raw!r} → add to config.py")
     return ""
 
 
@@ -178,6 +179,7 @@ def _library_path(genre_folder: str) -> str:
     for key, (family, subpath) in GENRE_TAXONOMY.items():
         if subpath.lower() == gf_lower or key.lower() == gf_lower:
             return f"{LIBRARY_ROOT}/{subpath}"
+    logger.warning(f"[genre_router] No library folder for {genre_folder!r} — falling back to Electronic catch-all")
     return f"{LIBRARY_ROOT}/Electronic"
 
 
@@ -308,6 +310,27 @@ def _resolve_core(
             _source_cache[artist_id]     = "artist_override"
         logger.info(f"[genre_router] {artist_name} → {result} (artist override, conf=1.0)")
         return result, CONFIDENCE_ARTIST_OVERRIDE, "artist_override", artist_name
+
+    # 2.5. User-defined custom folder mapping (Settings page)
+    # Match folder_name against the artist name so tracks by a specific artist
+    # (e.g. "Sammy Virji") route to the right folder; genre_label is the target folder.
+    try:
+        from database import get_custom_folder_mappings_collection
+        import re as _re
+        _col = get_custom_folder_mappings_collection()
+        for _doc in _col.find({}):
+            _folder_key = (_doc.get("folder_name") or "").strip()
+            if _folder_key and _re.match(rf"^{_re.escape(_folder_key)}$", artist_name, _re.IGNORECASE):
+                _genre_label = _doc.get("genre_label", _folder_key)
+                _path = _library_path(_genre_label)
+                if artist_id:
+                    _genre_cache[artist_id]      = _path
+                    _confidence_cache[artist_id] = 0.95
+                    _source_cache[artist_id]     = "custom_folder"
+                logger.info(f"[genre_router] {artist_name} → {_path} (custom folder mapping, conf=0.95)")
+                return _path, 0.95, "custom_folder", _genre_label
+    except Exception:
+        pass  # custom mappings unavailable — continue
 
     # 3. Phase 2: Artist memory service — learned from confirmed user moves
     try:

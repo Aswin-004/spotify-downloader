@@ -16,6 +16,8 @@ import {
   BarChart3,
   AlertTriangle,
   Wrench,
+  Settings,
+  BookOpen,
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { cn, capitalize } from '@/lib/utils';
@@ -29,6 +31,8 @@ const navItems = [
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
   { to: '/review', icon: AlertTriangle, label: 'Review' },
   { to: '/maintenance', icon: Wrench, label: 'Maintenance' },
+  { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/getting-started', icon: BookOpen, label: 'Guide' },
 ];
 
 export default function Sidebar({ collapsed, onToggle }) {
@@ -145,7 +149,7 @@ export default function Sidebar({ collapsed, onToggle }) {
           <div className="rounded-xl p-3 border border-border bg-surface-light/50">
             <div className="flex items-center gap-2 mb-2">
               <ListMusic className="w-4 h-4 text-gray-500" />
-              <span className="text-xs font-medium text-gray-300">Ingest</span>
+              <span className="text-xs font-medium text-gray-300">Auto-Sync</span>
             </div>
             <div className="grid grid-cols-2 gap-1.5">
               {dlCounts.downloading > 0 && (

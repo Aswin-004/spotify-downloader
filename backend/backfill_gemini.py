@@ -32,7 +32,7 @@ RATE_S  = 4.0   # seconds between Gemini calls (free tier: ~15 RPM)
 
 
 def _passes_requested() -> set[int]:
-    requested = {i for i in (1, 2, 3, 4) if f"--pass{i}" in sys.argv}
+    requested = {i for i in (1, 2, 3, 4, 5) if f"--pass{i}" in sys.argv}
     return requested or {1, 2, 3, 4}
 
 
@@ -332,6 +332,25 @@ def pass3_enrich_library():
         if DRY:
             print("    (dry run — skip Gemini call)")
             continue
+
+        # Try Last.fm first (free, no quota)
+        lastfm_genre = ""
+        try:
+            from services.lastfm_service import lookup_genre as _lfm
+            title_tag  = _read_tag(f, "TIT2")
+            artist_tag = _read_tag(f, "TPE1")
+            if title_tag and artist_tag:
+                lastfm_genre = _lfm(title_tag, artist_tag)
+                if lastfm_genre:
+                    print(f"    Last.fm → {lastfm_genre}")
+        except Exception as _le:
+            print(f"    [lastfm-warn] {_le}")
+
+        if lastfm_genre:
+            _write_tags(f, {"gemini_genre": lastfm_genre})
+            _update_mongo_tags(f, {"gemini_genre": lastfm_genre})
+            continue  # skip Gemini for this file
+
         result = _call_gemini_analyze(str(f))
         if not result:
             print("    Gemini failed — skipping")
@@ -390,11 +409,11 @@ def pass4_bpm_key():
         try:
             y, sr = librosa.load(str(f), sr=None, mono=True, duration=60)
             bpm_float, _ = librosa.beat.beat_track(y=y, sr=sr)
-            bpm_val = round(float(bpm_float))
+            bpm_val = round(float(np.squeeze(bpm_float).item() if hasattr(np.squeeze(bpm_float), 'item') else bpm_float))
 
-            chroma    = librosa.feature.chroma_cqt(y=y, sr=sr)
+            chroma     = librosa.feature.chroma_cqt(y=y, sr=sr)
             chroma_avg = chroma.mean(axis=1)
-            key_idx   = int(np.argmax(chroma_avg))
+            key_idx    = int(np.argmax(chroma_avg).item() if hasattr(np.argmax(chroma_avg), 'item') else np.argmax(chroma_avg))
             KEY_NAMES  = ["C", "C#", "D", "D#", "E", "F",
                           "F#", "G", "G#", "A", "A#", "B"]
             key_str   = KEY_NAMES[key_idx % 12]
@@ -410,6 +429,91 @@ def pass4_bpm_key():
                 _update_mongo_tags(f, {k.lower(): v for k, v in tags_to_write.items()})
         except Exception as e:
             print(f"    [librosa-warn] {e}")
+
+
+# ── PASS 5: Embed album artwork from Spotify ──────────────────────────────────
+
+def pass5_embed_artwork():
+    print("\n=== PASS 5: Embed album artwork from Spotify ===")
+
+    try:
+        import requests as _requests
+        from mutagen.id3 import ID3, APIC, ID3NoHeaderError
+    except ImportError as e:
+        print(f"  Missing dependency: {e} — run: pip install requests mutagen")
+        return
+
+    try:
+        from services.spotify_service import get_spotify_service
+        sp = get_spotify_service().sp
+    except Exception as e:
+        print(f"  Spotify unavailable: {e}")
+        return
+
+    to_process: list[Path] = []
+    for mp3 in sorted(LIB.rglob("*.mp3")):
+        try:
+            tags = ID3(str(mp3))
+            if not tags.getall("APIC"):
+                to_process.append(mp3)
+        except Exception:
+            to_process.append(mp3)
+
+    if LIMIT:
+        to_process = to_process[:LIMIT]
+    print(f"  {len(to_process)} files missing artwork")
+
+    embedded = 0
+    for i, f in enumerate(to_process, 1):
+        print(f"  [{i}/{len(to_process)}] {f.name}")
+        if DRY:
+            print("    (dry run — skip)")
+            continue
+
+        title  = _read_tag(f, "TIT2") or f.stem
+        artist = _read_tag(f, "TPE1") or ""
+        if not title:
+            print("    no title tag — skip")
+            continue
+
+        try:
+            import re as _re
+            # Strip "(From Movie Name)" suffix common in Bollywood titles
+            clean_title = _re.sub(r'\s*[\(\[]From[^\)\]]*[\)\]]', '', title, flags=_re.IGNORECASE).strip()
+            clean_title = _re.sub(r'\s*-\s*(From|OST|Soundtrack).*$', '', clean_title, flags=_re.IGNORECASE).strip()
+
+            def _search(t, a):
+                q = f"track:{t}"
+                if a:
+                    q += f" artist:{a}"
+                r = sp.search(q=q, type="track", limit=1)
+                return r.get("tracks", {}).get("items", [])
+
+            items = _search(clean_title, artist) or _search(clean_title, "") or _search(title, "")
+            if not items:
+                print("    Spotify: no match")
+                continue
+
+            track   = items[0]
+            img_url = (track.get("album", {}).get("images") or [{}])[0].get("url", "")
+            if not img_url:
+                print("    no artwork URL")
+                continue
+
+            img_data = _requests.get(img_url, timeout=10).content
+            try:
+                tags = ID3(str(f))
+            except ID3NoHeaderError:
+                tags = ID3()
+            tags["APIC"] = APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img_data)
+            tags.save(str(f))
+            print(f"    ✓ embedded ({len(img_data)//1024} KB)")
+            embedded += 1
+            time.sleep(1.0)  # 1 req/s Spotify rate limit
+        except Exception as e:
+            print(f"    [artwork-warn] {e}")
+
+    print(f"  Embedded artwork for {embedded}/{len(to_process)} files")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -428,6 +532,8 @@ def main():
         pass3_enrich_library()
     if 4 in passes:
         pass4_bpm_key()
+    if 5 in passes:
+        pass5_embed_artwork()
 
     print("\nDone.")
 

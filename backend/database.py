@@ -147,6 +147,13 @@ def _ensure_indexes():  # MUSICBRAINZ
         name="idx_am_last_seen",
     )
 
+    # CUSTOM FOLDER MAPPINGS — unique folder name
+    db.custom_folder_mappings.create_index(
+        [("folder_name", 1)],
+        unique=True,
+        name="idx_cfm_folder_name",
+    )
+
     logger.info("[database] MongoDB indexes ensured")  # MUSICBRAINZ
 
 
@@ -349,7 +356,7 @@ def log_tagging_failure(  # MUSICBRAINZ
             "$set": {  # MUSICBRAINZ
                 "title": title,  # MUSICBRAINZ
                 "artist": artist,  # MUSICBRAINZ
-                "error": error[:500],  # MUSICBRAINZ
+                "error": str(error)[:500],  # MUSICBRAINZ
                 "error_type": _classify_error_type(error),  # MUSICBRAINZ
                 "last_retry_timestamp": now,  # MUSICBRAINZ
             },  # MUSICBRAINZ
@@ -367,6 +374,11 @@ def log_tagging_failure(  # MUSICBRAINZ
 def get_library_index_collection():
     """Return the library_index collection."""
     return _get_db().library_index
+
+
+def get_custom_folder_mappings_collection():
+    """Return the custom_folder_mappings collection (user-defined folder→genre)."""
+    return _get_db().custom_folder_mappings
 
 
 def index_track(

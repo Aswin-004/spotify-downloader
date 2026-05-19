@@ -1,7 +1,13 @@
 # ── Environment ──────────────────────────────────────────────────────────────
 .env
 .env.local
+backend/.env
 backend/user_config.json
+backend/.gemini_quota_exhausted
+
+# ── Binaries ─────────────────────────────────────────────────────────────────
+fpcalc.exe
+backend/fpcalc.exe
 
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/

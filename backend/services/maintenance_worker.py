@@ -360,24 +360,143 @@ class MaintenanceWorker:
 
         try:
             from services.genre_router import normalize_genre, _library_path
-            from services.gemini_service import identify_audio
+            from services.gemini_service import identify_audio, GeminiQuotaExceeded
         except ImportError as e:
             logger.debug(f"[maintenance] retag_catchall: missing dependency: {e}")
             return
 
         import time as _time
+        from mutagen.id3 import ID3 as _ID3
+
+        def _artist_lower(fp):
+            try:
+                return str(_ID3(str(fp)).get("TPE1", "")).strip().lower()
+            except Exception:
+                return ""
+
+        # Sort: override-covered tracks first so they always move even when Gemini quota is gone
+        def _sort_key(fp):
+            a = _artist_lower(fp)
+            return (0 if config.ARTIST_GENRE_OVERRIDE.get(a) else 1, fp.name)
+
+        catchall_files.sort(key=_sort_key)
 
         moved = 0
-        for fp in catchall_files[:5]:  # cap at 5 to conserve 20/day free-tier quota
+        for fp in catchall_files[:30]:  # raised from 5 — most tracks now route without Gemini
             try:
-                gemini = identify_audio(str(fp))
-                raw = gemini.get("gemini_genre", "")
-                if not raw:
-                    continue
-                canonical = normalize_genre(raw)
-                genre_path = _library_path(canonical) if canonical else "Library/Electronic"
-                if genre_path == "Library/Electronic":
+                _tags = _ID3(str(fp))
+                artist_name = str(_tags.get("TPE1", "")).strip()
+                title_tag = str(_tags.get("TIT2", "")).strip()
+                artist_lower = artist_name.lower()
+
+                genre_path = ""
+                route_source = "unknown"
+
+                # ── 1. ARTIST_GENRE_OVERRIDE ─────────────────────────────────
+                override_genre = config.ARTIST_GENRE_OVERRIDE.get(artist_lower) if artist_lower else None
+                if override_genre:
+                    canonical = normalize_genre(override_genre)
+                    genre_path = _library_path(canonical) if canonical else ""
+                    route_source = "artist_override"
+
+                # ── 2. Spotify artist search ─────────────────────────────────
+                if not genre_path and artist_lower not in ("unknown", "electronic", ""):
+                    try:
+                        from services.spotify_service import get_spotify_service as _get_sp
+                        from services.genre_router import resolve_genre_folder_with_confidence as _rgfc
+                        _sp = _get_sp()
+                        if _sp:
+                            _res = _sp.sp.search(q=artist_name, type="artist", limit=1)
+                            _items = _res.get("artists", {}).get("items", [])
+                            _aid = _items[0]["id"] if _items else ""
+                            folder, conf, src = _rgfc(_aid, artist_name, _sp.sp)
+                            if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
+                                genre_path = folder
+                                route_source = src
+                    except Exception:
+                        pass
+
+                # ── 3. Spotify title-only search ─────────────────────────────
+                if not genre_path and title_tag:
+                    try:
+                        from services.spotify_service import get_spotify_service as _get_sp
+                        from services.genre_router import resolve_genre_folder_with_confidence as _rgfc
+                        from mutagen.id3 import TPE1 as _TPE1
+                        _sp = _get_sp()
+                        if _sp:
+                            _res = _sp.sp.search(q=f"track:{title_tag}", type="track", limit=5)
+                            for _t in _res.get("tracks", {}).get("items", []):
+                                _sp_artist = _t.get("artists", [{}])[0].get("name", "")
+                                _sp_aid = _t.get("artists", [{}])[0].get("id", "")
+                                if not _sp_artist:
+                                    continue
+                                folder, conf, src = _rgfc(_sp_aid, _sp_artist, _sp.sp)
+                                if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
+                                    genre_path = folder
+                                    route_source = f"spotify_title/{src}"
+                                    try:
+                                        _tags["TPE1"] = _TPE1(encoding=3, text=_sp_artist)
+                                        _tags.save(str(fp))
+                                    except Exception:
+                                        pass
+                                    break
+                    except Exception:
+                        pass
+
+                # ── 4. Last.fm (free, no quota) ──────────────────────────────
+                if not genre_path and title_tag and artist_name:
+                    try:
+                        from services.lastfm_service import lookup_genre as _lfm
+                        raw = _lfm(title_tag, artist_name)
+                        if raw:
+                            canonical = normalize_genre(raw)
+                            _lp = _library_path(canonical) if canonical else ""
+                            if _lp and _lp != "Library/Electronic":
+                                genre_path = _lp
+                                route_source = "lastfm"
+                    except Exception:
+                        pass
+
+                # ── 5. MusicBrainz search (free, no quota) ───────────────────
+                if not genre_path and title_tag:
+                    try:
+                        from services.musicbrainz_service import lookup_by_search as _mb_search
+                        mb_raw = _mb_search(title_tag, artist_name)
+                        if mb_raw:
+                            canonical = normalize_genre(mb_raw)
+                            _lp = _library_path(canonical) if canonical else ""
+                            if _lp and _lp != "Library/Electronic":
+                                genre_path = _lp
+                                route_source = "musicbrainz"
+                    except Exception:
+                        pass
+
+                # ── 6. AcoustID fingerprint (free with key) ───────────────────
+                if not genre_path:
+                    try:
+                        from services.musicbrainz_service import lookup_by_fingerprint as _mb_fp
+                        fp_raw = _mb_fp(str(fp))
+                        if fp_raw:
+                            canonical = normalize_genre(fp_raw)
+                            _lp = _library_path(canonical) if canonical else ""
+                            if _lp and _lp != "Library/Electronic":
+                                genre_path = _lp
+                                route_source = "acoustid"
+                    except Exception:
+                        pass
+
+                # ── 7. Gemini (last resort — costs daily quota) ───────────────
+                if not genre_path:
+                    gemini = identify_audio(str(fp))
+                    raw = gemini.get("gemini_genre", "")
+                    if raw:
+                        canonical = normalize_genre(raw)
+                        genre_path = _library_path(canonical) if canonical else ""
+                        route_source = "gemini"
+
+                if not genre_path or genre_path == "Library/Electronic":
                     continue  # still unknown — leave for next cycle
+
                 dest_dir = Path(config.BASE_DOWNLOAD_DIR) / genre_path
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest_fp = dest_dir / fp.name
@@ -400,14 +519,14 @@ class MaintenanceWorker:
                         )
                 except Exception:
                     pass
-                logger.info(f"[maintenance] retag_catchall: {fp.name} → {genre_path}")
+                logger.info(f"[maintenance] retag_catchall: {fp.name} → {genre_path} via {route_source}")
                 moved += 1
-                _time.sleep(4)  # stay under burst rate limit between calls
+                if route_source == "gemini":
+                    _time.sleep(4)  # rate limit only when Gemini was used
+            except GeminiQuotaExceeded:
+                logger.warning(f"[maintenance] retag_catchall: Gemini budget exhausted, aborting batch ({moved} moved so far)")
+                break
             except Exception as exc:
-                msg = str(exc).lower()
-                if any(k in msg for k in ("429", "quota", "resource exhausted", "rate limit")):
-                    logger.warning(f"[maintenance] retag_catchall: Gemini quota hit, aborting batch ({moved} moved so far)")
-                    break
                 logger.debug(f"[maintenance] retag_catchall error for {fp.name}: {exc}")
                 continue
 
@@ -513,8 +632,8 @@ class MaintenanceWorker:
                     nesting_violations.append(str(d.relative_to(root)))
 
             for f in library_dir.rglob("*.mp3"):
-                # valid flat path: Library/family/subgenre/file.mp3 → 3 parts under Library/
-                if len(f.relative_to(library_dir).parts) != 3:
+                # valid flat path: Library/genre/file.mp3 → 2 parts under Library/
+                if len(f.relative_to(library_dir).parts) != 2:
                     orphaned_files.append(str(f.relative_to(root)))
 
         flat_valid = (

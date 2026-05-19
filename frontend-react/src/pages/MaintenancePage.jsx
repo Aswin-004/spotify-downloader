@@ -12,11 +12,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
 import { cn } from '@/lib/utils';
@@ -25,30 +25,31 @@ const TASKS = [
   {
     id: 'organise',
     icon: FolderSync,
-    title: 'Reorganise Library',
-    description: 'Splits Indian→Bollywood/Punjabi, cleans up tiny folders, deduplicates, sweeps numbered rips, and resolves NeedsReview artist folders.',
+    title: 'Re-sort Music into Folders',
+    description: 'Tidies your library: splits mixed folders, removes near-empty ones, cleans up duplicates, and moves any "Needs Sorting" tracks into proper genre folders.',
     color: 'purple',
-    steps: ['Split Indian folder', 'Clean tiny folders', 'Deduplicate', 'Sweep numbered rips', 'Resolve NeedsReview artists'],
+    steps: ['Split mixed genre folders', 'Remove near-empty folders', 'Remove duplicates', 'Clean up numbered rips', 'Sort pending tracks'],
   },
   {
     id: 'repair_index',
     icon: DatabaseZap,
-    title: 'Repair MongoDB Index',
-    description: 'Fixes stale file paths, indexes orphaned files on disk, and soft-deletes ghost entries that no longer exist.',
+    title: 'Fix Library Scan',
+    description: 'Rescans your music folder to fix any tracks that appear missing or out of place. Run this if files seem to be re-downloading even though you already have them.',
     color: 'blue',
-    steps: ['Build disk index', 'Fix stale paths', 'Index orphaned files'],
+    steps: ['Scan music folder', 'Fix broken file paths', 'Register untracked files'],
   },
   {
     id: 'backfill_gemini',
     icon: Sparkles,
-    title: 'Backfill Gemini Tags',
-    description: 'Runs up to 4 passes: classify Indian remainder, identify Unknown tracks, enrich missing genre tags, and add BPM/key via librosa.',
+    title: 'Re-classify Undetected Genres',
+    description: 'Uses AI to detect the genre of tracks that ended up in the Unclassified folder, add BPM and musical key info, and fetch missing album artwork.',
     color: 'amber',
     passes: [
-      { id: 1, label: 'Pass 1 — Classify Indian/ via Gemini' },
-      { id: 2, label: 'Pass 2 — Identify NeedsReview/Unknown/' },
-      { id: 3, label: 'Pass 3 — Enrich missing gemini_genre tags' },
-      { id: 4, label: 'Pass 4 — BPM + key via librosa' },
+      { id: 1, label: 'Step 1 — Detect genres for Indian/Bollywood tracks' },
+      { id: 2, label: 'Step 2 — Sort tracks with unknown genre' },
+      { id: 3, label: 'Step 3 — Fill in missing genre tags' },
+      { id: 4, label: 'Step 4 — Add BPM + musical key' },
+      { id: 5, label: 'Step 5 — Fetch missing album artwork' },
     ],
   },
 ];
@@ -79,7 +80,8 @@ function LogLine({ line }) {
 function TaskCard({ task, activeTask, onRun, running, logs }) {
   const [expanded, setExpanded] = useState(false);
   const [dryRun, setDryRun] = useState(false);
-  const [passes, setPasses] = useState([1, 2, 3, 4]);
+  const defaultPasses = task.passes ? task.passes.filter(p => p.id <= 4).map(p => p.id) : [];
+  const [passes, setPasses] = useState(defaultPasses);
   const [limit, setLimit] = useState('');
   const logRef = useRef(null);
   const c = COLOR[task.color];
@@ -150,7 +152,7 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
                 dryRun ? 'translate-x-4' : 'translate-x-0.5'
               )} />
             </div>
-            <span className="text-xs text-gray-400">Dry run</span>
+            <span className="text-xs text-gray-400">Preview only (no changes)</span>
           </label>
 
           {/* Backfill-only: pass selection */}
@@ -168,7 +170,7 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
                   )}
                   title={p.label}
                 >
-                  P{p.id}
+                  Step {p.id}
                 </button>
               ))}
             </div>
@@ -273,6 +275,19 @@ export default function MaintenancePage() {
   const { maintenanceLogs, maintenanceRunning, startMaintenance, stopMaintenance, clearMaintenanceLogs } = useSocket();
   const [activeTask, setActiveTask] = useState(null);
   const [error, setError] = useState('');
+  const [cacheClearState, setCacheClearState] = useState('idle'); // idle | loading | done | error
+
+  async function handleClearGenreCache() {
+    setCacheClearState('loading');
+    try {
+      await api.clearGenreCache();
+      setCacheClearState('done');
+      setTimeout(() => setCacheClearState('idle'), 3000);
+    } catch {
+      setCacheClearState('error');
+      setTimeout(() => setCacheClearState('idle'), 3000);
+    }
+  }
 
   async function handleRun(taskId, opts) {
     setError('');
@@ -300,7 +315,7 @@ export default function MaintenancePage() {
         <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
           Maintenance
         </h1>
-        <p className="text-gray-400">One-shot tools for library health and Gemini enrichment</p>
+        <p className="text-gray-400">Fix and improve your music library — run these occasionally to keep everything tidy</p>
       </motion.div>
 
       {/* Running notice */}
@@ -355,10 +370,45 @@ export default function MaintenancePage() {
         ))}
       </div>
 
+      {/* Quick Actions */}
+      <motion.div
+        initial={{ opacity: 0, y: 15 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.24 }}
+      >
+        <Card className="border border-gray-700/50 bg-white/5 p-5">
+          <h3 className="font-semibold text-gray-200 mb-1">Quick Actions</h3>
+          <p className="text-xs text-gray-500 mb-4">One-click utilities that take effect immediately.</p>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={cacheClearState === 'loading'}
+              onClick={handleClearGenreCache}
+              className={cn(
+                'border-gray-700 text-gray-300 hover:bg-white/5',
+                cacheClearState === 'done' && 'border-emerald-500/50 text-emerald-400',
+                cacheClearState === 'error' && 'border-red-500/50 text-red-400',
+              )}
+            >
+              {cacheClearState === 'loading' ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              {cacheClearState === 'done' ? 'Reset ✓' : cacheClearState === 'error' ? 'Failed ✗' : 'Reset Genre Memory'}
+            </Button>
+          </div>
+          <p className="text-xs text-gray-600 mt-3">
+            Use this if a track keeps going to the wrong folder — it clears the app's remembered genre guesses so they're looked up fresh next time.
+          </p>
+        </Card>
+      </motion.div>
+
       {/* Tip */}
       <p className="text-xs text-gray-600 text-center">
-        Run <strong className="text-gray-500">Reorganise → Repair Index → Backfill Gemini</strong> in order for best results.
-        All tasks are idempotent — safe to re-run.
+        For best results, run in order: <strong className="text-gray-500">Re-sort → Fix Library Scan → Re-classify Genres</strong>.
+        All tasks are safe to run multiple times.
       </p>
     </div>
   );

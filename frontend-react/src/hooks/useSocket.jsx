@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useToast } from '@/components/ui/toast';
+import { api } from '@/services/api';
 
 const SocketContext = createContext(null);
 
@@ -57,7 +58,7 @@ export function SocketProvider({ children }) {
 
   useEffect(() => {
     const socket = io('', {  // connect to same origin — works via Vite proxy on dev and Flask directly in prod
-      transports: ['websocket', 'polling'],
+      transports: ['polling'],  // websocket disabled — allow_upgrades=False on server
       autoConnect: true,
       reconnection: true,
       reconnectionAttempts: Infinity,  // DISCONNECT FIX: never stop trying
@@ -70,16 +71,21 @@ export function SocketProvider({ children }) {
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      console.log('✅ Socket connected:', socket.id);  // SOCKET FIX — debug logging
       setConnected(true);
+      // Reload catch-all list from disk so a page refresh never loses the queue
+      api.getCatchallTracks().then((items) => {
+        if (!items?.length) return;
+        setNeedsReviewItems((prev) => {
+          const existingIds = new Set(prev.map((i) => i.id || `${i.title}|${i.artist}`));
+          const fresh = items.filter((i) => !existingIds.has(i.id || `${i.title}|${i.artist}`));
+          return [...prev, ...fresh];
+        });
+      }).catch(() => {});
     });
     socket.on('disconnect', (reason) => {
-      console.log('❌ Socket disconnected:', reason);  // DISCONNECT FIX: log disconnect reason
       setConnected(false);
     });
-    socket.on('connect_error', (err) => {
-      console.log('🔴 Connection error:', err.message);  // SOCKET FIX — debug logging
-    });
+    socket.on('connect_error', () => {});
 
     socket.on('status_update', (data) => {
       if (data.download) setDownloadStatus(data.download);
@@ -170,7 +176,9 @@ export function SocketProvider({ children }) {
         toastRef.current({
           type: 'success',
           title: 'Download Complete',
-          description: `${data.title} — ${data.artist || ''}`,
+          description: data.routing_label
+            ? `${data.title} → ${data.routing_label}`
+            : `${data.title} — ${data.artist || ''}`,
         });
         setDownloads((prev) => {
           const updated = { ...prev.downloading };
@@ -187,6 +195,8 @@ export function SocketProvider({ children }) {
                 progress: 100,
                 status: 'completed',
                 timestamp: new Date().toLocaleTimeString(),
+                folder: data.folder || '',
+                routing_label: data.routing_label || '',
               },
             },
           };
@@ -294,18 +304,14 @@ export function SocketProvider({ children }) {
       }
     });
 
-    // MUSICBRAINZ — per-track tagging complete
-    socket.on('tagging_complete', (data) => {
-      // silent — no toast for every download, just updates state
-    });
-
     socket.on('maintenance_log', (data) => {
       setMaintenanceLogs((prev) => [...prev, data]);
       if (data.done) setMaintenanceRunning(false);
     });
 
     return () => {
-      clearInterval(keepAlive);  // DISCONNECT FIX
+      clearInterval(keepAlive);
+      socket.removeAllListeners();
       socket.disconnect();
     };
   }, []);

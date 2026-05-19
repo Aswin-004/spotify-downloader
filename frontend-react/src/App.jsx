@@ -9,6 +9,8 @@ import LibraryPage from '@/pages/LibraryPage';
 import Analytics from '@/pages/Analytics';
 import ReviewPage from '@/pages/ReviewPage';
 import MaintenancePage from '@/pages/MaintenancePage';
+import Settings from '@/pages/Settings';
+import GettingStarted from '@/pages/GettingStarted';
 
 export default function App() {
   return (
@@ -24,6 +26,8 @@ export default function App() {
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/review" element={<ReviewPage />} />
               <Route path="/maintenance" element={<MaintenancePage />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/getting-started" element={<GettingStarted />} />
             </Route>
           </Routes>
         </BrowserRouter>

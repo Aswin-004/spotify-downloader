@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Music2, Loader2, CheckCircle2, SkipForward, XCircle, Clock } from 'lucide-react';
+import { Music2, Loader2, CheckCircle2, SkipForward, XCircle, Clock, FolderOpen } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { ProgressBar } from '@/components/ProgressBar';
 import { StatusBadge } from '@/components/StatusBadge';
@@ -102,6 +102,21 @@ export default function DownloadCard({ item, index = 0 }) {
                 >
                   {Math.round(item.progress || 0)}%
                 </motion.span>
+              </div>
+            )}
+
+            {/* Destination folder badge for completed */}
+            {item.status === 'completed' && item.routing_label && (
+              <div className={cn(
+                'inline-flex items-center gap-1 mt-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium',
+                item.routing_label === 'Needs Sorting'
+                  ? 'bg-amber-500/15 text-amber-400'
+                  : item.routing_label === 'Unclassified'
+                  ? 'bg-gray-500/15 text-gray-400'
+                  : 'bg-emerald-500/15 text-emerald-400'
+              )}>
+                <FolderOpen className="w-3 h-3" />
+                {item.routing_label}
               </div>
             )}
 

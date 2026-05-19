@@ -48,7 +48,10 @@ export default function DownloadInput() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `Download request failed (${res.status})`);
       }
-      // Progress comes via WebSocket
+      // Request accepted — progress arrives via WebSocket
+      setUrl('');
+      setMetadata(null);
+      setDownloading(false);
     } catch (err) {
       setError(err.message || 'Download failed');
       setDownloading(false);

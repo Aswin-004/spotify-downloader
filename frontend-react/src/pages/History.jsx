@@ -45,6 +45,18 @@ const statusConfig = {
   },
 };
 
+function friendlyError(raw) {
+  if (!raw) return null;
+  const s = raw.toLowerCase();
+  if (s.includes('no youtube match') || s.includes('no match') || s.includes('no strict match')) return "Couldn't find this track on YouTube";
+  if (s.includes('duration mismatch') || s.includes('duration')) return 'YouTube version has a different length';
+  if (s.includes('timeout') || s.includes('timed out')) return 'Download took too long — try again';
+  if (s.includes('ffmpeg') || s.includes('conversion')) return 'Audio conversion failed';
+  if (s.includes('file missing')) return 'Download failed — file not saved';
+  if (s.includes('move failed')) return 'Could not move file to music folder';
+  return raw.length > 80 ? raw.slice(0, 80) + '…' : raw;
+}
+
 export default function History() {
   const { history: socketHistory } = useSocket();
   const [history, setHistory] = useState([]);
@@ -59,15 +71,24 @@ export default function History() {
     return () => clearTimeout(t);
   }, [confirmClear]);
 
-  // Merge socket history with initial load
+  // Load full history from API on mount
   useEffect(() => {
     api.getHistory().then((data) => {
       if (data.history) setHistory(data.history);
     }).catch(() => {});
   }, []);
 
+  // Merge live socket updates without clobbering the full API-fetched list.
+  // Socket history is capped at ~50; we only prepend entries genuinely absent.
   useEffect(() => {
-    if (socketHistory.length > 0) setHistory(socketHistory);
+    if (!socketHistory.length) return;
+    setHistory((prev) => {
+      const existingKeys = new Set(prev.map((h) => `${h.title}|${h.timestamp}`));
+      const newEntries = socketHistory.filter(
+        (h) => !existingKeys.has(`${h.title}|${h.timestamp}`)
+      );
+      return newEntries.length ? [...newEntries, ...prev] : prev;
+    });
   }, [socketHistory]);
 
   const filtered = useMemo(() => {
@@ -121,7 +142,11 @@ export default function History() {
           </div>
           <div>
             <h1 className="text-xl font-semibold">Download History</h1>
-            <p className="text-sm text-gray-500">{history.length} entries</p>
+            <p className="text-sm text-gray-500">
+              {filtered.length !== history.length
+                ? `${filtered.length} of ${history.length}`
+                : `${history.length}`} entries
+            </p>
           </div>
         </div>
         <Button
@@ -191,10 +216,10 @@ export default function History() {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ delay: Math.min(i * 0.02, 0.5) }}
-                    className="flex items-center gap-4 px-5 py-3 hover:bg-surface-light/30 transition-colors"
+                    className="flex items-start gap-4 px-5 py-3 hover:bg-surface-light/30 transition-colors"
                   >
                     <StatusIcon
-                      className={cn('w-4 h-4 flex-shrink-0', config.color)}
+                      className={cn('w-4 h-4 flex-shrink-0 mt-0.5', config.color)}
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">
@@ -203,6 +228,11 @@ export default function History() {
                       <p className="text-xs text-gray-500 truncate">
                         {item.artist}
                       </p>
+                      {item.status === 'failed' && item.error && (
+                        <p className="text-xs text-red-400/70 mt-0.5 truncate">
+                          {friendlyError(item.error)}
+                        </p>
+                      )}
                     </div>
                     <Badge variant={config.variant} className="flex-shrink-0">
                       {config.label}

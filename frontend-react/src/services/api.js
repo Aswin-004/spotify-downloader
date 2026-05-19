@@ -70,6 +70,14 @@ export const api = {
     }).then(handleResponse);
   },
 
+  getCatchallTracks() {
+    return fetch('/api/catchall-tracks').then(handleResponse);
+  },
+
+  getGeminiQuota() {
+    return fetch('/api/gemini-quota').then(handleResponse);
+  },
+
   stopSync() {
     return fetch('/api/stop-sync', { method: 'POST' }).then(handleResponse);
   },
@@ -192,5 +200,67 @@ export const api = {
 
   getMaintenanceStatus() {
     return fetch('/api/maintenance/status').then(handleResponse);
+  },
+
+  // APP CONFIG — all user-configurable settings
+  getAppConfig() {
+    return fetch('/api/settings/app-config').then(handleResponse);
+  },
+
+  saveAppConfig(data) {
+    return fetch('/api/settings/app-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).then(handleResponse);
+  },
+
+  // SKIPPED TRACKS — permanently failed tracks
+  getSkippedTracks() {
+    return fetch('/api/skipped-tracks').then(handleResponse);
+  },
+
+  resetSkippedTracks(trackId = null) {
+    return fetch('/api/skipped-tracks/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(trackId ? { track_id: trackId } : {}),
+    }).then(handleResponse);
+  },
+
+  clearGenreCache() {
+    return fetch('/api/clear-genre-cache', { method: 'POST' }).then(handleResponse);
+  },
+
+  // NOTIFICATIONS
+  getNotificationStatus() {
+    return fetch('/api/notifications/status').then(handleResponse);
+  },
+
+  testNotification() {
+    return fetch('/api/notifications/test', { method: 'POST' }).then(handleResponse);
+  },
+
+  // SETTINGS — custom folder mappings
+  scanFolders() {
+    return fetch('/api/settings/scan-folders').then(handleResponse);
+  },
+
+  getCustomFolders() {
+    return fetch('/api/settings/custom-folders').then(handleResponse);
+  },
+
+  saveCustomFolder(folderName, genreLabel) {
+    return fetch('/api/settings/custom-folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_name: folderName, genre_label: genreLabel }),
+    }).then(handleResponse);
+  },
+
+  deleteCustomFolder(folderName) {
+    return fetch(`/api/settings/custom-folders/${encodeURIComponent(folderName)}`, {
+      method: 'DELETE',
+    }).then(handleResponse);
   },
 };

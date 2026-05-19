@@ -123,10 +123,12 @@ export default function Analytics() { // ANALYTICS
   const [weeklyStats, setWeeklyStats] = useState(null); // ANALYTICS
   const [dayRange, setDayRange] = useState(30); // ANALYTICS
   const [loading, setLoading] = useState(true); // ANALYTICS
+  const [fetchError, setFetchError] = useState(false); // ANALYTICS
   const [retrying, setRetrying] = useState({}); // ANALYTICS
 
   // ANALYTICS — Fetch all analytics data
   const fetchAll = useCallback(async () => { // ANALYTICS
+    setFetchError(false); // ANALYTICS
     try { // ANALYTICS
       const [ov, pd, ta, sb, tb, rd, fd, ca, fs, ws] = await Promise.all([ // ANALYTICS
         api.getAnalyticsOverview(), // ANALYTICS
@@ -151,7 +153,7 @@ export default function Analytics() { // ANALYTICS
       setFailureSummary(fs); // ANALYTICS
       setWeeklyStats(ws); // ANALYTICS
     } catch { // ANALYTICS
-      // silent — data just won't update // ANALYTICS
+      setFetchError(true); // ANALYTICS
     } finally { // ANALYTICS
       setLoading(false); // ANALYTICS
     } // ANALYTICS
@@ -216,11 +218,28 @@ export default function Analytics() { // ANALYTICS
             <p className="text-sm text-gray-500">Library statistics & insights</p> {/* ANALYTICS */}
           </div> {/* ANALYTICS */}
         </div> {/* ANALYTICS */}
-        <Button variant="ghost" size="sm" onClick={() => { setLoading(true); fetchAll(); }}> {/* ANALYTICS */}
+        <Button variant="ghost" size="sm" onClick={() => { setLoading(true); setFetchError(false); fetchAll(); }}> {/* ANALYTICS */}
           <RotateCw className={cn('w-4 h-4', loading && 'animate-spin')} /> {/* ANALYTICS */}
           Refresh {/* ANALYTICS */}
         </Button> {/* ANALYTICS */}
       </motion.div> {/* ANALYTICS */}
+
+      {/* ANALYTICS — Error banner */}
+      {fetchError && !loading && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+            <span className="text-sm text-red-300">Failed to load analytics — backend may be unreachable.</span>
+          </div>
+          <Button size="sm" variant="ghost" onClick={() => { setLoading(true); setFetchError(false); fetchAll(); }} className="text-red-400 hover:text-red-300 shrink-0">
+            <RotateCw className="w-3.5 h-3.5 mr-1" /> Retry
+          </Button>
+        </motion.div>
+      )}
 
       {/* ANALYTICS — Row 1: Overview stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3"> {/* ANALYTICS */}
@@ -235,7 +254,7 @@ export default function Analytics() { // ANALYTICS
         <StatCard // ANALYTICS
           icon={TrendingUp} // ANALYTICS
           label="Success Rate" // ANALYTICS
-          value={overview ? `${overview.success_rate}%` : '—'} // ANALYTICS
+          value={overview ? `${overview?.success_rate ?? '—'}%` : '—'} // ANALYTICS
           color="text-blue-400" // ANALYTICS
           bg="bg-blue-400/10" // ANALYTICS
           loading={loading} // ANALYTICS
@@ -535,7 +554,7 @@ export default function Analytics() { // ANALYTICS
             <Skeleton className="h-16 w-full" /> // ANALYTICS
           ) : ( // ANALYTICS
             <div className="grid grid-cols-3 gap-4"> {/* ANALYTICS */}
-              {taggingBreakdown.map((item) => ( // ANALYTICS
+              {(taggingBreakdown ?? []).map((item) => ( // ANALYTICS
                 <div // ANALYTICS
                   key={item.source} // ANALYTICS
                   className="flex flex-col items-center rounded-xl border border-border bg-surface-light/30 p-4" // ANALYTICS
@@ -568,7 +587,7 @@ export default function Analytics() { // ANALYTICS
               <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-5">
                 <Download className="w-5 h-5 text-emerald-400 mb-2" />
                 <span className="text-3xl font-bold font-mono text-emerald-400">
-                  {weeklyStats.total_this_week}
+                  {weeklyStats?.total_this_week ?? '—'}
                 </span>
                 <span className="text-xs text-gray-500 mt-1">Downloads</span>
               </div>
@@ -576,7 +595,7 @@ export default function Analytics() { // ANALYTICS
               <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-5">
                 <CheckCircle2 className="w-5 h-5 text-blue-400 mb-2" />
                 <span className="text-3xl font-bold font-mono text-blue-400">
-                  {weeklyStats.success_rate}%
+                  {weeklyStats?.success_rate ?? '—'}%
                 </span>
                 <span className="text-xs text-gray-500 mt-1">Tagged</span>
               </div>
@@ -586,11 +605,11 @@ export default function Analytics() { // ANALYTICS
                   <Star className="w-3.5 h-3.5 text-yellow-400" />
                   <span className="text-xs font-medium text-gray-400">Top Artists</span>
                 </div>
-                {weeklyStats.top_artists.length === 0 ? (
+                {(weeklyStats?.top_artists ?? []).length === 0 ? (
                   <p className="text-xs text-gray-600 text-center py-2">No data yet</p>
                 ) : (
                   <ol className="space-y-1.5">
-                    {weeklyStats.top_artists.map((a, i) => (
+                    {(weeklyStats?.top_artists ?? []).map((a, i) => (
                       <li key={a.artist} className="flex items-center justify-between gap-2">
                         <span className="text-xs text-gray-500 w-4 shrink-0">{i + 1}.</span>
                         <span className="text-xs text-gray-200 truncate flex-1">{a.artist}</span>

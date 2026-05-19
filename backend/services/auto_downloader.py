@@ -779,7 +779,18 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     )
                 except Exception as _idx_err:
                     logger.warning(f"[ingest] library_index write failed: {_idx_err}")
-                _emit("download_complete", {"title": title, "artist": artist, "status": "completed", "filename": result.get("filename", ""), "source": "ingest"})
+                _routing_label = (
+                    "Needs Sorting" if "NeedsReview" in _genre_folder
+                    else "Unclassified" if "Electronic" in _genre_folder and _is_catchall
+                    else os.path.basename(_genre_folder)
+                )
+                _emit("download_complete", {
+                    "title": title, "artist": artist, "status": "completed",
+                    "filename": result.get("filename", ""),
+                    "folder": _genre_folder,
+                    "routing_label": _routing_label,
+                    "source": "ingest",
+                })
 
                 # Post-processing warning (file downloaded but tagging/organizing failed)
                 if result.get("warning"):

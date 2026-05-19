@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import {
   Loader2,
@@ -7,6 +8,10 @@ import {
   XCircle,
   Download,
   Inbox,
+  BookOpen,
+  X,
+  Settings,
+  AlertTriangle,
 } from 'lucide-react';
 import DownloadInput from '@/components/DownloadInput';
 import StatsCards from '@/components/StatsCards';
@@ -15,6 +20,7 @@ import DownloadCard from '@/components/DownloadCard';
 import ActivityFeed from '@/components/ActivityFeed';
 import { useSocket } from '@/hooks/useSocket';
 import { cn } from '@/lib/utils';
+import { api } from '@/services/api';
 
 const tabs = [
   { id: 'downloading', label: 'Downloading', icon: Loader2, color: 'text-yellow-400', activeColor: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
@@ -33,6 +39,16 @@ const emptyMessages = {
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('downloading');
   const { downloads, ingestProgress, clearDownloads } = useSocket();
+  const [showGuide, setShowGuide] = useState(() => !localStorage.getItem('onboarding_seen'));
+  const [setupComplete, setSetupComplete] = useState(null); // null = loading (banner suppressed)
+
+  useEffect(() => {
+    api.getAppConfig().then(cfg => {
+      setSetupComplete(cfg._setup_complete !== false);
+    }).catch(() => {
+      setSetupComplete(true); // assume OK if API unreachable
+    });
+  }, []);
 
   const counts = useMemo(() => ({
     downloading: Object.keys(downloads.downloading).length,
@@ -59,6 +75,56 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      {/* Setup incomplete banner — shown only once backend confirms setup is not done */}
+      <AnimatePresence>
+        {setupComplete === false && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30"
+          >
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="text-sm text-amber-300">
+                <strong className="text-amber-200">Setup required:</strong> Add your Spotify credentials and music folder path in{' '}
+                <Link to="/settings" className="underline hover:text-amber-200 transition-colors font-medium">Settings</Link>{' '}
+                before you can download anything.
+              </span>
+            </div>
+            <Link to="/settings" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-medium transition-colors shrink-0">
+              <Settings className="w-3.5 h-3.5" />
+              Open Settings
+            </Link>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* First-visit guide banner */}
+      <AnimatePresence>
+        {showGuide && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-purple-500/10 border border-purple-500/20"
+          >
+            <div className="flex items-center gap-3">
+              <BookOpen className="w-4 h-4 text-purple-400 shrink-0" />
+              <span className="text-sm text-purple-300">
+                New here? Read the <Link to="/getting-started" className="underline hover:text-purple-200 transition-colors">Getting Started guide</Link> to set up your API keys and understand the workflow.
+              </span>
+            </div>
+            <button
+              onClick={() => { setShowGuide(false); localStorage.setItem('onboarding_seen', '1'); }}
+              className="text-purple-500 hover:text-purple-300 transition-colors shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <DownloadInput />
       <StatsCards />
 

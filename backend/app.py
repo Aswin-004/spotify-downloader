@@ -17,6 +17,8 @@ import threading
 import time
 from pathlib import Path
 from config import config
+import settings_store as _settings_store
+_settings_store.apply_to_config()   # apply user_config.json overrides before any service imports
 from services.spotify_service import get_spotify_service
 from services.downloader_service import get_downloader_service, sanitize_filename
 from services.downloader_service import download_queue_status, update_queue, set_manual_active
@@ -137,14 +139,15 @@ def seed_history_from_disk():
             })
     logger.info(f"Seeded history with {len(download_history)} existing files")
 
-def add_history_entry(title, artist, status, filename=""):
+def add_history_entry(title, artist, status, filename="", error=""):
     """Add an entry to download history and emit via WebSocket"""
     entry = {
         "title": title,
         "artist": artist,
         "status": status,
         "filename": filename,
-        "timestamp": time.strftime("%H:%M:%S")
+        "timestamp": time.strftime("%H:%M:%S"),
+        "error": error or "",
     }
     with history_lock:
         download_history.insert(0, entry)
@@ -186,6 +189,7 @@ socketio = SocketIO(
     max_http_buffer_size=1e8,
     logger=False,
     engineio_logger=False,
+    allow_upgrades=False,  # threading mode can't handle WS upgrades on Werkzeug dev server
 )
 set_socketio(socketio)
 set_downloader_socketio(socketio)  # quality_report events
@@ -307,7 +311,12 @@ def maintenance_run():
                 line = _strip_line(raw)
                 if line:
                     _emit(line)
-            proc.wait()
+            try:
+                proc.wait(timeout=300)  # 5-minute hard limit
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                _emit("✗ Task killed — exceeded 5-minute time limit", done=True, exit_code=1)
+                return
             _emit(f"{'✓ Done' if proc.returncode == 0 else '✗ Failed'} (exit {proc.returncode})",
                   done=True, exit_code=proc.returncode)
         except Exception as exc:
@@ -318,6 +327,103 @@ def maintenance_run():
 
     threading.Thread(target=run_task, daemon=True).start()
     return jsonify({"started": True, "task": task}), 202
+
+
+# ─── Settings: App Configuration (all user-configurable settings) ────────────
+
+@app.route('/api/settings/app-config', methods=['GET'])
+def settings_get_app_config():
+    """Return current app configuration (secrets masked)."""
+    try:
+        return jsonify(_settings_store.for_frontend()), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/settings/app-config', methods=['POST'])
+def settings_save_app_config():
+    """Save app configuration and apply immediately (no restart needed)."""
+    data = request.get_json(silent=True) or {}
+    try:
+        updated = _settings_store.save(data)
+        _settings_store.apply_to_config()
+
+        # Hot-reload ingest playlist in auto_downloader if it changed
+        if "ingest_playlist_id" in data:
+            try:
+                import services.auto_downloader as _ad
+                _ad.INGEST_PLAYLIST_ID = updated.get("ingest_playlist_id", "")
+            except Exception:
+                pass
+
+        return jsonify({"success": True, "config": _settings_store.for_frontend()}), 200
+    except Exception as e:
+        logger.error(f"[settings] Failed to save config: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── Settings: Custom Folder Mappings ────────────────────────────────────────
+
+@app.route('/api/settings/scan-folders', methods=['GET'])
+def settings_scan_folders():
+    """Return subdirectory names inside BASE_DOWNLOAD_DIR."""
+    try:
+        if not BASE_DOWNLOAD_DIR or not os.path.isdir(BASE_DOWNLOAD_DIR):
+            return jsonify({"folders": [], "warning": "Music folder not configured or does not exist"}), 200
+        entries = [
+            e for e in os.listdir(BASE_DOWNLOAD_DIR)
+            if os.path.isdir(os.path.join(BASE_DOWNLOAD_DIR, e))
+               and not e.startswith('.')
+        ]
+        return jsonify({"folders": sorted(entries)}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/settings/custom-folders', methods=['GET'])
+def settings_get_custom_folders():
+    """Return all custom folder→genre mappings."""
+    try:
+        from database import get_custom_folder_mappings_collection
+        col = get_custom_folder_mappings_collection()
+        docs = list(col.find({}, {"_id": 0}))
+        return jsonify({"mappings": docs}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/settings/custom-folders', methods=['POST'])
+def settings_save_custom_folder():
+    """Upsert a folder→genre mapping."""
+    data = request.get_json(silent=True) or {}
+    folder_name = (data.get("folder_name") or "").strip()
+    genre_label = (data.get("genre_label") or "").strip()
+    if not folder_name or not genre_label:
+        return jsonify({"error": "folder_name and genre_label are required"}), 400
+    try:
+        from datetime import datetime
+        from database import get_custom_folder_mappings_collection
+        col = get_custom_folder_mappings_collection()
+        col.update_one(
+            {"folder_name": folder_name},
+            {"$set": {"folder_name": folder_name, "genre_label": genre_label, "updated_at": datetime.utcnow().isoformat()}},
+            upsert=True,
+        )
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/settings/custom-folders/<path:folder_name>', methods=['DELETE'])
+def settings_delete_custom_folder(folder_name):
+    """Delete a custom folder mapping by folder_name."""
+    try:
+        from database import get_custom_folder_mappings_collection
+        col = get_custom_folder_mappings_collection()
+        col.delete_one({"folder_name": folder_name})
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/<path:filename>', methods=['GET'])
@@ -567,7 +673,7 @@ def _download_background(url):
                 )
                 if result["status"] == "success":
                     downloaded += 1
-                add_history_entry(title, artist, result["status"], result.get("filename", ""))
+                add_history_entry(title, artist, result["status"], result.get("filename", ""), result.get("error", ""))
             
             with status_lock:
                 download_status["status"] = "completed"
@@ -627,7 +733,7 @@ def _download_background(url):
                 )
                 if result["status"] == "success":
                     downloaded += 1
-                add_history_entry(title, artist, result["status"], result.get("filename", ""))
+                add_history_entry(title, artist, result["status"], result.get("filename", ""), result.get("error", ""))
             
             with status_lock:
                 download_status["status"] = "completed"
@@ -705,7 +811,7 @@ def _download_background(url):
                         download_status["current"] = "Download failed"
                         download_status["match_quality"] = ""
                 emit_status()
-                add_history_entry(title, artist, result['status'], result.get('filename', ''))
+                add_history_entry(title, artist, result['status'], result.get('filename', ''), result.get('error', ''))
     
     except Exception as e:
         logger.error(f"Download error: {str(e)}")
@@ -723,59 +829,11 @@ def _download_background(url):
 
 
 
-@app.route('/api/downloads', methods=['GET'])
-def list_downloads():
-    """
-    Get list of downloaded files
-    
-    Response:
-    {
-        "success": true,
-        "downloads": ["file1.mp3", "file2.mp3", ...]
-    }
-    """
-    try:
-        downloads = downloader_service.get_downloads_list()
-        
-        return jsonify({
-            "success": True,
-            "downloads": downloads
-        }), 200
-    
-    except Exception as e:
-        logger.error(f"Error listing downloads: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-
-@app.route('/api/status', methods=['GET'])
-def get_download_status():
-    """
-    Get current download status and progress
-    
-    Response:
-    {
-        "status": "idle|starting|downloading|completed|fallback|failed|busy",
-        "progress": 0-100,
-        "current": "description of current task"
-    }
-    """
-    with status_lock:
-        return jsonify({
-            "status": download_status["status"],
-            "progress": download_status["progress"],
-            "current": download_status["current"],
-            "match_quality": download_status.get("match_quality", ""),
-        }), 200
-
-
-@app.route('/api/delete/<filename>', methods=['DELETE'])
+@app.route('/api/delete/<path:filename>', methods=['DELETE'])
 def delete_download(filename):
     """
     Delete a downloaded file
-    
+
     Response:
     {
         "success": true/false,
@@ -783,7 +841,11 @@ def delete_download(filename):
     }
     """
     try:
-        result = downloader_service.delete_download(filename)
+        safe = os.path.basename(filename)
+        full = os.path.realpath(os.path.join(BASE_DOWNLOAD_DIR, safe))
+        if not full.startswith(os.path.realpath(BASE_DOWNLOAD_DIR) + os.sep):
+            return jsonify({"success": False, "message": "Invalid filename"}), 400
+        result = downloader_service.delete_download(safe)
         
         if result['success']:
             return jsonify(result), 200
@@ -798,59 +860,34 @@ def delete_download(filename):
         }), 500
 
 
-@app.route('/api/download_playlist', methods=['POST'])
-def download_playlist():
-    """
-    Download all tracks from a playlist
-    
-    Request body:
-    {
-        "tracks": [
-            {"title": "Track 1", "artist": "Artist 1", "album": "Album 1"},
-            {"title": "Track 2", "artist": "Artist 2", "album": "Album 2"}
-        ]
-    }
-    
-    Response:
-    {
-        "success": true/false,
-        "total": 10,
-        "successful": 9,
-        "failed": 1,
-        "downloads": ["file1.mp3", "file2.mp3", ...],
-        "errors": ["Track: error message", ...]
-    }
-    """
+@app.route('/api/artwork', methods=['GET'])
+def get_artwork():
+    """Serve embedded album art (APIC frame) from an MP3 file."""
+    filepath = request.args.get('path', '').strip()
+    if not filepath:
+        return '', 400
+    full = os.path.realpath(
+        os.path.join(BASE_DOWNLOAD_DIR, filepath)
+        if not os.path.isabs(filepath) else filepath
+    )
+    if not full.startswith(os.path.realpath(BASE_DOWNLOAD_DIR) + os.sep):
+        return '', 403
+    if not os.path.isfile(full):
+        return '', 404
     try:
-        # Validate request
-        if not request.json:
-            return jsonify({
-                "success": False,
-                "error": "Request body must be JSON"
-            }), 400
-        
-        tracks = request.json.get('tracks', [])
-        
-        if not tracks or not isinstance(tracks, list):
-            return jsonify({
-                "success": False,
-                "error": "tracks must be a non-empty list"
-            }), 400
-        
-        logger.info(f"Received playlist download request for {len(tracks)} tracks")
-        
-        # Download all tracks
-        result = downloader_service.download_playlist(tracks)
-        
-        status_code = 200 if result['status'] in ('success', 'mixed') else 400
-        return jsonify(result), status_code
-    
-    except Exception as e:
-        logger.error(f"Error in download_playlist: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": f"Internal server error: {str(e)}"
-        }), 500
+        from mutagen.id3 import ID3
+        tags = ID3(full)
+        apic = tags.get('APIC:') or tags.get('APIC:Cover')
+        if not apic:
+            return '', 404
+        from flask import Response
+        return Response(
+            apic.data,
+            mimetype=apic.mime or 'image/jpeg',
+            headers={'Cache-Control': 'public, max-age=86400'},
+        )
+    except Exception:
+        return '', 404
 
 
 @app.route('/api/files', methods=['GET'])
@@ -1529,9 +1566,31 @@ def library_organize_recent():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+def _with_timeout(fn, seconds=8):
+    """Run fn() in a daemon thread with a wall-clock timeout. Raises TimeoutError on expiry."""
+    import threading
+    result = [None]
+    exc = [None]
+
+    def _run():
+        try:
+            result[0] = fn()
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        raise TimeoutError(f"External API call timed out after {seconds}s")
+    if exc[0]:
+        raise exc[0]
+    return result[0]
+
+
 @app.route('/api/retag-catchall-track', methods=['POST'])
 def retag_catchall_track():
-    """Immediately retry Gemini genre identification for one catch-all track."""
+    """Retry genre classification for one catch-all track using the full fallback chain."""
     data = request.get_json() or {}
     filepath = (data.get("filepath") or "").strip()
     if not filepath:
@@ -1540,31 +1599,155 @@ def retag_catchall_track():
     if not os.path.isfile(full_path):
         return jsonify({"error": "File not found"}), 404
     try:
-        from services.gemini_service import identify_audio
-        from services.genre_router import normalize_genre, _library_path
+        from services.gemini_service import identify_audio, GeminiQuotaExceeded
+        from services.genre_router import normalize_genre, _library_path, resolve_genre_folder_with_confidence
         import shutil as _shutil
-        from mutagen.id3 import ID3, TXXX
-        gemini = identify_audio(full_path)
-        raw = gemini.get("gemini_genre", "")
-        if not raw:
-            return jsonify({"moved": False, "reason": "Gemini returned no genre"}), 200
-        canonical = normalize_genre(raw)
-        genre_path = _library_path(canonical) if canonical else None
+        from mutagen.id3 import ID3
+
+        # Read artist from ID3
+        artist_name = ""
+        try:
+            _id3 = ID3(full_path)
+            artist_name = str(_id3.get("TPE1", "")).strip()
+        except Exception:
+            pass
+
+        genre_path = None
+        route_source = "unknown"
+
+        # ── 1. ARTIST_GENRE_OVERRIDE (instant, no API) ──────────────────────
+        if artist_name:
+            override = config.ARTIST_GENRE_OVERRIDE.get(artist_name.lower())
+            if override:
+                canonical = normalize_genre(override)
+                genre_path = _library_path(canonical) if canonical else None
+                route_source = "artist_override"
+
+        # Read title from ID3 once (used by multiple fallback steps)
+        title_tag = ""
+        try:
+            title_tag = str(_id3.get("TIT2", "")).strip()
+        except Exception:
+            pass
+
+        # ── 2. Spotify artist search ─────────────────────────────────────────
+        if not genre_path and artist_name and artist_name.lower() not in ("unknown", "electronic", ""):
+            try:
+                def _sp2_search():
+                    s = spotify_service.sp.search(q=artist_name, type="artist", limit=1)
+                    its = s.get("artists", {}).get("items", [])
+                    aid = its[0]["id"] if its else ""
+                    return resolve_genre_folder_with_confidence(aid, artist_name, spotify_service.sp)
+                folder, conf, src = _with_timeout(_sp2_search)
+                if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
+                    genre_path = folder
+                    route_source = src
+                    logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via {src} ({conf:.0%})")
+            except Exception as e:
+                logger.debug(f"[retag-catchall-track] Spotify artist chain failed for '{artist_name}': {e}")
+
+        # ── 3. Spotify title-only search (works when artist tag is wrong) ────
+        if not genre_path and title_tag:
+            try:
+                def _sp3_search():
+                    return spotify_service.sp.search(q=f"track:{title_tag}", type="track", limit=5)
+                results = _with_timeout(_sp3_search)
+                tracks = results.get("tracks", {}).get("items", [])
+                for t in tracks:
+                    sp_artist = t.get("artists", [{}])[0].get("name", "")
+                    if not sp_artist:
+                        continue
+                    artist_id = t.get("artists", [{}])[0].get("id", "")
+                    folder, conf, src = resolve_genre_folder_with_confidence(
+                        artist_id, sp_artist, spotify_service.sp
+                    )
+                    if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
+                        genre_path = folder
+                        route_source = f"spotify_title/{src}"
+                        # Fix the corrupted artist tag while we're here
+                        try:
+                            from mutagen.id3 import TPE1
+                            _id3["TPE1"] = TPE1(encoding=3, text=sp_artist)
+                            _id3.save(full_path)
+                        except Exception:
+                            pass
+                        logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via title search (artist corrected to '{sp_artist}')")
+                        break
+            except Exception as e:
+                logger.debug(f"[retag-catchall-track] Spotify title search failed: {e}")
+
+        # ── 4. Last.fm tag lookup (free, no quota) ──────────────────────────
+        if not genre_path:
+            try:
+                from services.lastfm_service import lookup_genre as _lastfm_lookup
+                if title_tag and artist_name:
+                    raw = _with_timeout(lambda: _lastfm_lookup(title_tag, artist_name))
+                    if raw:
+                        canonical = normalize_genre(raw)
+                        _lp = _library_path(canonical) if canonical else None
+                        if _lp and _lp != "Library/Electronic":
+                            genre_path = _lp
+                            route_source = "lastfm"
+                            logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via lastfm")
+            except Exception as e:
+                logger.debug(f"[retag-catchall-track] Last.fm failed: {e}")
+
+        # ── 5. MusicBrainz search (free, no quota) ──────────────────────────
+        if not genre_path and title_tag:
+            try:
+                from services.musicbrainz_service import lookup_by_search as _mb_search
+                mb_raw = _with_timeout(lambda: _mb_search(title_tag, artist_name))
+                if mb_raw:
+                    canonical = normalize_genre(mb_raw)
+                    _lp = _library_path(canonical) if canonical else None
+                    if _lp and _lp != "Library/Electronic":
+                        genre_path = _lp
+                        route_source = "musicbrainz"
+                        logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via musicbrainz")
+            except Exception as e:
+                logger.debug(f"[retag-catchall-track] MusicBrainz search failed: {e}")
+
+        # ── 6. AcoustID fingerprint (free, no quota if key configured) ───────
+        if not genre_path:
+            try:
+                from services.musicbrainz_service import lookup_by_fingerprint as _mb_fp
+                fp_raw = _with_timeout(lambda: _mb_fp(full_path), seconds=15)
+                if fp_raw:
+                    canonical = normalize_genre(fp_raw)
+                    _lp = _library_path(canonical) if canonical else None
+                    if _lp and _lp != "Library/Electronic":
+                        genre_path = _lp
+                        route_source = "acoustid"
+                        logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via acoustid")
+            except Exception as e:
+                logger.debug(f"[retag-catchall-track] AcoustID lookup failed: {e}")
+
+        # ── 7. Gemini (last resort — costs daily quota) ──────────────────────
+        if not genre_path:
+            from services.gemini_service import remaining_quota as _remaining_quota
+            if _remaining_quota() == 0:
+                return jsonify({"moved": False, "reason": "Could not classify via steps 1-6 and Gemini quota is exhausted"}), 200
+            gemini = identify_audio(full_path)
+            raw = gemini.get("gemini_genre", "")
+            if raw:
+                canonical = normalize_genre(raw)
+                genre_path = _library_path(canonical) if canonical else None
+                route_source = "gemini"
+
         if not genre_path or genre_path == "Library/Electronic":
-            return jsonify({"moved": False, "reason": f"Genre '{raw}' still unmapped"}), 200
+            return jsonify({"moved": False, "reason": f"Could not classify (source={route_source})"}), 200
+
         dest_dir = Path(BASE_DOWNLOAD_DIR) / genre_path
         dest_dir.mkdir(parents=True, exist_ok=True)
-        src = Path(full_path)
-        dest = dest_dir / src.name
-        _shutil.move(str(src), str(dest))
-        # Remove catchall tag
+        src_path = Path(full_path)
+        dest = dest_dir / src_path.name
+        _shutil.move(str(src_path), str(dest))
         try:
             tags = ID3(str(dest))
             tags.delall("TXXX:routing_source")
             tags.save()
         except Exception:
             pass
-        # Update MongoDB index
         try:
             from database import get_library_index_collection
             col = get_library_index_collection()
@@ -1575,10 +1758,53 @@ def retag_catchall_track():
                 )
         except Exception:
             pass
-        return jsonify({"moved": True, "new_folder": genre_path}), 200
+        return jsonify({"moved": True, "new_folder": genre_path, "source": route_source}), 200
+    except GeminiQuotaExceeded as e:
+        logger.warning(f"[retag-catchall-track] quota exhausted: {e}")
+        return jsonify({"moved": False, "reason": str(e), "quota_exhausted": True}), 200
     except Exception as e:
         logger.error(f"[retag-catchall-track] {e}")
-        return jsonify({"moved": False, "reason": str(e)}), 200
+        return jsonify({"moved": False, "reason": str(e), "quota_exhausted": False}), 200
+
+
+@app.route('/api/gemini-quota', methods=['GET'])
+def gemini_quota():
+    """Return today's remaining Gemini API quota."""
+    try:
+        from services.gemini_service import remaining_quota, GEMINI_DAILY_BUDGET
+        remaining = remaining_quota()
+        return jsonify({"remaining": remaining, "total": GEMINI_DAILY_BUDGET, "exhausted": remaining == 0})
+    except Exception as e:
+        return jsonify({"remaining": 0, "total": 0, "exhausted": True, "error": str(e)})
+
+
+@app.route('/api/catchall-tracks', methods=['GET'])
+def get_catchall_tracks():
+    """Return all tracks currently sitting in Library/Electronic/ (the catch-all bucket)."""
+    from mutagen.id3 import ID3
+    electronic_dir = Path(BASE_DOWNLOAD_DIR) / "Library" / "Electronic"
+    items = []
+    if electronic_dir.is_dir():
+        for fp in sorted(electronic_dir.glob("*.mp3")):
+            try:
+                tags = ID3(str(fp))
+                title = str(tags.get("TIT2", fp.stem)).strip() or fp.stem
+                artist = str(tags.get("TPE1", "")).strip()
+                conf_tag = tags.get("TXXX:gemini_confidence")
+                confidence = float(str(conf_tag).strip()) if conf_tag else 0.0
+            except Exception:
+                title = fp.stem
+                artist = ""
+                confidence = 0.0
+            items.append({
+                "title": title,
+                "artist": artist,
+                "confidence": confidence,
+                "suggested_folder": "Library/Electronic",
+                "filename": fp.name,
+                "id": fp.stem,  # stable unique id based on filename
+            })
+    return jsonify(items), 200
 
 
 @app.route('/api/stop-sync', methods=['POST'])
@@ -1661,6 +1887,34 @@ if __name__ == '__main__':
         logger.info(f"Debug: {config.DEBUG}")
         logger.info(f"Server: {config.HOST}:{config.PORT}")
         logger.info(f"Celery available: {_celery_available}")
+        logger.info(f"Music folder: {BASE_DOWNLOAD_DIR}")
+
+        # Spotify credentials check
+        _sp_id = os.getenv("SPOTIPY_CLIENT_ID") or os.getenv("SPOTIFY_CLIENT_ID") or ""
+        _sp_secret = os.getenv("SPOTIPY_CLIENT_SECRET") or os.getenv("SPOTIFY_CLIENT_SECRET") or ""
+        if _sp_id and _sp_secret:
+            logger.info(f"Spotify: configured (client_id ...{_sp_id[-4:]})")
+        else:
+            logger.warning("Spotify: NOT configured — set SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET")
+
+        # MongoDB reachability check
+        try:
+            from database import get_db
+            _db = get_db()
+            _db.command("ping")
+            logger.info("MongoDB: reachable")
+        except Exception as _db_err:
+            logger.warning(f"MongoDB: unreachable — {_db_err}")
+
+        # Redis check
+        if _celery_available:
+            try:
+                import redis as _redis
+                _r = _redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+                _r.ping()
+                logger.info("Redis: reachable")
+            except Exception as _redis_err:
+                logger.warning(f"Redis: unreachable — {_redis_err}")
         logger.info("=" * 50)
         
         # Seed download history from existing files on disk

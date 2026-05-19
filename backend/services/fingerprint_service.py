@@ -41,8 +41,7 @@ import hashlib
 import os
 import subprocess
 import json
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 try:
     from loguru import logger
@@ -54,7 +53,7 @@ except ImportError:
 try:
     import acoustid as _acoustid
     _ACOUSTID_AVAILABLE = True
-except ImportError:
+except Exception:  # ImportError on Linux/Mac, OSError (DLL load failed) on Windows
     _acoustid = None
     _ACOUSTID_AVAILABLE = False
 
@@ -247,9 +246,6 @@ def index_fingerprint(identity_key: str, fp_result: FingerprintResult) -> bool:
 
 def is_available() -> bool:
     """Return True if fpcalc binary is on PATH and functional."""
-    fp, _ = _run_fpcalc.__wrapped__("/dev/null") if hasattr(_run_fpcalc, "__wrapped__") \
-        else ("", 0.0)
-    # Simpler check: just test subprocess availability
     try:
         r = subprocess.run([_FPCALC_BINARY, "--version"],
                            capture_output=True, timeout=5)

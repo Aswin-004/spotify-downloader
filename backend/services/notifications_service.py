@@ -30,7 +30,7 @@ DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL', '')  # NOTIFICATION
 NOTIFY_ON_SUCCESS = os.getenv('NOTIFY_ON_SUCCESS', 'true').lower() == 'true'  # NOTIFICATION
 NOTIFY_ON_FAILURE = os.getenv('NOTIFY_ON_FAILURE', 'true').lower() == 'true'  # NOTIFICATION
 NOTIFY_ON_PLAYLIST = os.getenv('NOTIFY_ON_PLAYLIST_COMPLETE', 'true').lower() == 'true'  # NOTIFICATION
-STORAGE_THRESHOLD_MB = float(os.getenv('NOTIFY_STORAGE_THRESHOLD_MB', '5000'))  # NOTIFICATION
+STORAGE_THRESHOLD_MB = float(os.getenv('NOTIFY_STORAGE_THRESHOLD_MB', '51200'))  # NOTIFICATION — default 50 GB
 
 
 def is_telegram_enabled():  # NOTIFICATION

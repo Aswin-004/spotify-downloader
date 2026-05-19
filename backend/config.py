@@ -22,6 +22,9 @@ class Config:
 
     # Gemini API
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+    # Last.fm API (free — register at last.fm/api)
+    LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "")
     
     # Playlist configuration (single ingest playlist)
     INGEST_PLAYLIST_ID = os.getenv("INGEST_PLAYLIST_ID", "")
@@ -315,7 +318,7 @@ class Config:
         "kalera":               "Electronic",
         "kaléra":               "Electronic",
         "ian asher":            "Electronic",
-        "skrillex":             "Bass",
+        "skrillex":             "Dubstep",
         "hamdi":                "Dubstep",
         "upsidedown":           "Electronic",
         # ── House ────────────────────────────────────────────────────────
@@ -449,6 +452,74 @@ class Config:
         "raffa fl":             "House",
         # ── Pop ──────────────────────────────────────────────────────────
         "teddy swims":          "Pop",
+        # ── Pop additions ─────────────────────────────────────────────────
+        "ariana grande":        "Pop",
+        "tove lo":              "Pop",
+        "camila cabello":       "Pop",
+        "dua lipa":             "Pop",
+        "charli xcx":          "Pop",
+        # ── Hip Hop additions ─────────────────────────────────────────────
+        "future":               "Hip Hop",
+        "a$ap rocky":          "Hip Hop",
+        "asap rocky":           "Hip Hop",
+        "21 savage":            "Hip Hop",
+        "playboi carti":        "Hip Hop",
+        "lil uzi vert":         "Hip Hop",
+        "pop smoke":            "Hip Hop",
+        # ── House additions ────────────────────────────────────────────────
+        "daphni":               "House",
+        "gordo":                "House",
+        "bob sinclar":          "House",
+        "crunkz":               "House",
+        "rampa":                "House",
+        "aluna":                "House",
+        "francis mercier":      "House",
+        "mau p":                "House",
+        "layton giordani":      "House",
+        "john summit":          "House",
+        "camelphat":            "House",
+        "black coffee":         "House",
+        "themba":               "House",
+        # ── UK Garage / Grime additions ────────────────────────────────────
+        "sammy virji":          "UK Garage",
+        "champion":             "UK Garage",
+        "jazzy":                "UK Garage",
+        "conducta":             "UK Garage",
+        "unknown t":            "Grime",
+        # ── Electronic / Techno additions ─────────────────────────────────
+        "anyma":                "Electronic",
+        "chris liebing":        "Electronic",
+        "charlotte de witte":   "Electronic",
+        "amelie lens":          "Electronic",
+        "adam beyer":           "Electronic",
+        "jon hopkins":          "Electronic",
+        "moderat":              "Electronic",
+        # ── Afrobeats additions ────────────────────────────────────────────
+        "shimza":               "Afrobeats",
+        "magic system":         "Afrobeats",
+        "master kg":            "Afrobeats",
+        "davido":               "Afrobeats",
+        "wizkid":               "Afrobeats",
+        "burna boy":            "Afrobeats",
+        # ── Dubstep / Bass additions ───────────────────────────────────────
+        "excision":             "Dubstep",
+        "zomboy":               "Dubstep",
+        "subtronics":           "Dubstep",
+        "kai wachi":            "Dubstep",
+        # ── Latin additions ────────────────────────────────────────────────
+        "bad bunny":            "Latin",
+        "j balvin":             "Latin",
+        "maluma":               "Latin",
+        "daddy yankee":         "Latin",
+        "ozuna":                "Latin",
+        "karol g":              "Latin",
+        "rauw alejandro":       "Latin",
+        # ── R&B additions ─────────────────────────────────────────────────
+        "sza":                  "R&B",
+        "frank ocean":          "R&B",
+        "giveon":               "R&B",
+        "brent faiyaz":         "R&B",
+        "khalid":               "R&B",
     }
 
 

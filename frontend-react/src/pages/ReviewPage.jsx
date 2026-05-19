@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  AlertTriangle,
   CheckCircle2,
   RotateCw,
   Loader2,
   Music,
   PlayCircle,
+  Zap,
+  SkipForward,
+  Trash2,
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
@@ -20,15 +22,39 @@ export default function ReviewPage() {
   const { addToast } = useToast();
   const [retrying, setRetrying] = useState({});
   const [retryAllProgress, setRetryAllProgress] = useState(null); // null | { current, total }
+  const [geminiQuota, setGeminiQuota] = useState(null); // { remaining, total, exhausted }
+  const [skippedTracks, setSkippedTracks] = useState(null); // { skipped: {id: count}, threshold, total }
+  const [resettingSkipped, setResettingSkipped] = useState(false);
+
+  useEffect(() => {
+    api.getGeminiQuota().then(setGeminiQuota).catch(() => {});
+    api.getSkippedTracks().then(setSkippedTracks).catch(() => {});
+  }, []);
+
+  async function handleResetSkipped(trackId = null) {
+    setResettingSkipped(true);
+    try {
+      await api.resetSkippedTracks(trackId);
+      const fresh = await api.getSkippedTracks();
+      setSkippedTracks(fresh);
+      addToast({ type: 'success', title: trackId ? 'Track unblocked' : 'All skipped tracks reset', duration: 4000 });
+    } catch (err) {
+      addToast({ type: 'error', title: 'Reset failed', description: err.message, duration: 4000 });
+    } finally {
+      setResettingSkipped(false);
+    }
+  }
 
   async function handleRetry(item) {
     const key = item.title;
     setRetrying((prev) => ({ ...prev, [key]: true }));
     try {
-      // filepath stored as absolute or relative — pass the title+artist path hint
-      const filepath = item.suggested_folder
-        ? `${item.suggested_folder}/${item.title}.mp3`
-        : `Library/Electronic/${item.title}.mp3`;
+      // Use actual filename from disk when available (avoids _1 suffix mismatches)
+      const filepath = item.filename
+        ? `Library/Electronic/${item.filename}`
+        : item.suggested_folder
+          ? `${item.suggested_folder}/${item.title}.mp3`
+          : `Library/Electronic/${item.title}.mp3`;
       const result = await api.retagCatchallTrack(filepath);
       if (result.moved) {
         addToast({
@@ -38,6 +64,13 @@ export default function ReviewPage() {
           duration: 5000,
         });
         clearNeedsReviewItem(item.title);
+      } else if (result.quota_exhausted) {
+        addToast({
+          type: 'error',
+          title: 'Gemini quota exhausted',
+          description: 'Daily limit reached — this track will be retried automatically tomorrow.',
+          duration: 8000,
+        });
       } else {
         addToast({
           type: 'warning',
@@ -61,20 +94,37 @@ export default function ReviewPage() {
   async function handleRetryAll() {
     const items = [...needsReviewItems];
     setRetryAllProgress({ current: 0, total: items.length });
+    let quotaHit = false;
+    let processed = 0;
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       setRetryAllProgress({ current: i + 1, total: items.length });
-      const filepath = item.suggested_folder
-        ? `${item.suggested_folder}/${item.title}.mp3`
-        : `Library/Electronic/${item.title}.mp3`;
+      const filepath = item.filename
+        ? `Library/Electronic/${item.filename}`
+        : item.suggested_folder
+          ? `${item.suggested_folder}/${item.title}.mp3`
+          : `Library/Electronic/${item.title}.mp3`;
       try {
         const result = await api.retagCatchallTrack(filepath);
-        if (result.moved) clearNeedsReviewItem(item.title);
+        if (result.moved) { clearNeedsReviewItem(item.title); processed++; }
+        if (result.quota_exhausted) {
+          quotaHit = true;
+          addToast({
+            type: 'error',
+            title: 'Gemini quota exhausted',
+            description: 'Daily limit reached — remaining tracks will be retried automatically tomorrow.',
+            duration: 8000,
+          });
+          break;
+        }
       } catch { /* continue to next */ }
       await new Promise((r) => setTimeout(r, 800));
     }
     setRetryAllProgress(null);
-    addToast({ type: 'success', title: 'Retry All complete', description: 'All tracks have been processed' });
+    api.getGeminiQuota().then(setGeminiQuota).catch(() => {});
+    if (!quotaHit) {
+      addToast({ type: 'success', title: 'Retry All complete', description: `${processed} track(s) reclassified` });
+    }
   }
 
   return (
@@ -82,13 +132,26 @@ export default function ReviewPage() {
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold">Catch-all Tracks</h1>
+          <h1 className="text-xl font-bold">Unclassified Tracks</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Songs routed to <span className="font-mono text-amber-400">Library/Electronic/</span> because Gemini was unavailable.
-            Retry to reclassify, or wait — the maintenance worker retries automatically every hour.
+            These tracks were downloaded but the app couldn't figure out their genre automatically.
+            Hit <strong className="text-amber-300">Retry</strong> to try again, or they'll stay in the <span className="text-amber-400">Unclassified</span> folder until sorted.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {geminiQuota && (
+            <Badge className={cn(
+              'border gap-1',
+              geminiQuota.exhausted
+                ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+            )}>
+              <Zap className="w-3 h-3" />
+              {geminiQuota.exhausted
+                ? 'AI limit reached — resets tomorrow'
+                : `AI calls: ${geminiQuota.remaining} left today`}
+            </Badge>
+          )}
           {needsReviewItems.length > 0 && (
             <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30">
               {needsReviewItems.length} pending
@@ -127,8 +190,67 @@ export default function ReviewPage() {
           <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center mb-4">
             <CheckCircle2 className="w-7 h-7 text-emerald-400" />
           </div>
-          <p className="text-lg font-semibold text-emerald-400">All tracks correctly routed</p>
-          <p className="text-sm text-gray-500 mt-1">No catch-all tracks pending review</p>
+          <p className="text-lg font-semibold text-emerald-400">All sorted — nothing to review</p>
+          <p className="text-sm text-gray-500 mt-1">Every downloaded track has been placed in a genre folder</p>
+        </motion.div>
+      )}
+
+      {/* Skipped Tracks panel */}
+      {skippedTracks && skippedTracks.total > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 space-y-3"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <SkipForward className="w-4 h-4 text-red-400" />
+              <span className="text-sm font-semibold text-red-300">
+                Blocked Downloads
+              </span>
+              <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
+                {skippedTracks.total}
+              </Badge>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={resettingSkipped}
+              onClick={() => handleResetSkipped()}
+              className="text-red-400 hover:text-red-300 hover:bg-red-500/10 shrink-0"
+            >
+              {resettingSkipped ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <>
+                  <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                  Reset All
+                </>
+              )}
+            </Button>
+          </div>
+          <p className="text-xs text-gray-500">
+            These tracks failed to download {skippedTracks.threshold}+ times in a row so the app stopped trying.
+            Click the reset button to try downloading them again.
+          </p>
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {Object.entries(skippedTracks.skipped).map(([id, count]) => (
+              <div key={id} className="flex items-center justify-between gap-2 text-xs text-gray-400 py-1 border-b border-red-500/10 last:border-0">
+                <span className="font-mono truncate">{id}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-red-400">{count} fails</span>
+                  <button
+                    onClick={() => handleResetSkipped(id)}
+                    disabled={resettingSkipped}
+                    className="text-gray-500 hover:text-red-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Unblock this track"
+                  >
+                    <RotateCw className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </motion.div>
       )}
 
@@ -139,7 +261,7 @@ export default function ReviewPage() {
           const isRetrying = retrying[item.title];
           return (
             <motion.div
-              key={item.title + '__' + item.artist}
+              key={item.id || (item.title + '__' + item.artist)}
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10, height: 0, marginBottom: 0 }}
@@ -157,14 +279,11 @@ export default function ReviewPage() {
                 <p className="text-xs text-gray-400 truncate">{item.artist}</p>
                 <div className="flex items-center gap-2 mt-1">
                   <span className={cn(
-                    'text-[10px] px-1.5 py-0.5 rounded-full font-mono',
-                    conf >= 40 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'
+                    'text-[10px] px-1.5 py-0.5 rounded-full',
+                    conf >= 60 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'
                   )}>
-                    {conf}% confidence
+                    {conf >= 60 ? 'Low confidence' : 'Genre unknown'}
                   </span>
-                  {item.genre_source && (
-                    <span className="text-[10px] text-gray-600">{item.genre_source}</span>
-                  )}
                   {item.timestamp && (
                     <span className="text-[10px] text-gray-600">{item.timestamp}</span>
                   )}
