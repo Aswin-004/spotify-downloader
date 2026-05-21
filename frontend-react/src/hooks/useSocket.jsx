@@ -173,12 +173,15 @@ export function SocketProvider({ children }) {
 
     socket.on('download_complete', (data) => {
       if (data.source === 'ingest') {
+        const _meta = [
+          data.routing_label,
+          data.bpm ? `${data.bpm} BPM` : null,
+          data.camelot || null,
+        ].filter(Boolean).join(' · ');
         toastRef.current({
           type: 'success',
           title: 'Download Complete',
-          description: data.routing_label
-            ? `${data.title} → ${data.routing_label}`
-            : `${data.title} — ${data.artist || ''}`,
+          description: _meta ? `${data.title} — ${_meta}` : `${data.title} — ${data.artist || ''}`,
         });
         setDownloads((prev) => {
           const updated = { ...prev.downloading };
@@ -197,6 +200,10 @@ export function SocketProvider({ children }) {
                 timestamp: new Date().toLocaleTimeString(),
                 folder: data.folder || '',
                 routing_label: data.routing_label || '',
+                bpm: data.bpm || null,
+                key: data.key || null,
+                camelot: data.camelot || null,
+                energy: data.energy || null,
               },
             },
           };
@@ -305,7 +312,10 @@ export function SocketProvider({ children }) {
     });
 
     socket.on('maintenance_log', (data) => {
-      setMaintenanceLogs((prev) => [...prev, data]);
+      setMaintenanceLogs((prev) => {
+        const next = [...prev, data];
+        return next.length > 1000 ? next.slice(-1000) : next;
+      });
       if (data.done) setMaintenanceRunning(false);
     });
 

@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FolderSync,
   DatabaseZap,
   Sparkles,
+  Tags,
   Play,
   Square,
   Trash2,
@@ -45,12 +46,20 @@ const TASKS = [
     description: 'Uses AI to detect the genre of tracks that ended up in the Unclassified folder, add BPM and musical key info, and fetch missing album artwork.',
     color: 'amber',
     passes: [
-      { id: 1, label: 'Step 1 — Detect genres for Indian/Bollywood tracks' },
-      { id: 2, label: 'Step 2 — Sort tracks with unknown genre' },
-      { id: 3, label: 'Step 3 — Fill in missing genre tags' },
-      { id: 4, label: 'Step 4 — Add BPM + musical key' },
-      { id: 5, label: 'Step 5 — Fetch missing album artwork' },
+      { id: 1, label: 'Step 1 — Detect genres for Indian/Bollywood tracks (AI classifier, ~2s per track)' },
+      { id: 2, label: 'Step 2 — Move tracks with a detected genre into the right folder (rule-based, fast)' },
+      { id: 3, label: 'Step 3 — Fill in missing genre tags for remaining unknowns (Gemini AI, ~10s per track)' },
+      { id: 4, label: 'Step 4 — Add BPM + musical key via audio analysis (~3s per track)' },
+      { id: 5, label: 'Step 5 — Fetch missing album artwork from MusicBrainz/Spotify (~1s per track)' },
     ],
+  },
+  {
+    id: 'backfill_lastfm',
+    icon: Tags,
+    title: 'Enrich Genre & Mood Tags (Last.fm)',
+    description: 'Fetches community genre, mood, and listener data from Last.fm for all library tracks. Runs in batches of 200 — re-run until complete. Safe to run while downloads are active.',
+    color: 'teal',
+    hasLimit: true,
   },
 ];
 
@@ -58,10 +67,11 @@ const COLOR = {
   purple: { badge: 'bg-purple-500/20 text-purple-300', border: 'border-purple-500/30', icon: 'text-purple-400', btn: 'bg-purple-600 hover:bg-purple-700' },
   blue:   { badge: 'bg-blue-500/20 text-blue-300',     border: 'border-blue-500/30',   icon: 'text-blue-400',   btn: 'bg-blue-600 hover:bg-blue-700'   },
   amber:  { badge: 'bg-amber-500/20 text-amber-300',   border: 'border-amber-500/30',  icon: 'text-amber-400',  btn: 'bg-amber-600 hover:bg-amber-700'  },
+  teal:   { badge: 'bg-teal-500/20 text-teal-300',     border: 'border-teal-500/30',   icon: 'text-teal-400',   btn: 'bg-teal-600 hover:bg-teal-700'    },
 };
 
 function LogLine({ line }) {
-  const isError  = /error|fail|warn|✗/i.test(line);
+  const isError  = /\[(?:error|fail|warn)\]|(?:error|fail|warn(?:ing)?):|✗/i.test(line);
   const isDone   = /✓|done|exit 0/i.test(line);
   const isHeader = line.startsWith('===') || line.startsWith('▶');
   return (
@@ -80,17 +90,19 @@ function LogLine({ line }) {
 function TaskCard({ task, activeTask, onRun, running, logs }) {
   const [expanded, setExpanded] = useState(false);
   const [dryRun, setDryRun] = useState(false);
-  const defaultPasses = task.passes ? task.passes.filter(p => p.id <= 4).map(p => p.id) : [];
+  const defaultPasses = task.passes
+    ? (() => { const max = Math.max(...task.passes.map(p => p.id)); return task.passes.filter(p => p.id < max).map(p => p.id); })()
+    : [];
   const [passes, setPasses] = useState(defaultPasses);
   const [limit, setLimit] = useState('');
   const logRef = useRef(null);
   const c = COLOR[task.color];
   const Icon = task.icon;
-  const isMe = activeTask === task.id;
-  const myLogs = isMe ? logs : [];
-  const lastLog = myLogs[myLogs.length - 1];
-  const isDone = lastLog?.done;
-  const exitOk = isDone && lastLog?.exit_code === 0;
+  const isMe    = useMemo(() => activeTask === task.id, [activeTask, task.id]);
+  const myLogs  = useMemo(() => (isMe ? logs : []), [isMe, logs]);
+  const lastLog = useMemo(() => myLogs[myLogs.length - 1], [myLogs]);
+  const isDone  = useMemo(() => Boolean(lastLog?.done), [lastLog]);
+  const exitOk  = useMemo(() => isDone && lastLog?.exit_code === 0, [isDone, lastLog]);
 
   useEffect(() => {
     if (logRef.current) {
@@ -177,7 +189,7 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
           )}
 
           {/* Backfill-only: limit */}
-          {task.passes && (
+          {(task.passes || task.hasLimit) && (
             <input
               type="number"
               value={limit}
@@ -190,7 +202,7 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
 
         {/* Run button */}
         <Button
-          onClick={() => onRun(task.id, { dry_run: dryRun, passes, limit: parseInt(limit) || 0 })}
+          onClick={() => onRun(task.id, { dry_run: dryRun, passes, limit: Math.max(0, parseInt(limit) || 0) })}
           disabled={running || (task.passes && passes.length === 0)}
           className={cn('w-full', c.btn, 'text-white disabled:opacity-40')}
           size="sm"
@@ -297,7 +309,11 @@ export default function MaintenancePage() {
     try {
       await api.runMaintenance(taskId, opts);
     } catch (err) {
-      setError(err.message || 'Failed to start task');
+      const safeMsg =
+        err?.response?.data?.error ||
+        err?.response?.data?.message ||
+        (err?.response?.status ? `Server error (${err.response.status})` : 'Failed to start task');
+      setError(safeMsg);
       setActiveTask(null);
       stopMaintenance();
       clearMaintenanceLogs();
