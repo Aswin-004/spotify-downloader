@@ -20,8 +20,11 @@ class Config:
     SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
     SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 
-    # Gemini API
+    # Gemini API (legacy — kept so old references don't break)
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+    # Groq API (replaces Gemini for genre classification — free tier, 14400 calls/day)
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
     # Last.fm API (free — register at last.fm/api)
     LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "")
@@ -81,6 +84,7 @@ class Config:
         "dubstep":              "UK Bass",
         "liquid funk":          "Drum and Bass",
         "drum and bass":        "Drum and Bass",
+        "drum & bass":          "Drum and Bass",
         "drumstep":             "Drum and Bass",
         "neurofunk":            "Drum and Bass",
         "jungle":               "Drum and Bass",
@@ -151,6 +155,9 @@ class Config:
         "dance":                "Dance",
         # ── Hip Hop / Rap ─────────────────────────────────────
         "hip hop":              "Hip Hop",
+        "hip-hop":              "Hip Hop",   # Last.fm uses hyphenated form
+        "west coast":           "Hip Hop",
+        "east coast":           "Hip Hop",
         "rap":                  "Hip Hop",
         "trap":                 "Hip Hop",
         "drill":                "Hip Hop",
@@ -162,6 +169,7 @@ class Config:
         "gangsta rap":          "Hip Hop",
         # ── R&B / Soul ────────────────────────────────────────
         "r&b":                  "R&B",
+        "rnb":                  "R&B",
         "soul":                 "R&B",
         "neo soul":             "R&B",
         "contemporary r&b":     "R&B",
@@ -384,6 +392,58 @@ class Config:
         "ghetts":               "Grime",
         "chip":                 "Grime",
         # ── Indian Bollywood additions ────────────────────────────────────
+        # Legacy / classic Bollywood (resolved from NeedsReview 2026-05-22)
+        "udit narayan":         "Bollywood",
+        "jatin-lalit":          "Bollywood",
+        "uttam singh":          "Bollywood",
+        "rahul sharma":         "Bollywood",
+        "abhijeet":             "Bollywood",
+        "jeet-pritam":          "Bollywood",
+        "asha bhosle":          "Bollywood",
+        "anu malik":            "Bollywood",
+        "madan mohan":          "Bollywood",
+        "shankar mahadevan":    "Bollywood",
+        "lata mangeshkar":      "Bollywood",
+        "kk":                   "Bollywood",
+        "shaan":                "Bollywood",
+        "babul supriyo":        "Bollywood",
+        "rahat fateh ali khan": "Bollywood",
+        "kavita krishnamurthy": "Bollywood",
+        "sandesh shandilya":    "Bollywood",
+        "aadesh shrivastava":   "Bollywood",
+        "kumar sanu":           "Bollywood",
+        "adnan sami":           "Bollywood",
+        "hariharan":            "Bollywood",
+        "hari haran":           "Bollywood",
+        "shail hada":           "Bollywood",
+        "roop kumar rathod":    "Bollywood",
+        "bollywood lofi":       "Bollywood",
+        "shweta shetty":        "Bollywood",
+        "remo fernandes":       "Bollywood",
+        "bappi lahiri":         "Bollywood",
+        "jaspinder narula":     "Bollywood",
+        "sohail sen":           "Bollywood",
+        "brijesh shandilya":    "Bollywood",
+        "aditi paul":           "Bollywood",
+        "lucky ali":            "Bollywood",
+        "sanjay leela bhansali":"Bollywood",
+        "ram sampath":          "Bollywood",
+        "mohit chauhan":        "Bollywood",
+        "lijo george-dj chetas":"Bollywood",
+        "anand-milind":         "Bollywood",
+        "anuradha sriram":      "Bollywood",
+        "ajay gogavale":        "Bollywood",
+        "jasleen royal":        "Bollywood",
+        "aaman trikha":         "Bollywood",
+        "ruuh":                 "Bollywood",
+        "monty sharma":         "Bollywood",
+        "mahalakshmi iyer":     "Bollywood",
+        "javed ali":            "Bollywood",
+        "pawni pandey":         "Bollywood",
+        "joi barua":            "Bollywood",
+        "pinky":                "Bollywood",
+        "prem & hardeep":       "Bollywood",
+        "josh brar":            "Bollywood",
         "arijit singh":         "Bollywood",
         "shreya ghoshal":       "Bollywood",
         "neha kakkar":          "Bollywood",
@@ -514,12 +574,170 @@ class Config:
         "ozuna":                "Latin",
         "karol g":              "Latin",
         "rauw alejandro":       "Latin",
+        "carlos santana":       "Latin",
         # ── R&B additions ─────────────────────────────────────────────────
         "sza":                  "R&B",
         "frank ocean":          "R&B",
         "giveon":               "R&B",
         "brent faiyaz":         "R&B",
         "khalid":               "R&B",
+        "monica":               "R&B",
+        # ── Remixers / producers with confirmed genre ─────────────────────
+        "becker & vermont":     "Punjabi",
+        "marten lou":           "Punjabi",
+        # ── Punjabi additions (2026-05-25) ────────────────────────────────
+        "bilal saeed":          "Punjabi",
+        "prem dhillon":         "Punjabi",
+        "cheema y":             "Punjabi",
+        "jasmeen akhtar":       "Punjabi",
+        "im ravi":              "Punjabi",
+        "paigham chhina":       "Punjabi",
+        "pirti silon":          "Punjabi",
+        # ── Hip Hop / R&B additions ───────────────────────────────────────
+        "t-pain":               "R&B",
+        "mos def":              "Hip Hop",
+        "joe moses":            "Hip Hop",
+        "devstacks":            "Hip Hop",
+        # ── Grime additions ───────────────────────────────────────────────
+        "big kay smg":          "Grime",
+        "baggh-e smg":          "Grime",
+        "embertalks":           "Grime",
+        # ── Electronic / Dance additions ──────────────────────────────────
+        "the cure":             "Electronic",
+        "rune rk":              "Electronic",
+        "dance fruits music":   "Electronic",
+        "klangspiel":           "Electronic",
+        "enur":                 "Electronic",
+        "nausica":              "Electronic",
+        "moyjo":                "Electronic",
+        "sllash & doppe":       "Electronic",
+        "dj burlak":            "Electronic",
+        "bdt (kz)":             "Electronic",
+        "kiko":                 "Electronic",
+        # ── Latin additions ───────────────────────────────────────────────
+        "duendes":              "Latin",
+        # ── Classical (no Classical folder — nearest is Pop) ─────────────
+        "george frideric handel": "Pop",
+        "giuseppe verdi":         "Pop",
+        # ── K-Pop ─────────────────────────────────────────────────────────
+        "itzy":                   "Pop",
+        # ── Telugu additions ──────────────────────────────────────────────
+        "geetha madhuri":         "Telugu",
+        # ── Bollywood additions ───────────────────────────────────────────
+        "yasser desai":           "Bollywood",
+        "atul diwakar":           "Bollywood",
+        # ── Punjabi additions (2026-05-25 run 3) ──────────────────────────
+        "deep dhaliwal":          "Punjabi",
+        "amrinder gill":          "Punjabi",
+        "nanku":                  "Punjabi",
+        # ── Hip Hop additions ─────────────────────────────────────────────
+        "diddy":                  "Hip Hop",
+        "p. diddy":               "Hip Hop",
+        "puff daddy":             "Hip Hop",
+        # ── Electronic additions (2026-05-25 run 3) ───────────────────────
+        "rbãr":                   "Electronic",
+        "rbør":                   "Electronic",
+        "rbar":                   "Electronic",
+        "stoltenhoff":            "Electronic",
+        "dj.nostalgia":           "Electronic",
+        "nevra pulse":            "Electronic",
+        "chriss aum":             "Electronic",
+        "beat smuggler":          "Electronic",
+        "khenya":                 "Electronic",
+        "igmor":                  "Electronic",
+        "metty":                  "Electronic",
+        "kyanq":                  "Electronic",
+        "raaccso":                "Electronic",
+        "thiarajxtt":             "Electronic",
+        "starly":                 "Electronic",
+        # ── Punjabi additions (2026-05-25 run 4) ──────────────────────────
+        "saabi bhinder":          "Punjabi",
+        "jassa dhillon":          "Punjabi",
+        # ── Grime additions ───────────────────────────────────────────────
+        "nsg":                    "Grime",
+        # ── Electronic additions (2026-05-25 run 4) ───────────────────────
+        "fede aliprandi":         "Electronic",
+        "lomiiel":                "Electronic",
+        "ritmes de kanderi":      "Electronic",
+        "rsquared":               "Electronic",
+        # ── Pop additions ─────────────────────────────────────────────────
+        "don williams":           "Pop",
+        "danny rhys":             "Pop",
+        "hotel ugly":             "Pop",
+        "sorority noise":         "Pop",
+        # ── Pop additions (2026-05-25 run 5) ──────────────────────────────
+        "madonna":                "Pop",
+        "pj masks":               "Pop",
+        # ── R&B additions ─────────────────────────────────────────────────
+        "chlöe":                  "R&B",
+        "chloe":                  "R&B",
+        # ── Hip Hop additions ─────────────────────────────────────────────
+        "niska":                  "Hip Hop",
+        # ── Punjabi additions (2026-05-25 run 5) ──────────────────────────
+        "dum k":                  "Punjabi",
+        # ── Electronic / Dance additions (2026-05-25 run 5) ───────────────
+        "sash":                   "Electronic",
+        "1200 micrograms":        "Electronic",
+        "markus schulz":          "Electronic",
+        "protoculture":           "Electronic",
+        "cafe de anatolia":       "Electronic",
+        "anton powers":           "Electronic",
+        "daniel rateuke":         "Electronic",
+        "techno project":         "Electronic",
+        "azzecca":                "Electronic",
+        "dan tanev":              "Electronic",
+        "andi vegas":             "Electronic",
+        "sega sound team":        "Electronic",
+        "david lowe":             "Electronic",
+        "nando marttinez":        "Electronic",
+        "dope (pt)":              "Electronic",
+        "j. axel":                "Electronic",
+        "pato's groove":          "Electronic",
+        "diego bustamante":       "Electronic",
+        # ── Punjabi additions (2026-05-25 run 6) ──────────────────────────
+        "sultaan":                "Punjabi",
+        "pablo dutta":            "Punjabi",
+        "ravi pilibanga":         "Punjabi",
+        # ── Latin additions (2026-05-25 run 6) ────────────────────────────
+        "santana":                "Latin",
+        "tito puente":            "Latin",
+        # ── Pop additions (2026-05-25 run 6) ──────────────────────────────
+        "dennis lloyd":           "Pop",
+        "the score":              "Pop",
+        # ── Electronic additions (2026-05-25 run 6) ───────────────────────
+        "kastelo":                "Electronic",
+        # ── Pop additions (2026-05-25) ────────────────────────────────────
+        "ellie goulding":         "Pop",
+        "jung kook":              "Pop",
+        "mariah carey":           "Pop",
+        "bazzi":                  "Pop",
+        "alex warren":            "Pop",
+        "enhypen":                "Pop",
+        # ── R&B / Latin additions ─────────────────────────────────────────
+        "kali uchis":             "R&B",
+        "iglesias":               "Latin",
+        "enrique iglesias":       "Latin",
+        # ── Hip Hop additions ─────────────────────────────────────────────
+        "gone.fludd":             "Hip Hop",
+        "buckshot":               "Hip Hop",
+        "king":                   "Indian Hip Hop",
+        # ── Electronic / House additions ──────────────────────────────────
+        "ben böhmer":             "Electronic",
+        "ben bohmer":             "Electronic",
+        "radiohead":              "Electronic",
+        "umwelt":                 "Electronic",
+        "william deep":           "Electronic",
+        "vasco c":                "Electronic",
+        "gabrijel bergmann":      "Electronic",
+        "yasar akpence":          "Electronic",
+        "high frequency bass":    "Electronic",
+        "messwave":               "Electronic",
+        "zag beatmaker":          "Electronic",
+        "redredred":              "Electronic",
+        "proudly people":         "Electronic",
+        "beatpella house":        "House",
+        "scuchi":                 "Electronic",
+        "dp369":                  "Electronic",
     }
 
 

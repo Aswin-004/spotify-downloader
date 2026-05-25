@@ -9,13 +9,22 @@ import {
   Zap,
   SkipForward,
   Trash2,
+  FolderInput,
 } from 'lucide-react';
+
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
 import { useToast } from '@/components/ui/toast';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+
+const GENRE_OPTIONS = [
+  'House', 'Trance', 'UK Garage', 'Drum & Bass', 'Dubstep',
+  'Techno', 'Grime', 'Electronic',
+  'Bollywood', 'Punjabi', 'Tamil',
+  'Hip Hop', 'R&B', 'Pop', 'Latin',
+];
 
 export default function ReviewPage() {
   const { needsReviewItems, clearNeedsReviewItem } = useSocket();
@@ -25,6 +34,8 @@ export default function ReviewPage() {
   const [geminiQuota, setGeminiQuota] = useState(null); // { remaining, total, exhausted }
   const [skippedTracks, setSkippedTracks] = useState(null); // { skipped: {id: count}, threshold, total }
   const [resettingSkipped, setResettingSkipped] = useState(false);
+  const [selectedGenres, setSelectedGenres] = useState({}); // { [itemKey]: genre }
+  const [moving, setMoving] = useState({}); // { [itemKey]: boolean }
 
   useEffect(() => {
     api.getGeminiQuota().then(setGeminiQuota).catch(() => {});
@@ -45,16 +56,23 @@ export default function ReviewPage() {
     }
   }
 
+  function buildFilepath(item) {
+    const folder = item.suggested_folder || 'Library/Electronic';
+    // Prefer explicit filename (set after the file lands on disk).
+    // Fall back to "Title - Artist.mp3" (current naming format), then title-only for
+    // older files that predate the title-artist format.
+    if (item.filename) return `${folder}/${item.filename}`;
+    const artist = item.artist || '';
+    return artist
+      ? `${folder}/${item.title} - ${artist}.mp3`
+      : `${folder}/${item.title}.mp3`;
+  }
+
   async function handleRetry(item) {
     const key = item.title;
     setRetrying((prev) => ({ ...prev, [key]: true }));
     try {
-      // Use actual filename from disk when available (avoids _1 suffix mismatches)
-      const filepath = item.filename
-        ? `Library/Electronic/${item.filename}`
-        : item.suggested_folder
-          ? `${item.suggested_folder}/${item.title}.mp3`
-          : `Library/Electronic/${item.title}.mp3`;
+      const filepath = buildFilepath(item);
       const result = await api.retagCatchallTrack(filepath);
       if (result.moved) {
         addToast({
@@ -67,7 +85,7 @@ export default function ReviewPage() {
       } else if (result.quota_exhausted) {
         addToast({
           type: 'error',
-          title: 'Gemini quota exhausted',
+          title: 'AI quota exhausted',
           description: 'Daily limit reached — this track will be retried automatically tomorrow.',
           duration: 8000,
         });
@@ -75,7 +93,7 @@ export default function ReviewPage() {
         addToast({
           type: 'warning',
           title: 'Still unresolved',
-          description: result.reason || 'Gemini could not classify this track',
+          description: result.reason || 'Could not classify this track',
           duration: 5000,
         });
       }
@@ -94,36 +112,91 @@ export default function ReviewPage() {
   async function handleRetryAll() {
     const items = [...needsReviewItems];
     setRetryAllProgress({ current: 0, total: items.length });
-    let quotaHit = false;
     let processed = 0;
+    let notFound = 0;
+    let unresolved = 0;
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       setRetryAllProgress({ current: i + 1, total: items.length });
-      const filepath = item.filename
-        ? `Library/Electronic/${item.filename}`
-        : item.suggested_folder
-          ? `${item.suggested_folder}/${item.title}.mp3`
-          : `Library/Electronic/${item.title}.mp3`;
+      const filepath = buildFilepath(item);
       try {
         const result = await api.retagCatchallTrack(filepath);
-        if (result.moved) { clearNeedsReviewItem(item.title); processed++; }
-        if (result.quota_exhausted) {
-          quotaHit = true;
+        if (result.moved) {
+          clearNeedsReviewItem(item.title);
+          processed++;
+        } else if (result.quota_exhausted) {
           addToast({
             type: 'error',
-            title: 'Gemini quota exhausted',
-            description: 'Daily limit reached — remaining tracks will be retried automatically tomorrow.',
+            title: 'AI quota hit mid-run',
+            description: `${processed} moved so far. Remaining tracks will be retried tomorrow.`,
             duration: 8000,
           });
           break;
+        } else {
+          unresolved++;
         }
-      } catch { /* continue to next */ }
-      await new Promise((r) => setTimeout(r, 800));
+      } catch (err) {
+        // 404 = file not found on disk (path mismatch or already moved)
+        if (err?.response?.status === 404) notFound++;
+        // else: network error — skip silently
+      }
+      await new Promise((r) => setTimeout(r, 2000));
     }
     setRetryAllProgress(null);
     api.getGeminiQuota().then(setGeminiQuota).catch(() => {});
-    if (!quotaHit) {
-      addToast({ type: 'success', title: 'Retry All complete', description: `${processed} track(s) reclassified` });
+
+    if (processed > 0) {
+      addToast({
+        type: 'success',
+        title: `${processed} track${processed !== 1 ? 's' : ''} reclassified`,
+        description: unresolved > 0 ? `${unresolved} still unresolved — try again later or move manually` : undefined,
+        duration: 6000,
+      });
+    } else if (notFound > 0) {
+      addToast({
+        type: 'error',
+        title: 'Files not found on disk',
+        description: `${notFound} track${notFound !== 1 ? 's' : ''} couldn't be located. Refresh the page to reload the queue.`,
+        duration: 8000,
+      });
+    } else {
+      addToast({
+        type: 'warning',
+        title: 'Nothing reclassified',
+        description: unresolved > 0
+          ? `${unresolved} tracks could not be classified — try again later.`
+          : 'No tracks could be classified via artist lookup, Spotify, Last.fm, or MusicBrainz.',
+        duration: 8000,
+      });
+    }
+  }
+
+  async function handleMoveAndRemember(item) {
+    const itemKey = item.id || (item.title + '__' + item.artist);
+    const genre = selectedGenres[itemKey];
+    if (!genre) return;
+    const key = itemKey;
+    setMoving((prev) => ({ ...prev, [key]: true }));
+    try {
+      const filepath = buildFilepath(item);
+      const result = await api.moveAndRemember(filepath, genre, item.artist || '');
+      if (result.moved) {
+        addToast({
+          type: 'success',
+          title: `Moved to ${genre}`,
+          description: item.artist
+            ? `${item.artist} will auto-route to ${genre} from now on`
+            : item.title,
+          duration: 5000,
+        });
+        clearNeedsReviewItem(item.title);
+      } else {
+        addToast({ type: 'error', title: 'Move failed', description: result.error, duration: 5000 });
+      }
+    } catch (err) {
+      addToast({ type: 'error', title: 'Move failed', description: err.message, duration: 4000 });
+    } finally {
+      setMoving((prev) => ({ ...prev, [key]: false }));
     }
   }
 
@@ -134,8 +207,8 @@ export default function ReviewPage() {
         <div className="min-w-0">
           <h1 className="text-xl font-bold">Unclassified Tracks</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            These tracks were downloaded but the app couldn't figure out their genre automatically.
-            Hit <strong className="text-amber-300">Retry</strong> to try again, or they'll stay in the <span className="text-amber-400">Unclassified</span> folder until sorted.
+            These tracks need your genre pick before they join your crates.
+            Hit <strong className="text-amber-300">Retry</strong> to let the AI classify, or choose a genre and hit <strong className="text-emerald-400">Move &amp; Remember</strong> to sort it yourself.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -148,8 +221,8 @@ export default function ReviewPage() {
             )}>
               <Zap className="w-3 h-3" />
               {geminiQuota.exhausted
-                ? 'AI limit reached — resets tomorrow'
-                : `AI calls: ${geminiQuota.remaining} left today`}
+                ? 'AI classifier paused'
+                : 'AI classifier: ready'}
             </Badge>
           )}
           {needsReviewItems.length > 0 && (
@@ -257,6 +330,7 @@ export default function ReviewPage() {
       {/* Track list */}
       <AnimatePresence>
         {needsReviewItems.map((item) => {
+          const itemKey = item.id || (item.title + '__' + item.artist);
           const conf = Math.round((item.confidence || 0) * 100);
           const isRetrying = retrying[item.title];
           return (
@@ -266,47 +340,74 @@ export default function ReviewPage() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10, height: 0, marginBottom: 0 }}
               transition={{ duration: 0.2 }}
-              className="flex items-center gap-4 p-4 rounded-xl border border-amber-500/20 bg-amber-500/5"
+              className="p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 space-y-3"
             >
-              {/* Icon */}
-              <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                <Music className="w-4 h-4 text-amber-400" />
-              </div>
-
-              {/* Info */}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{item.title}</p>
-                <p className="text-xs text-gray-400 truncate">{item.artist}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className={cn(
-                    'text-[10px] px-1.5 py-0.5 rounded-full',
-                    conf >= 60 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'
-                  )}>
-                    {conf >= 60 ? 'Low confidence' : 'Genre unknown'}
-                  </span>
-                  {item.timestamp && (
-                    <span className="text-[10px] text-gray-600">{item.timestamp}</span>
-                  )}
+              {/* Top row: icon + info + retry */}
+              <div className="flex items-center gap-4">
+                <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                  <Music className="w-4 h-4 text-amber-400" />
                 </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{item.title}</p>
+                  <p className="text-xs text-gray-400 truncate">{item.artist}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className={cn(
+                      'text-[10px] px-1.5 py-0.5 rounded-full',
+                      conf >= 60 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'
+                    )}>
+                      {conf >= 60 ? 'Low confidence' : 'Genre unknown'}
+                    </span>
+                    {item.timestamp && (
+                      <span className="text-[10px] text-gray-600">{item.timestamp}</span>
+                    )}
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={isRetrying}
+                  onClick={() => handleRetry(item)}
+                  className="flex-shrink-0 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                >
+                  {isRetrying ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <RotateCw className="w-3.5 h-3.5 mr-1.5" />
+                      Retry
+                    </>
+                  )}
+                </Button>
               </div>
 
-              {/* Retry button */}
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={isRetrying}
-                onClick={() => handleRetry(item)}
-                className="flex-shrink-0 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
-              >
-                {isRetrying ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <>
-                    <RotateCw className="w-3.5 h-3.5 mr-1.5" />
-                    Retry
-                  </>
-                )}
-              </Button>
+              {/* Bottom row: manual genre picker */}
+              <div className="flex items-center gap-2 pl-12">
+                <select
+                  value={selectedGenres[itemKey] || ''}
+                  onChange={(e) => setSelectedGenres((prev) => ({ ...prev, [itemKey]: e.target.value }))}
+                  className="flex-1 text-xs bg-gray-900 border border-gray-700 text-gray-300 rounded-md px-2 py-1.5 cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/60"
+                >
+                  <option value="">Pick genre to move…</option>
+                  {GENRE_OPTIONS.map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  disabled={!selectedGenres[itemKey] || moving[itemKey]}
+                  onClick={() => handleMoveAndRemember(item)}
+                  className="shrink-0 bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-40 text-xs"
+                >
+                  {moving[itemKey] ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <>
+                      <FolderInput className="w-3.5 h-3.5 mr-1" />
+                      Move &amp; Remember
+                    </>
+                  )}
+                </Button>
+              </div>
             </motion.div>
           );
         })}

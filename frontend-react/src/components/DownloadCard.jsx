@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Music2, Loader2, CheckCircle2, SkipForward, XCircle, Clock, FolderOpen } from 'lucide-react';
+import { Loader2, CheckCircle2, SkipForward, XCircle, Clock, FolderOpen } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { ProgressBar } from '@/components/ProgressBar';
 import { StatusBadge } from '@/components/StatusBadge';
@@ -58,24 +58,12 @@ export default function DownloadCard({ item, index = 0 }) {
       )}>
         <div className="p-4 flex items-center gap-4">
           {/* Status icon */}
-          <motion.div
-            className={cn(
-              'w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0',
-              config.bg
-            )}
-            animate={{
-              scale: item.status === 'downloading' ? [1, 1.06, 1] : 1,
-            }}
-            transition={{
-              duration: 2,
-              repeat: item.status === 'downloading' ? Infinity : 0,
-              ease: 'easeInOut',
-            }}
-          >
-            <Icon
-              className={cn('w-5 h-5', config.color, config.spin && 'animate-spin')}
-            />
-          </motion.div>
+          <div className={cn(
+            'w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0',
+            config.bg
+          )}>
+            <Icon className={cn('w-5 h-5', config.color, config.spin && 'animate-spin')} />
+          </div>
 
           {/* Content */}
           <div className="flex-1 min-w-0">
@@ -106,17 +94,36 @@ export default function DownloadCard({ item, index = 0 }) {
             )}
 
             {/* Destination folder badge for completed */}
-            {item.status === 'completed' && item.routing_label && (
-              <div className={cn(
-                'inline-flex items-center gap-1 mt-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium',
-                item.routing_label === 'Needs Sorting'
-                  ? 'bg-amber-500/15 text-amber-400'
-                  : item.routing_label === 'Unclassified'
-                  ? 'bg-gray-500/15 text-gray-400'
-                  : 'bg-emerald-500/15 text-emerald-400'
-              )}>
-                <FolderOpen className="w-3 h-3" />
-                {item.routing_label}
+            {item.status === 'completed' && (
+              <div className="flex items-center flex-wrap gap-1.5 mt-1.5">
+                {item.routing_label && (
+                  <div className={cn(
+                    'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium',
+                    item.routing_label === 'Needs Sorting'
+                      ? 'bg-amber-500/15 text-amber-400'
+                      : item.routing_label === 'Unclassified'
+                      ? 'bg-gray-500/15 text-gray-400'
+                      : 'bg-emerald-500/15 text-emerald-400'
+                  )}>
+                    <FolderOpen className="w-3 h-3" />
+                    {item.routing_label}
+                  </div>
+                )}
+                {item.bpm && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-blue-500/10 text-blue-300 border border-blue-500/15">
+                    {item.bpm} BPM
+                  </span>
+                )}
+                {item.camelot && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-purple-500/10 text-purple-300 border border-purple-500/15">
+                    {item.camelot}
+                  </span>
+                )}
+                {item.key && !item.camelot && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-purple-500/10 text-purple-300 border border-purple-500/15">
+                    {item.key}
+                  </span>
+                )}
               </div>
             )}
 

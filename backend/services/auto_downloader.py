@@ -62,7 +62,7 @@ CHECK_INTERVAL = config.CHECK_INTERVAL
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 INGEST_HISTORY_FILE = str(_BACKEND_ROOT / "ingest_tracks.json")
 INGEST_FAILURES_FILE = str(_BACKEND_ROOT / "ingest_failures.json")  # PERMANENT SKIP
-CACHE_PATH = os.path.join(os.path.dirname(__file__), ".spotify_cache")
+CACHE_PATH = os.path.join(os.path.dirname(__file__), ".spotify_oauth_cache")
 MAX_FAIL_ATTEMPTS = 3  # PERMANENT SKIP — skip track permanently after this many failures
 
 REDIRECT_URI = config.REDIRECT_URI
@@ -84,6 +84,7 @@ AUTO_STATUS = {
 
 # Thread-safe registry of downloaded file keys
 _registry_lock = threading.Lock()
+_failure_count_lock = threading.Lock()
 _downloaded_registry: set = set()
 _in_progress_registry: set = set()  # keys currently being downloaded — TOCTOU guard
 _download_semaphore = threading.Semaphore(2)  # DISCONNECT FIX: limit concurrent yt-dlp processes
@@ -166,21 +167,56 @@ def _build_file_registry(folder):
 def _get_user_sp(interactive=False):
     """Get a Spotify client with user OAuth.
     interactive=True opens the browser for first-time auth.
-    interactive=False only works if a cached token exists.
+    interactive=False only works if a cached token exists and is refreshable.
+
+    NOTE: Reads the cache directly to bypass spotipy's strict scope comparison.
+    Any valid cached token (regardless of which scopes it was issued for) is
+    accepted — Spotify read operations work fine with write-scope tokens.
     """
+    import time, json as _json
+
+    if not interactive:
+        if not os.path.exists(CACHE_PATH):
+            return None
+        try:
+            with open(CACHE_PATH) as _f:
+                token_info = _json.load(_f)
+            if not token_info.get("access_token"):
+                return None
+            # Refresh if expired
+            if token_info.get("expires_at", 0) <= time.time():
+                logger.info("[ingest] OAuth token expired, attempting refresh...")
+                auth = SpotifyOAuth(
+                    client_id=config.SPOTIFY_CLIENT_ID,
+                    client_secret=config.SPOTIFY_CLIENT_SECRET,
+                    redirect_uri=REDIRECT_URI,
+                    scope="playlist-read-private playlist-read-collaborative "
+                          "playlist-modify-public playlist-modify-private",
+                    cache_path=CACHE_PATH,
+                    open_browser=False,
+                )
+                try:
+                    token_info = auth.refresh_access_token(token_info["refresh_token"])
+                    logger.info("[ingest] OAuth token refreshed successfully")
+                except Exception as e:
+                    logger.error(f"[ingest] Failed to refresh OAuth token: {e}")
+                    return None
+            return spotipy.Spotify(auth=token_info["access_token"],
+                                   retries=0, requests_timeout=10)
+        except Exception as e:
+            logger.warning(f"[ingest] Could not load cached token: {e}")
+            return None
+
+    # Interactive: full browser-based OAuth flow
     auth = SpotifyOAuth(
         client_id=config.SPOTIFY_CLIENT_ID,
         client_secret=config.SPOTIFY_CLIENT_SECRET,
         redirect_uri=REDIRECT_URI,
-        scope="playlist-read-private playlist-read-collaborative",
+        scope="playlist-read-private playlist-read-collaborative "
+              "playlist-modify-public playlist-modify-private",
         cache_path=CACHE_PATH,
-        open_browser=interactive,
+        open_browser=True,
     )
-    if not interactive:
-        # In daemon mode, only use cached/refreshed token
-        token_info = auth.get_cached_token()
-        if not token_info:
-            return None
     return spotipy.Spotify(auth_manager=auth, retries=0, requests_timeout=10)
 
 
@@ -198,8 +234,10 @@ def _load_ingest_history():
 
 
 def _save_ingest_history(ids):
-    with open(INGEST_HISTORY_FILE, "w") as f:
+    tmp = INGEST_HISTORY_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump({"track_ids": list(ids), "last_checked": time.strftime("%Y-%m-%dT%H:%M:%S")}, f, indent=2)
+    os.replace(tmp, INGEST_HISTORY_FILE)
 
 
 def remove_tracks_from_history(track_ids: list) -> dict:
@@ -225,14 +263,17 @@ def _load_failure_counts():  # PERMANENT SKIP
 
 def _save_failure_counts(counts):  # PERMANENT SKIP
     """Persist {track_id: failure_count} to disk."""
-    with open(INGEST_FAILURES_FILE, "w") as f:  # PERMANENT SKIP
+    tmp = INGEST_FAILURES_FILE + ".tmp"  # PERMANENT SKIP
+    with open(tmp, "w") as f:  # PERMANENT SKIP
         json.dump(counts, f, indent=2)  # PERMANENT SKIP
+    os.replace(tmp, INGEST_FAILURES_FILE)  # PERMANENT SKIP
 
 
 def _record_failure(tid, title, artist, failure_counts):  # PERMANENT SKIP
     """Increment failure count for a track. Returns True if permanently skipped."""
-    failure_counts[tid] = failure_counts.get(tid, 0) + 1  # PERMANENT SKIP
-    count = failure_counts[tid]  # PERMANENT SKIP
+    with _failure_count_lock:  # PERMANENT SKIP
+        failure_counts[tid] = failure_counts.get(tid, 0) + 1  # PERMANENT SKIP
+        count = failure_counts[tid]  # PERMANENT SKIP
     if count >= MAX_FAIL_ATTEMPTS:  # PERMANENT SKIP
         logger.warning(f"[ingest] PERMANENTLY SKIPPED ({count}/{MAX_FAIL_ATTEMPTS} failures): {title} - {artist}")  # PERMANENT SKIP
         # NOTIFICATION — Permanent skip
@@ -531,7 +572,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
             Never raises.
             """
             try:
-                from services.gemini_service import identify_audio
+                from services.gemini_service import identify_audio, GeminiQuotaExceeded
                 from services.genre_router import normalize_genre, _library_path
                 gemini = identify_audio(filepath)
                 raw = gemini.get("gemini_genre", "")
@@ -541,6 +582,8 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 if canonical:
                     return _library_path(canonical)   # e.g. "Library/House"
                 return "Library/Electronic"           # Gemini identified something but it's not in taxonomy
+            except GeminiQuotaExceeded:
+                logger.info("[ingest] Gemini daily budget exhausted — skipping fallback for this track")
             except Exception as _ge:
                 logger.debug(f"[ingest] Gemini fallback unavailable: {_ge}")
             return ""
@@ -573,7 +616,10 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 _in_progress_registry.add(track_key)  # reserve the slot — no other worker can claim it
                 _reserved = True
 
-        filename = sanitize_filename(title)
+        # Include artist in filename so same-title tracks by different artists
+        # (e.g. "Peach" by Diljit vs "Peach" in Trance) get distinct filenames
+        # and the cross-directory dedup never falsely blocks one of them.
+        filename = sanitize_filename(f"{title} - {artist}")
 
         try:
             AUTO_STATUS["current"] = f"{title} - {artist}"
@@ -630,9 +676,11 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 NEEDS_REVIEW_THRESHOLD = 0.5  # configurable per-run if needed
 
                 _is_catchall = False  # set True when routed to Electronic as fallback
+                genre_confidence = 0.0  # default; overwritten by routing branches below
                 if force_folder:
                     # Manual override always wins — flat, no artist subfolder
                     final_folder = os.path.join(target_base, force_folder)
+                    genre_confidence = 1.0
                 else:
                     from services.genre_router import resolve_genre_folder_with_confidence
                     # Try MusicBrainz genre first (conf=0.9 — most accurate)
@@ -642,6 +690,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                         if mapped:
                             # map_genre_string returns a Library/-prefixed path — flat, no artist subfolder.
                             final_folder = os.path.join(BASE_DOWNLOAD_DIR, mapped)
+                            genre_confidence = 0.9
                             logger.info(f"[ingest] MB genre routing: {title} → {mapped} (conf=0.9)")
                         else:
                             # MB genre not in map — Gemini fallback then Electronic catch-all
@@ -696,13 +745,6 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                     f"[ingest] Electronic catch-all: {title} "
                                     f"(Spotify conf={genre_confidence:.2f}, Gemini unavail)"
                                 )
-                                _emit("download_needs_review", {
-                                    "title": title, "artist": artist,
-                                    "genre_source": genre_source,
-                                    "confidence": genre_confidence,
-                                    "suggested_folder": "Library/Electronic",
-                                    "source": "ingest",
-                                })
 
                 os.makedirs(final_folder, exist_ok=True)
 
@@ -753,6 +795,15 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                         _audio.save()
                     except Exception:
                         pass
+                    # Emit now that final filename/path are known (filepath was unknown before the move)
+                    _emit("download_needs_review", {
+                        "title": title, "artist": artist,
+                        "genre_source": genre_source,
+                        "confidence": genre_confidence,
+                        "suggested_folder": "Library/Electronic",
+                        "filename": Path(final_filepath).name,
+                        "source": "ingest",
+                    })
 
                 # Update result with final path
                 result["filepath"] = final_filepath
@@ -766,7 +817,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 try:
                     from database import index_track as _idx
                     from services.dedup_service import content_hash as _ch
-                    _genre_folder = os.path.relpath(final_folder, BASE_DOWNLOAD_DIR)
+                    _genre_folder = Path(final_folder).relative_to(BASE_DOWNLOAD_DIR).as_posix()
                     _idx(
                         identity_key=track_key,
                         spotify_id=tid,
@@ -776,7 +827,56 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                         filename=result.get("filename", ""),
                         final_path=final_filepath,
                         genre_folder=_genre_folder,
+                        genre_confidence=genre_confidence,
                     )
+                    # H9 fix: re-persist BPM/key now that the library_index document exists
+                    _tr_report = result.get("tagging_report") or {}
+                    _tr_bpm = _tr_report.get("bpm")
+                    if _tr_bpm:
+                        try:
+                            from bpm_key_service import persist_audio_features as _paf_bpm
+                            _paf_bpm(track_key, {
+                                "bpm": _tr_bpm,
+                                "key": _tr_report.get("key"),
+                                "camelot": _tr_report.get("camelot"),
+                                "analyzed": True,
+                            })
+                        except Exception as _bpm_err:
+                            logger.debug(f"[ingest] BPM re-persist skipped: {_bpm_err}")
+                    # Last.fm enrichment (primary) — community tags, no quota limit
+                    try:
+                        from services.tagger_service import enrich_track_lastfm as _enrich_lastfm
+                        _lfm_ok = _enrich_lastfm(track_key, artist, title)
+                    except Exception as _lfm_err:
+                        _lfm_ok = False
+                        logger.debug(f"[ingest] Last.fm enrichment skipped: {_lfm_err}")
+                    # Gemini fallback — unknown-track only; preserves daily quota
+                    if not _lfm_ok:
+                        try:
+                            from services.tagger_service import enrich_track_gemini as _enrich_gemini
+                            _enrich_gemini(track_key, final_filepath)
+                        except Exception as _gem_err:
+                            logger.debug(f"[ingest] Gemini enrichment skipped: {_gem_err}")
+                    # DnB BPM correction: librosa can't derive genre hint at staging time.
+                    # Re-run with correct hint now that the genre folder is known.
+                    _gf_lower = _genre_folder.lower().replace("\\", "/")
+                    if any(k in _gf_lower for k in ("dnb", "drum and bass", "d&b")):
+                        try:
+                            from bpm_key_service import (
+                                detect_bpm_and_key as _dbk,
+                                write_bpm_key_to_tags as _wbkt,
+                                persist_audio_features as _paf,
+                            )
+                            _dnb_result = _dbk(final_filepath, genre_hint="dnb")
+                            if _dnb_result.get("analyzed") and _dnb_result.get("bpm"):
+                                _wbkt(final_filepath, _dnb_result["bpm"], _dnb_result.get("key"))
+                                _paf(track_key, _dnb_result)
+                                logger.info(
+                                    f"[ingest] DnB BPM corrected: {title} → "
+                                    f"{_dnb_result['bpm']} BPM · {_dnb_result.get('key')}"
+                                )
+                        except Exception as _dnb_err:
+                            logger.debug(f"[ingest] DnB BPM re-analysis skipped: {_dnb_err}")
                 except Exception as _idx_err:
                     logger.warning(f"[ingest] library_index write failed: {_idx_err}")
                 _routing_label = (
@@ -784,12 +884,17 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     else "Unclassified" if "Electronic" in _genre_folder and _is_catchall
                     else os.path.basename(_genre_folder)
                 )
+                _tr = result.get("tagging_report") or {}
                 _emit("download_complete", {
                     "title": title, "artist": artist, "status": "completed",
                     "filename": result.get("filename", ""),
                     "folder": _genre_folder,
                     "routing_label": _routing_label,
                     "source": "ingest",
+                    "bpm": _tr.get("bpm"),
+                    "key": _tr.get("key"),
+                    "camelot": _tr.get("camelot"),
+                    "energy": _tr.get("energy"),
                 })
 
                 # Post-processing warning (file downloaded but tagging/organizing failed)

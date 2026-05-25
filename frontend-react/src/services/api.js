@@ -232,6 +232,24 @@ export const api = {
     return fetch('/api/clear-genre-cache', { method: 'POST' }).then(handleResponse);
   },
 
+  moveAndRemember(filepath, genre, artist = '') {
+    return fetch('/api/move-and-remember', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filepath, genre, artist }),
+    }).then(handleResponse);
+  },
+
+  getGenreOverrides() {
+    return fetch('/api/genre-overrides').then(handleResponse);
+  },
+
+  deleteGenreOverride(artistKey) {
+    return fetch(`/api/genre-override/${encodeURIComponent(artistKey)}`, {
+      method: 'DELETE',
+    }).then(handleResponse);
+  },
+
   // NOTIFICATIONS
   getNotificationStatus() {
     return fetch('/api/notifications/status').then(handleResponse);

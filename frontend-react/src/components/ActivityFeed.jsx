@@ -92,10 +92,26 @@ export default function ActivityFeed() {
                     <p className="text-[11px] text-gray-500 truncate">
                       {item.artist}
                     </p>
+                    {item.status === 'failed' && item.error && (
+                      <p className="text-[10px] text-red-400/70 truncate mt-0.5">
+                        {item.error}
+                      </p>
+                    )}
                   </div>
-                  <span className="text-[10px] text-gray-600 flex-shrink-0 mt-0.5">
-                    {item.timestamp}
-                  </span>
+                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                    <span className="text-[10px] text-gray-600 mt-0.5">
+                      {item.timestamp}
+                    </span>
+                    <span className={cn(
+                      'text-[9px] font-medium px-1.5 py-0.5 rounded-full hidden group-hover:block',
+                      item.status === 'failed' ? 'bg-red-500/10 text-red-400' :
+                      item.status === 'skipped' ? 'bg-amber-500/10 text-amber-400' :
+                      item.status === 'downloading' ? 'bg-yellow-500/10 text-yellow-400' :
+                      'bg-emerald-500/10 text-emerald-400'
+                    )}>
+                      {config.label}
+                    </span>
+                  </div>
                 </motion.div>
               );
             })}

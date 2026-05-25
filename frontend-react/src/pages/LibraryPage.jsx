@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Music, Search, ChevronRight, ChevronDown, AlertTriangle, RotateCw, Loader2 } from 'lucide-react';
+import { Music, Search, ChevronRight, ChevronDown, AlertTriangle, RotateCw, Loader2, MoreHorizontal, FolderInput, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -8,6 +8,20 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
+import { useToast } from '@/components/ui/toast';
+
+const GENRE_OPTIONS = [
+  'House', 'Trance', 'UK Garage', 'Drum & Bass', 'Dubstep',
+  'Techno', 'Grime', 'Electronic',
+  'Bollywood', 'Punjabi', 'Tamil',
+  'Hip Hop', 'R&B', 'Pop', 'Latin',
+];
+
+function extractArtist(filename) {
+  const base = filename.replace(/\.mp3$/i, '');
+  const parts = base.split(' - ');
+  return parts.length > 1 ? parts[parts.length - 1].trim() : '';
+}
 
 function TrackArt({ path }) {
   const [failed, setFailed] = useState(false);
@@ -39,11 +53,41 @@ function FolderSkeleton() {
 // Main LibraryPage Component
 export default function LibraryPage() {
   const { files: socketFiles } = useSocket();
+  const { addToast } = useToast();
   const [files, setFiles] = useState([]);
   const [search, setSearch] = useState('');
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [openMenu, setOpenMenu] = useState(null);       // file.path with picker open
+  const [selectedGenres, setSelectedGenres] = useState({}); // { [path]: genre }
+  const [moving, setMoving] = useState({});             // { [path]: boolean }
+
+  async function handleMoveFromLibrary(file) {
+    const genre = selectedGenres[file.path];
+    if (!genre) return;
+    setMoving((p) => ({ ...p, [file.path]: true }));
+    try {
+      const artist = extractArtist(file.name);
+      const result = await api.moveAndRemember(file.path, genre, artist);
+      if (result.moved) {
+        addToast({
+          type: 'success',
+          title: `Moved to ${genre}`,
+          description: artist ? `${artist} will auto-route to ${genre} from now on` : file.name,
+          duration: 5000,
+        });
+        setOpenMenu(null);
+        loadFiles();
+      } else {
+        addToast({ type: 'error', title: 'Move failed', description: result.error, duration: 5000 });
+      }
+    } catch (err) {
+      addToast({ type: 'error', title: 'Move failed', description: err.message, duration: 4000 });
+    } finally {
+      setMoving((p) => ({ ...p, [file.path]: false }));
+    }
+  }
 
   function loadFiles() {
     setLoading(true);
@@ -199,7 +243,9 @@ export default function LibraryPage() {
                     {/* Folder Header */}
                     <button
                       onClick={() => toggleFolder(folder)}
-                      className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/5 transition-colors"
+                      aria-expanded={expandedFolders.has(folder)}
+                      aria-label={`${expandedFolders.has(folder) ? 'Collapse' : 'Expand'} ${folder}`}
+                      className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.07] active:bg-white/10 transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-purple-500/50"
                     >
                       <div className="flex items-center gap-3 flex-1">
                         {expandedFolders.has(folder) ? (
@@ -230,7 +276,7 @@ export default function LibraryPage() {
                               initial={{ opacity: 0, x: -20 }}
                               animate={{ opacity: 1, x: 0 }}
                               transition={{ delay: fileIdx * 0.02 }}
-                              className="px-4 py-3 flex items-center hover:bg-white/5 transition-colors"
+                              className="px-4 py-3 flex items-center hover:bg-white/[0.07] transition-colors duration-150 group/track"
                             >
                               <div className="flex items-center gap-3 flex-1 min-w-0">
                                 <TrackArt path={file.path} />
@@ -243,6 +289,58 @@ export default function LibraryPage() {
                                   </div>
                                 </div>
                               </div>
+
+                              {/* Inline genre picker or ... button */}
+                              {openMenu === file.path ? (
+                                <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+                                  <select
+                                    aria-label="Select genre"
+                                    value={selectedGenres[file.path] || ''}
+                                    onChange={(e) =>
+                                      setSelectedGenres((p) => ({ ...p, [file.path]: e.target.value }))
+                                    }
+                                    className="text-xs bg-gray-800 border border-gray-600 text-gray-200 rounded-lg px-2 py-1.5 cursor-pointer focus:outline-none focus:ring-2 focus:ring-purple-500/60 transition-colors hover:border-gray-500"
+                                  >
+                                    <option value="">Pick genre…</option>
+                                    {GENRE_OPTIONS.map((g) => (
+                                      <option key={g} value={g}>{g}</option>
+                                    ))}
+                                  </select>
+                                  <Button
+                                    size="sm"
+                                    disabled={!selectedGenres[file.path] || moving[file.path]}
+                                    onClick={() => handleMoveFromLibrary(file)}
+                                    className="text-xs h-7 px-2.5 bg-purple-600 hover:bg-purple-500 active:scale-95 text-white disabled:opacity-40 transition-all duration-150"
+                                  >
+                                    {moving[file.path] ? (
+                                      <span className="flex items-center gap-1">
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                        Moving…
+                                      </span>
+                                    ) : (
+                                      <span className="flex items-center gap-1">
+                                        <FolderInput className="w-3 h-3" />
+                                        Move
+                                      </span>
+                                    )}
+                                  </Button>
+                                  <button
+                                    aria-label="Cancel"
+                                    onClick={() => setOpenMenu(null)}
+                                    className="p-1.5 text-gray-500 hover:text-gray-300 active:scale-95 transition-all duration-150 cursor-pointer rounded-lg hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  aria-label="Move to genre"
+                                  onClick={() => setOpenMenu(file.path)}
+                                  className="ml-3 p-1.5 min-w-[32px] min-h-[32px] text-gray-600 hover:text-gray-300 sm:opacity-0 sm:group-hover/track:opacity-100 focus:opacity-100 active:scale-95 transition-all duration-150 cursor-pointer rounded-lg hover:bg-white/10 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50"
+                                >
+                                  <MoreHorizontal className="w-4 h-4" />
+                                </button>
+                              )}
                             </motion.div>
                           ))}
                         </motion.div>

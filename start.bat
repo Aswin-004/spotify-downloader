@@ -57,11 +57,17 @@ echo.
 REM ── Step 3: Start backend ─────────────────────────────────────────────────
 echo  [3/3] Starting backend on http://localhost:5000 ...
 
-where python >nul 2>&1
-if %errorlevel% neq 0 (
-    echo  ERROR: Python not found. Install Python 3.10+.
-    pause
-    exit /b 1
+REM Prefer venv Python so all installed packages (telegram bot, etc.) are available
+if exist "%~dp0.venv\Scripts\python.exe" (
+    set PYTHON="%~dp0.venv\Scripts\python.exe"
+) else (
+    where python >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo  ERROR: Python not found. Install Python 3.10+.
+        pause
+        exit /b 1
+    )
+    set PYTHON=python
 )
 
 echo.
@@ -69,6 +75,6 @@ echo  Open your browser at:  http://localhost:5000
 echo  Press Ctrl+C to stop.
 echo.
 
-python app.py
+%PYTHON% app.py
 
 pause

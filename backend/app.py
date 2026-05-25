@@ -257,7 +257,7 @@ def index():
 
 @app.route('/api/maintenance/status', methods=['GET'])
 def maintenance_status():
-    return jsonify({"running": _maintenance_running})
+    return jsonify({"running": _maintenance_running, "task": _maintenance_active_task})
 
 
 @app.route('/api/maintenance/run', methods=['POST'])
@@ -276,6 +276,8 @@ def maintenance_run():
         if _maintenance_running:
             return jsonify({"error": "A maintenance task is already running"}), 409
         _maintenance_running = True
+        global _maintenance_active_task
+        _maintenance_active_task = task
 
     script = _MAINTENANCE_SCRIPTS[task]
     backend_dir = os.path.dirname(os.path.abspath(__file__))
@@ -287,13 +289,16 @@ def maintenance_run():
         socketio.emit("maintenance_log", payload)
 
     def run_task():
-        global _maintenance_running
+        global _maintenance_running, _maintenance_active_task
         args = [_sys.executable, script]
         if dry:
             args.append("--dry-run")
         if task == "backfill_gemini":
             for p in passes:
                 args.append(f"--pass{p}")
+            if limit:
+                args += ["--limit", str(limit)]
+        if task == "backfill_lastfm":
             if limit:
                 args += ["--limit", str(limit)]
 
@@ -312,10 +317,10 @@ def maintenance_run():
                 if line:
                     _emit(line)
             try:
-                proc.wait(timeout=300)  # 5-minute hard limit
+                proc.wait(timeout=3600)  # 1-hour hard limit
             except subprocess.TimeoutExpired:
                 proc.kill()
-                _emit("✗ Task killed — exceeded 5-minute time limit", done=True, exit_code=1)
+                _emit("✗ Task killed — exceeded 1-hour time limit", done=True, exit_code=1)
                 return
             _emit(f"{'✓ Done' if proc.returncode == 0 else '✗ Failed'} (exit {proc.returncode})",
                   done=True, exit_code=proc.returncode)
@@ -324,6 +329,7 @@ def maintenance_run():
         finally:
             with _maintenance_lock:
                 _maintenance_running = False
+                _maintenance_active_task = None
 
     threading.Thread(target=run_task, daemon=True).start()
     return jsonify({"started": True, "task": task}), 202
@@ -1597,7 +1603,20 @@ def retag_catchall_track():
         return jsonify({"error": "filepath required"}), 400
     full_path = os.path.join(BASE_DOWNLOAD_DIR, filepath) if not os.path.isabs(filepath) else filepath
     if not os.path.isfile(full_path):
-        return jsonify({"error": "File not found"}), 404
+        # Fallback: scan the parent folder for a file whose stem starts with the
+        # requested stem — catches old title-only filenames when the frontend sends
+        # "Title - Artist.mp3" but the file on disk is still "Title.mp3"
+        _parent = os.path.dirname(full_path)
+        _stem = os.path.splitext(os.path.basename(full_path))[0].lower()
+        _fallback = next(
+            (os.path.join(_parent, f) for f in os.listdir(_parent)
+             if f.lower().endswith(".mp3") and f.lower().startswith(_stem.split(" - ")[0].strip())),
+            None,
+        ) if os.path.isdir(_parent) else None
+        if _fallback and os.path.isfile(_fallback):
+            full_path = _fallback
+        else:
+            return jsonify({"error": "File not found"}), 404
     try:
         from services.gemini_service import identify_audio, GeminiQuotaExceeded
         from services.genre_router import normalize_genre, _library_path, resolve_genre_folder_with_confidence
@@ -1617,7 +1636,8 @@ def retag_catchall_track():
 
         # ── 1. ARTIST_GENRE_OVERRIDE (instant, no API) ──────────────────────
         if artist_name:
-            override = config.ARTIST_GENRE_OVERRIDE.get(artist_name.lower())
+            from services.genre_router import normalize_artist_key as _nak
+            override = config.ARTIST_GENRE_OVERRIDE.get(_nak(artist_name))
             if override:
                 canonical = normalize_genre(override)
                 genre_path = _library_path(canonical) if canonical else None
@@ -1769,13 +1789,93 @@ def retag_catchall_track():
 
 @app.route('/api/gemini-quota', methods=['GET'])
 def gemini_quota():
-    """Return today's remaining Gemini API quota."""
+    """Return AI classifier status (Groq-backed, effectively unlimited)."""
     try:
         from services.gemini_service import remaining_quota, GEMINI_DAILY_BUDGET
         remaining = remaining_quota()
-        return jsonify({"remaining": remaining, "total": GEMINI_DAILY_BUDGET, "exhausted": remaining == 0})
+        return jsonify({"remaining": remaining, "total": GEMINI_DAILY_BUDGET, "exhausted": False})
     except Exception as e:
         return jsonify({"remaining": 0, "total": 0, "exhausted": True, "error": str(e)})
+
+
+@app.route('/api/move-and-remember', methods=['POST'])
+def move_and_remember():
+    """Move a track to a chosen genre folder and record the artist→genre memory."""
+    import shutil as _shutil_mar
+    data = request.get_json() or {}
+    filepath = (data.get('filepath') or '').strip()
+    genre    = (data.get('genre') or '').strip()
+    artist   = (data.get('artist') or '').strip()
+    if not filepath or not genre:
+        return jsonify({'error': 'filepath and genre required'}), 400
+    try:
+        from services.genre_router import normalize_genre, GENRE_TAXONOMY
+        _display_map = {'Drum & Bass': 'Drum and Bass'}
+        canonical = normalize_genre(_display_map.get(genre, genre)) or _display_map.get(genre, genre)
+        entry = GENRE_TAXONOMY.get(canonical)
+        if not entry:
+            return jsonify({'error': f'Unknown genre: {genre}'}), 400
+        _, subfolder = entry
+        genre_path = f'Library/{subfolder}'
+        full_path = filepath if os.path.isabs(filepath) else os.path.join(BASE_DOWNLOAD_DIR, filepath)
+        try:
+            Path(full_path).resolve().relative_to(Path(BASE_DOWNLOAD_DIR).resolve())
+        except ValueError:
+            return jsonify({'error': 'Invalid path'}), 400
+        src = Path(full_path)
+        if not src.exists():
+            return jsonify({'error': f'File not found: {filepath}'}), 404
+        dest_dir = Path(BASE_DOWNLOAD_DIR) / genre_path
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / src.name
+        _shutil_mar.move(str(src), str(dest))
+        try:
+            from database import get_library_index_collection
+            col = get_library_index_collection()
+            if col is not None:
+                col.update_one(
+                    {'final_path': full_path},
+                    {'$set': {'final_path': str(dest), 'genre_folder': genre_path}},
+                )
+        except Exception:
+            pass
+        if artist:
+            from services.artist_memory_service import record_move as _record_move_mar
+            _record_move_mar(artist, canonical, source='manual_move')
+            logger.info(f'[move-and-remember] {artist!r} → {canonical} (manual)')
+        logger.info(f'[move-and-remember] {src.name} → {genre_path}')
+        return jsonify({'moved': True, 'new_folder': genre_path, 'genre': canonical}), 200
+    except Exception as e:
+        logger.error(f'[move-and-remember] {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/genre-overrides', methods=['GET'])
+def get_genre_overrides():
+    """List all learned artist→genre mappings from artist_memory."""
+    try:
+        from database import get_artist_memory_collection
+        col = get_artist_memory_collection()
+        if col is None:
+            return jsonify({'overrides': []}), 200
+        docs = list(col.find({}, {'_id': 0}).sort('last_seen', -1).limit(500))
+        for d in docs:
+            if 'last_seen' in d and hasattr(d['last_seen'], 'isoformat'):
+                d['last_seen'] = d['last_seen'].isoformat()
+        return jsonify({'overrides': docs}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/genre-override/<artist_key>', methods=['DELETE'])
+def delete_genre_override(artist_key):
+    """Remove a learned artist→genre mapping."""
+    try:
+        from services.artist_memory_service import forget_artist as _forget_artist_mar
+        deleted = _forget_artist_mar(artist_key)
+        return jsonify({'ok': True, 'deleted': deleted}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/catchall-tracks', methods=['GET'])
@@ -1843,11 +1943,13 @@ def retry_download():
 
 _maintenance_lock = threading.Lock()
 _maintenance_running = False
+_maintenance_active_task = None
 
 _MAINTENANCE_SCRIPTS = {
-    "organise":       "master_organise.py",
-    "repair_index":   "repair_index.py",
+    "organise":        "master_organise.py",
+    "repair_index":    "repair_index.py",
     "backfill_gemini": "backfill_gemini.py",
+    "backfill_lastfm": "backfill_lastfm.py",
 }
 
 _ANSI_RE = _re.compile(r'\x1b\[[0-9;]*m')
@@ -1962,9 +2064,16 @@ if __name__ == '__main__':
                 if not TELEGRAM_CHAT_ID:
                     logger.error("[app] TELEGRAM_CHAT_ID not valid — bot disabled")
                 else:
-                    start_bot_thread()
-                    _telegram_bot_started = True
-                    logger.success(f"[app] ✅ Telegram bot initialized (chat_id={TELEGRAM_CHAT_ID})")
+                    try:
+                        start_bot_thread()
+                        _telegram_bot_started = True
+                        logger.success(f"[app] ✅ Telegram bot initialized (chat_id={TELEGRAM_CHAT_ID})")
+                    except Exception as bot_err:
+                        if "Conflict" in str(bot_err) or "getUpdates" in str(bot_err):
+                            logger.warning(f"[app] ⚠️  Telegram bot conflict (another instance running): {bot_err}")
+                            logger.info("[app] Continuing without Telegram bot for this session")
+                        else:
+                            raise
             else:
                 logger.warning("[app] ⚠️  TELEGRAM_BOT_TOKEN not set — bot disabled")
         except ImportError as e:

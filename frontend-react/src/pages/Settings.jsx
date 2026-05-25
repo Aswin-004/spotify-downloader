@@ -18,6 +18,7 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronRight,
+  BookOpen,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -166,6 +167,11 @@ export default function Settings() {
   const [newGenre, setNewGenre] = useState('');
   const [addingNew, setAddingNew] = useState(false);
 
+  // ── Genre rules (artist memory) ──────────────────────────────────────────
+  const [overrides, setOverrides] = useState([]);
+  const [loadingOverrides, setLoadingOverrides] = useState(true);
+  const [deletingOverride, setDeletingOverride] = useState({});
+
   useEffect(() => {
     api.getCustomFolders()
       .then((d) => {
@@ -240,6 +246,26 @@ export default function Settings() {
       addToast({ type: 'error', title: 'Save failed', description: err.message });
     } finally {
       setAddingNew(false);
+    }
+  }
+
+  useEffect(() => {
+    api.getGenreOverrides()
+      .then((d) => setOverrides(d.overrides || []))
+      .catch(() => {})
+      .finally(() => setLoadingOverrides(false));
+  }, []);
+
+  async function handleDeleteOverride(artistKey) {
+    setDeletingOverride((p) => ({ ...p, [artistKey]: true }));
+    try {
+      await api.deleteGenreOverride(artistKey);
+      setOverrides((prev) => prev.filter((o) => o.artist_key !== artistKey));
+      addToast({ type: 'success', title: 'Rule removed', duration: 3000 });
+    } catch (err) {
+      addToast({ type: 'error', title: 'Delete failed', description: err.message });
+    } finally {
+      setDeletingOverride((p) => ({ ...p, [artistKey]: false }));
     }
   }
 
@@ -485,6 +511,69 @@ export default function Settings() {
             </motion.div>
           )}
         </AnimatePresence>
+      </motion.div>
+
+      {/* ── My Genre Rules ──────────────────────────────────────────────────── */}
+      <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.19 }}>
+        <SectionCard icon={BookOpen} color="bg-amber-500/20 text-amber-400" title="My Genre Rules"
+          desc="Artists the app has learned from your 'Move & Remember' corrections. These rules auto-route future downloads.">
+          {loadingOverrides ? (
+            <div className="flex items-center gap-2 text-gray-500 text-sm py-2">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+            </div>
+          ) : overrides.length === 0 ? (
+            <div className="flex items-start gap-3 py-3 text-left">
+              <BookOpen className="w-8 h-8 text-gray-700 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm text-gray-500 font-medium">No rules yet</p>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  Use <span className="text-gray-400 font-medium">Move &amp; Remember</span> on the Library or Review pages. Each time you correct a track's genre, the app learns and routes that artist automatically from then on.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <p className="text-xs text-gray-500 font-medium">{overrides.length} saved rule{overrides.length !== 1 ? 's' : ''}</p>
+              <div className="max-h-64 overflow-y-auto space-y-1 pr-1">
+                {overrides.map((o) => {
+                  const confPct = Math.round((o.confidence || 0) * 100);
+                  return (
+                    <div key={o.artist_key} className="flex items-center gap-2 py-2 px-3 rounded-lg bg-gray-900/40 hover:bg-gray-900/70 transition-colors duration-150 group/rule">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm text-gray-200 font-medium truncate block">{o.artist_key}</span>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {/* confidence mini-bar */}
+                          <div className="w-16 h-1 rounded-full bg-gray-700 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-purple-500 transition-all duration-300"
+                              style={{ width: `${confPct}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] text-gray-600">
+                            {confPct}% · {o.move_count ?? 1} move{(o.move_count ?? 1) !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/20 shrink-0">
+                        {o.genre}
+                      </span>
+                      <button
+                        aria-label={`Remove rule for ${o.artist_key}`}
+                        onClick={() => handleDeleteOverride(o.artist_key)}
+                        disabled={deletingOverride[o.artist_key]}
+                        className="p-1.5 min-w-[28px] min-h-[28px] text-gray-600 hover:text-red-400 sm:opacity-0 sm:group-hover/rule:opacity-100 focus:opacity-100 active:scale-95 transition-all duration-150 cursor-pointer rounded-lg hover:bg-red-500/10 disabled:opacity-30 shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50"
+                      >
+                        {deletingOverride[o.artist_key]
+                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          : <Trash2 className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </SectionCard>
       </motion.div>
 
       {/* ── Custom Folder Mappings ───────────────────────────────────────────── */}

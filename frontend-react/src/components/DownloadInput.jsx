@@ -77,8 +77,15 @@ export default function DownloadInput() {
               Download from Spotify
             </h2>
             <p className="text-sm text-gray-400">
-              Paste a track, album, or playlist link to get started
+              Supports tracks, albums, and playlists
             </p>
+            <div className="flex items-center justify-center gap-2 mt-2">
+              {['Track', 'Album', 'Playlist'].map((t) => (
+                <span key={t} className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-gray-400">
+                  {t}
+                </span>
+              ))}
+            </div>
           </div>
 
           <div className="flex gap-2">
@@ -88,7 +95,7 @@ export default function DownloadInput() {
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="https://open.spotify.com/track/..."
+                placeholder="Paste Spotify URL — track, album, or playlist"
                 className="pl-10 h-12 bg-background/60 border-white/10 text-base"
                 disabled={loading}
               />
@@ -97,13 +104,14 @@ export default function DownloadInput() {
               onClick={handleFetch}
               disabled={loading || !url.trim()}
               size="lg"
-              className="h-12 px-6"
+              className="h-12 px-5 gap-2 active:scale-95 transition-all duration-150"
             >
               {loading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                'Fetch'
-              )}
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                  <span className="hidden sm:inline">Fetching…</span>
+                </>
+              ) : 'Fetch'}
             </Button>
           </div>
         </div>

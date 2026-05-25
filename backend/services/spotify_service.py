@@ -23,8 +23,8 @@ _throttle_lock = threading.Lock()
 
 logger = setup_logging(__name__)
 
-# OAuth cache path (shared with auto_downloader)
-_OAUTH_CACHE = os.path.join(os.path.dirname(__file__), ".spotify_cache")
+# OAuth cache path — shared with auto_downloader (same user token, read-only here)
+_OAUTH_CACHE = os.path.join(os.path.dirname(__file__), ".spotify_oauth_cache")
 _REDIRECT_URI = config.REDIRECT_URI
 
 # API usage tracking (shared)
@@ -135,19 +135,24 @@ class SpotifyService:
         if not os.path.exists(_OAUTH_CACHE):
             return None
         try:
-            auth = SpotifyOAuth(
-                client_id=self.client_id,
-                client_secret=self.client_secret,
-                redirect_uri=_REDIRECT_URI,
-                scope="playlist-read-private playlist-read-collaborative",
-                cache_path=_OAUTH_CACHE,
-                open_browser=False,
-            )
-            token_info = auth.get_cached_token()
-            if not token_info:
+            import json as _json, time as _time
+            with open(_OAUTH_CACHE) as _f:
+                token_info = _json.load(_f)
+            if not token_info.get("access_token"):
                 return None
+            if token_info.get("expires_at", 0) <= _time.time():
+                auth = SpotifyOAuth(
+                    client_id=self.client_id,
+                    client_secret=self.client_secret,
+                    redirect_uri=_REDIRECT_URI,
+                    scope="playlist-read-private playlist-read-collaborative "
+                          "playlist-modify-public playlist-modify-private",
+                    cache_path=_OAUTH_CACHE,
+                    open_browser=False,
+                )
+                token_info = auth.refresh_access_token(token_info["refresh_token"])
             return spotipy.Spotify(
-                auth_manager=auth,
+                auth=token_info["access_token"],
                 retries=0,
                 requests_timeout=10
             )
@@ -405,6 +410,7 @@ class SpotifyService:
                             "artist": track["artists"][0]["name"] if track.get("artists") else "Unknown",
                             "artist_id": track["artists"][0]["id"] if track.get("artists") else "",
                             "duration_ms": track.get("duration_ms"),
+                            "album_art_url": (track.get("album", {}).get("images") or [{}])[0].get("url"),
                         })
                 if results.get("next"):
                     results = self._call_with_backoff(sp_client.next, results)

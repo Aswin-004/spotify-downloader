@@ -12,6 +12,7 @@ import {
   X,
   Settings,
   AlertTriangle,
+  StopCircle,
 } from 'lucide-react';
 import DownloadInput from '@/components/DownloadInput';
 import StatsCards from '@/components/StatsCards';
@@ -117,7 +118,8 @@ export default function Dashboard() {
             </div>
             <button
               onClick={() => { setShowGuide(false); localStorage.setItem('onboarding_seen', '1'); }}
-              className="text-purple-500 hover:text-purple-300 transition-colors shrink-0"
+              aria-label="Dismiss guide"
+              className="p-1 text-purple-500 hover:text-purple-300 active:scale-95 transition-all duration-150 cursor-pointer rounded-lg hover:bg-purple-500/10 shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50"
             >
               <X className="w-4 h-4" />
             </button>
@@ -146,9 +148,19 @@ export default function Dashboard() {
                 Syncing Playlist
               </span>
             </div>
-            <span className="text-xs font-mono text-gray-400">
-              {ingestProgress.current}/{ingestProgress.total}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-gray-400">
+                {ingestProgress.current}/{ingestProgress.total}
+              </span>
+              <button
+                onClick={() => api.stopSync().catch(() => {})}
+                aria-label="Stop sync"
+                className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-red-400 px-2 py-1 rounded-lg hover:bg-red-500/10 active:scale-95 transition-all duration-150 cursor-pointer border border-transparent hover:border-red-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
+              >
+                <StopCircle className="w-3.5 h-3.5" />
+                Stop
+              </button>
+            </div>
           </div>
           <div className="w-full h-1.5 rounded-full bg-white/5 overflow-hidden">
             <motion.div
@@ -172,7 +184,8 @@ export default function Dashboard() {
             {activeTab !== 'downloading' && counts[activeTab] > 0 && (
               <button
                 onClick={() => clearDownloads(activeTab)}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-gray-500 hover:text-gray-300 px-2 py-1 rounded-md hover:bg-white/5 transition-colors z-20"
+                aria-label={`Clear ${activeTab} downloads`}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-gray-500 hover:text-gray-300 px-2 py-1 rounded-md hover:bg-white/5 active:scale-95 transition-all duration-150 cursor-pointer z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20"
               >
                 Clear
               </button>
@@ -187,7 +200,7 @@ export default function Dashboard() {
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    'relative flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-colors duration-200 z-10',
+                    'relative flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-colors duration-200 cursor-pointer z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20',
                     isActive
                       ? tab.activeColor
                       : 'text-gray-500 hover:text-gray-300'

@@ -48,7 +48,7 @@ const TASKS = [
     passes: [
       { id: 1, label: 'Step 1 — Detect genres for Indian/Bollywood tracks (AI classifier, ~2s per track)' },
       { id: 2, label: 'Step 2 — Move tracks with a detected genre into the right folder (rule-based, fast)' },
-      { id: 3, label: 'Step 3 — Fill in missing genre tags for remaining unknowns (Gemini AI, ~10s per track)' },
+      { id: 3, label: 'Step 3 — Fill in missing genre tags for remaining unknowns (AI classifier, ~2s per track)' },
       { id: 4, label: 'Step 4 — Add BPM + musical key via audio analysis (~3s per track)' },
       { id: 5, label: 'Step 5 — Fetch missing album artwork from MusicBrainz/Spotify (~1s per track)' },
     ],
@@ -99,7 +99,7 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
   const c = COLOR[task.color];
   const Icon = task.icon;
   const isMe    = useMemo(() => activeTask === task.id, [activeTask, task.id]);
-  const myLogs  = useMemo(() => (isMe ? logs : []), [isMe, logs]);
+  const myLogs  = useMemo(() => logs.filter(e => e.task === task.id), [logs, task.id]);
   const lastLog = useMemo(() => myLogs[myLogs.length - 1], [myLogs]);
   const isDone  = useMemo(() => Boolean(lastLog?.done), [lastLog]);
   const exitOk  = useMemo(() => isDone && lastLog?.exit_code === 0, [isDone, lastLog]);
@@ -110,10 +110,10 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
     }
   }, [myLogs.length]);
 
-  // Auto-expand log when task starts/finishes
+  // Auto-expand log when task has logs (even if triggered outside the UI)
   useEffect(() => {
-    if (isMe && myLogs.length > 0) setExpanded(true);
-  }, [isMe, myLogs.length]);
+    if (myLogs.length > 0) setExpanded(true);
+  }, [myLogs.length]);
 
   function togglePass(id) {
     setPasses((prev) =>
@@ -288,6 +288,16 @@ export default function MaintenancePage() {
   const [activeTask, setActiveTask] = useState(null);
   const [error, setError] = useState('');
   const [cacheClearState, setCacheClearState] = useState('idle'); // idle | loading | done | error
+
+  // Sync running state from server on mount (catches tasks started outside the UI)
+  // NOTE: don't call startMaintenance here — that wipes logs. Just set state.
+  useEffect(() => {
+    api.getMaintenanceStatus().then((s) => {
+      if (s?.running && s?.task) {
+        setActiveTask(s.task);
+      }
+    }).catch(() => {});
+  }, []);
 
   async function handleClearGenreCache() {
     setCacheClearState('loading');

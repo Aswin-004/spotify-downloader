@@ -556,11 +556,16 @@ class DownloaderService:
                     "message": f"Already exists: {clean_name}.mp3",
                 }
 
-            # Normalized duplicate check — local directory first
+            # Normalized duplicate check — local directory first.
+            # norm_key matches the new "Title - Artist.mp3" naming convention;
+            # title_only_key provides backward-compat for legacy "Title.mp3" files
+            # from the SAME artist (safe to deduplicate).
             norm_key = normalize(clean_name)
+            title_only_key = normalize(safe_title)
             for existing in os.listdir(actual_dir):
                 if existing.lower().endswith(".mp3"):
-                    if normalize(existing[:-4]) == norm_key:
+                    existing_norm = normalize(existing[:-4])
+                    if existing_norm == norm_key or existing_norm == title_only_key:
                         existing_path = os.path.join(actual_dir, existing)
                         if os.path.getsize(existing_path) > 1000:
                             logger.info(f"Skipping normalized duplicate: {existing}")
@@ -573,10 +578,10 @@ class DownloaderService:
 
             # Cross-directory duplicate check — scan all of BASE_DOWNLOAD_DIR
             # to catch files that were organized into subfolders after download.
-            # TODO(human): Optimize this os.walk for large libraries — see options:
-            #   - Cache normalized filenames in a module-level set (fast, needs invalidation)
-            #   - Limit walk depth to 2 (Genre/Artist/) to skip deep nesting
-            #   - Skip non-music dirs (.git, __pycache__, temp) during walk
+            # IMPORTANT: only match on norm_key ("Title - Artist"), NOT on
+            # title_only_key alone, to avoid false-positive collisions between
+            # two different songs that share the same title (e.g. "Peach" by
+            # Diljit Dosanjh vs "Peach" by a Trance artist).
             base_dir = config.BASE_DOWNLOAD_DIR
             if actual_dir != base_dir:
                 # Skip system folders and known non-music directories

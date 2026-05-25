@@ -76,7 +76,7 @@ def _update_mongo(old: Path, new: Path) -> None:
             {"final_path": str(old)},
             {"$set": {
                 "final_path":   str(new),
-                "genre_folder": str(new.parent.relative_to(BASE)),
+                "genre_folder": new.parent.relative_to(BASE).as_posix(),
                 "last_seen":    datetime.now(timezone.utc),
             }},
         )

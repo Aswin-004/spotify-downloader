@@ -74,26 +74,30 @@ const cards = [
 
 export default function StatsCards() {
   const { history, queueStatus, downloads } = useSocket();
-  const [dbTotal, setDbTotal] = useState(null);
+  const [dbData, setDbData] = useState({ total: null, rate: null });
 
   const ingestCompleted = Object.keys(downloads.completed).length;
   const ingestFailed = Object.keys(downloads.failed).length;
   const ingestDownloading = Object.keys(downloads.downloading).length;
 
-  // Fetch real total from MongoDB on mount and whenever session downloads increase
+  // Fetch real totals from MongoDB on mount and whenever session downloads increase
   useEffect(() => {
     api.getAnalyticsOverview()
-      .then((data) => setDbTotal(data.total_downloads ?? null))
+      .then((data) => setDbData({
+        total: data.total_downloads ?? null,
+        rate: data.success_rate ?? null,
+      }))
       .catch(() => {});
   }, [ingestCompleted]);
 
-  const baseTotal = dbTotal !== null ? dbTotal : history.length;
-  const total = baseTotal;
-  const successCount = history.filter((h) => h.status === 'success').length + ingestCompleted;
+  const total = dbData.total !== null ? dbData.total : history.length;
   const failedCount = history.filter(
     (h) => h.status !== 'success' && h.status !== 'skipped'
   ).length + ingestFailed;
-  const rate = total > 0 ? Math.round((successCount / total) * 100) : 0;
+  // Use the analytics API's all-time success rate; fall back to session estimate only if unavailable
+  const rate = dbData.rate !== null
+    ? Math.round(dbData.rate)
+    : (total > 0 ? Math.round((history.filter((h) => h.status === 'success').length + ingestCompleted) / total * 100) : 0);
   const active =
     ingestDownloading > 0
       ? ingestDownloading
@@ -121,13 +125,9 @@ export default function StatsCards() {
             />
             <div className="relative p-4">
               <div className="flex items-center justify-between mb-2">
-                <motion.div
-                  className={cn('p-2 rounded-lg', bg)}
-                  whileHover={{ scale: 1.1, rotate: -5 }}
-                  transition={{ type: 'spring', stiffness: 400, damping: 15 }}
-                >
+                <div className={cn('p-2 rounded-lg transition-opacity duration-200 group-hover:opacity-80', bg)}>
                   <Icon className={cn('w-4 h-4', color)} />
-                </motion.div>
+                </div>
               </div>
               <div className="text-2xl font-bold tracking-tight">
                 <AnimatedNumber value={values[key]} />

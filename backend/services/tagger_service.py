@@ -494,24 +494,6 @@ def tag_file(  # MUSICBRAINZ
         except Exception as _lb_exc:
             logger.debug(f"[tagger] librosa fallback failed: {_lb_exc}")
 
-    # GEMINI — Full audio analysis (non-blocking enrichment)
-    if file_path:
-        try:
-            from services.gemini_service import analyze_audio as _gemini_analyze
-            _gemini_data = _gemini_analyze(file_path)
-            if _gemini_data:
-                _sp_id = (spotify_metadata or {}).get("id", "")
-                _identity = f"sp:{_sp_id}" if _sp_id else None
-                if _identity:
-                    from database import get_library_index_collection
-                    get_library_index_collection().update_one(
-                        {"identity_key": _identity},
-                        {"$set": {f"audio_features.{k}": v for k, v in _gemini_data.items()}},
-                        upsert=False,
-                    )
-        except Exception as _gm_exc:
-            logger.debug(f"[tagger] gemini enrichment failed: {_gm_exc}")
-
     # MUSICBRAINZ — Merge metadata: MusicBrainz takes priority, Spotify fills gaps
     mb = musicbrainz_data or {}  # MUSICBRAINZ
     sp = spotify_metadata or {}  # MUSICBRAINZ
@@ -674,3 +656,69 @@ def save_tagging_report(filename: str, report: dict, spotify_id: str = None):  #
         update_tagging_report(filename, report, spotify_id=spotify_id)  # MUSICBRAINZ
     except Exception as e:  # MUSICBRAINZ
         logger.warning(f"[tagger] Failed to save tagging report to history: {e}")  # MUSICBRAINZ
+
+
+def enrich_track_lastfm(identity_key: str, artist: str, title: str, mbid: str = "") -> bool:
+    """
+    Fetch Last.fm tags and persist genre/mood/listener data to library_index.
+
+    Must be called AFTER index_track() has created the library_index document.
+    Returns True if enrichment data was written, False otherwise.
+    """
+    if not identity_key or not artist:
+        return False
+    try:
+        from services.lastfm_service import enrich_from_lastfm
+        data = enrich_from_lastfm(artist, title, mbid=mbid)
+        if not data:
+            return False
+        from database import get_library_index_collection
+        result = get_library_index_collection().update_one(
+            {"identity_key": identity_key},
+            {"$set": {f"audio_features.{k}": v for k, v in data.items()}},
+            upsert=False,
+        )
+        if result.matched_count:
+            logger.info(f"[tagger] Last.fm enrichment persisted for {identity_key}")
+            return True
+        logger.warning(f"[tagger] Last.fm enrichment skipped — identity_key not in library_index: {identity_key}")
+        return False
+    except Exception as e:
+        logger.debug(f"[tagger] Last.fm enrichment failed for {identity_key}: {e}")
+        return False
+
+
+def enrich_track_gemini(identity_key: str, file_path: str) -> bool:
+    """
+    Run Gemini audio analysis and persist the result to library_index.
+
+    Must be called AFTER index_track() has created the library_index document,
+    otherwise the update_one (upsert=False) writes to nothing.
+
+    Returns True if enrichment data was written, False otherwise.
+    """
+    if not identity_key or not file_path:
+        return False
+    try:
+        from services.gemini_service import analyze_audio as _gemini_analyze
+        _gemini_data = _gemini_analyze(file_path)
+        if not _gemini_data:
+            return False
+        from database import get_library_index_collection
+        result = get_library_index_collection().update_one(
+            {"identity_key": identity_key},
+            {"$set": {f"audio_features.{k}": v for k, v in _gemini_data.items()}},
+            upsert=False,
+        )
+        if result.matched_count:
+            logger.info(f"[tagger] Gemini enrichment persisted for {identity_key}")
+            return True
+        logger.warning(f"[tagger] Gemini enrichment skipped — identity_key not in library_index: {identity_key}")
+        return False
+    except Exception as e:
+        from services.gemini_service import GeminiQuotaExceeded
+        if isinstance(e, GeminiQuotaExceeded):
+            logger.info(f"[tagger] Gemini enrichment skipped (quota exhausted) for {identity_key}")
+        else:
+            logger.debug(f"[tagger] Gemini enrichment failed for {identity_key}: {e}")
+        return False

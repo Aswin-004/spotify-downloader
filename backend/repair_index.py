@@ -78,8 +78,9 @@ def fix_stale(disk: dict[str, list[Path]]) -> tuple[int, int, int]:
                 col.update_one(
                     {"_id": doc["_id"]},
                     {"$set": {
-                        "final_path": str(new_path),
-                        "last_seen": _now(),
+                        "final_path":   str(new_path),
+                        "genre_folder": new_path.parent.relative_to(BASE).as_posix(),
+                        "last_seen":    _now(),
                     }}
                 )
             updated += 1
@@ -94,7 +95,11 @@ def fix_stale(disk: dict[str, list[Path]]) -> tuple[int, int, int]:
             if not DRY:
                 col.update_one(
                     {"_id": doc["_id"]},
-                    {"$set": {"final_path": str(best), "last_seen": _now()}}
+                    {"$set": {
+                        "final_path":   str(best),
+                        "genre_folder": best.parent.relative_to(BASE).as_posix(),
+                        "last_seen":    _now(),
+                    }}
                 )
             updated += 1
         else:
@@ -131,7 +136,7 @@ def index_orphans(disk: dict[str, list[Path]]) -> int:
             if col.find_one({"identity_key": identity}):
                 continue
 
-            genre_folder = str(path.parent.relative_to(BASE))
+            genre_folder = path.parent.relative_to(BASE).as_posix()
             print(f"  [ADD] {path.relative_to(BASE)}")
             if not DRY:
                 col.insert_one({

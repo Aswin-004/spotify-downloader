@@ -214,7 +214,7 @@ def _execute_move(
             from database import get_library_index_collection
             col = get_library_index_collection()
             if col is not None:
-                col.update_one(
+                res = col.update_one(
                     {"final_path": str(src)},
                     {"$set": {
                         "final_path":   str(dest_path),
@@ -222,6 +222,11 @@ def _execute_move(
                         "genre_folder": dest_folder_rel,
                     }},
                 )
+                if res.matched_count == 0:
+                    logger.warning(
+                        f"[reclass] library_index: 0 documents matched "
+                        f"final_path={str(src)!r} — genre_folder not updated"
+                    )
         except Exception as idx_err:
             logger.warning(f"[reclass] library_index update failed: {idx_err}")
 
@@ -337,7 +342,8 @@ def bulk_resolve_needsreview_artists(
 
         # 2. config.ARTIST_GENRE_OVERRIDE (conf 1.0)
         if not lib_path:
-            override_genre = config.ARTIST_GENRE_OVERRIDE.get(artist_name.lower().strip(), "")
+            from services.genre_router import normalize_artist_key as _nak
+            override_genre = config.ARTIST_GENRE_OVERRIDE.get(_nak(artist_name), "")
             if override_genre:
                 try:
                     lib_path = _library_path(override_genre)
@@ -526,7 +532,8 @@ def diagnose_needsreview_move(
 
     # ── Layer 2: Routing resolution ───────────────────────────────────────────
     hit      = lookup_needsreview_routing(artist_name)
-    override = config.ARTIST_GENRE_OVERRIDE.get(artist_name.lower().strip(), "")
+    from services.genre_router import normalize_artist_key as _nak
+    override = config.ARTIST_GENRE_OVERRIDE.get(_nak(artist_name), "")
     diag["layers"]["L2_routing"] = {
         "resolution_map_hit": hit,
         "artist_genre_override": override,

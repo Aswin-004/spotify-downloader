@@ -27,6 +27,7 @@ Phase 3 — NeedsReview / Quarantine strict separation
 Phase 9 — Routing explanation text for UI
 """
 
+import unicodedata
 from typing import Any
 
 from loguru import logger
@@ -115,6 +116,24 @@ GENRE_TAXONOMY: dict[str, tuple[str, str]] = {
 
 # ── Phase 1 public API ────────────────────────────────────────────────────────
 
+def normalize_artist_key(name: str) -> str:
+    """
+    Canonical artist name → lookup key.
+
+    NFKD decompose → strip combining diacritics → lowercase → collapse whitespace.
+    Identical to artist_knowledge_service._normalize and produces the same key
+    regardless of which call site resolves an artist name.
+
+    Use this for every ARTIST_GENRE_OVERRIDE and cache-key lookup.
+    Do NOT use for filesystem folder names (use clean_folder_name for those).
+    """
+    if not name:
+        return ""
+    text = unicodedata.normalize("NFKD", name)
+    text = "".join(c for c in text if not unicodedata.combining(c) and unicodedata.category(c) != "Cc")
+    return " ".join(text.lower().split())
+
+
 def normalize_genre(raw: str) -> str:
     """
     Map a raw genre string from any source (Spotify, MusicBrainz, filename,
@@ -130,8 +149,7 @@ def normalize_genre(raw: str) -> str:
         if canonical.lower() == raw_lower:
             return canonical
     # 2. SPOTIFY_GENRE_MAP lookup (longest key wins)
-    sorted_keys = sorted(config.SPOTIFY_GENRE_MAP.keys(), key=len, reverse=True)
-    for key in sorted_keys:
+    for key in _get_sorted_map_keys():
         if key in raw_lower:
             mapped = config.SPOTIFY_GENRE_MAP[key]
             if mapped in GENRE_TAXONOMY:
@@ -222,6 +240,18 @@ _genre_cache: dict      = {}
 _confidence_cache: dict = {}
 _source_cache: dict     = {}
 
+# Sorted SPOTIFY_GENRE_MAP keys — computed once, invalidated by clear_genre_cache().
+# All callers use this so longest-key-wins is identical on every code path.
+_sorted_map_keys: list  = []
+
+
+def _get_sorted_map_keys() -> list:
+    """Return SPOTIFY_GENRE_MAP keys sorted longest-first, cached for the process lifetime."""
+    global _sorted_map_keys
+    if not _sorted_map_keys:
+        _sorted_map_keys = sorted(config.SPOTIFY_GENRE_MAP.keys(), key=len, reverse=True)
+    return _sorted_map_keys
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -238,8 +268,7 @@ def map_genre_string(genre_str: str) -> str:
     if not genre_str:
         return ""
     genre_lower = genre_str.lower().strip()
-    sorted_keys = sorted(config.SPOTIFY_GENRE_MAP.keys(), key=len, reverse=True)
-    for key in sorted_keys:
+    for key in _get_sorted_map_keys():
         if key in genre_lower:
             flat = config.SPOTIFY_GENRE_MAP[key]
             return _library_path(flat)
@@ -257,20 +286,23 @@ def _matches_devanagari(text: str) -> bool:
 
 def _match_genre(genres: list) -> str:
     """
-    Return first SPOTIFY_GENRE_MAP value that matches any genre tag (flat name).
-    Returns "" on no match.
+    Return the first canonical genre resolved from a list of Spotify genre tags.
+
+    Delegates to normalize_genre() per tag so taxonomy exact-match, longest-key-wins
+    SPOTIFY_GENRE_MAP, and partial-taxonomy fallback are applied consistently.
+    Identical inputs always produce identical outputs regardless of call path.
+    Returns "" if no tag resolves to a known genre.
     """
-    sorted_keys = sorted(config.SPOTIFY_GENRE_MAP.keys(), key=len, reverse=True)
     for genre in genres:
-        genre_lower = genre.lower()
-        for key in sorted_keys:
-            if key in genre_lower:
-                return config.SPOTIFY_GENRE_MAP[key]
+        canonical = normalize_genre(genre)
+        if canonical:
+            logger.debug(f"[genre_router] _match_genre: {genre!r} → {canonical!r}")
+            return canonical
     return ""
 
 
 def _get_artist_override(artist_name: str) -> str:
-    key = artist_name.lower().strip()
+    key = normalize_artist_key(artist_name)
     return config.ARTIST_GENRE_OVERRIDE.get(key, "")
 
 
@@ -401,7 +433,7 @@ def _resolve_core(
         source      = "spotify_genre"
         for tag in genres:
             tag_lower = tag.lower()
-            for key in config.SPOTIFY_GENRE_MAP:
+            for key in _get_sorted_map_keys():
                 if key in tag_lower:
                     matched_tag = tag
                     break
@@ -414,12 +446,13 @@ def _resolve_core(
         matched_tag = "devanagari-artist-name"
         confidence  = CONFIDENCE_DEVANAGARI
         source      = "devanagari"
+        logger.debug(f"[genre_router] {artist_name} → Indian (Devanagari script heuristic, conf={CONFIDENCE_DEVANAGARI})")
 
     # 7. Raw first Spotify genre tag — moderate confidence
     if not flat_genre:
         if genres:
             raw        = genres[0].title()
-            logger.info(f"[raw-genre] {raw}")
+            logger.debug(f"[genre_router] {artist_name} — no map match, trying raw Spotify tag: {raw!r}")
             flat_genre = config.SPOTIFY_GENRE_MAP.get(
                 raw.lower(),
                 clean_folder_name(raw),
@@ -487,8 +520,9 @@ def resolve_genre_folder_with_confidence(
 
 def clear_genre_cache() -> None:
     """Clear all in-memory genre caches — call after updating SPOTIFY_GENRE_MAP."""
-    global _genre_cache, _confidence_cache, _source_cache
+    global _genre_cache, _confidence_cache, _source_cache, _sorted_map_keys
     _genre_cache = {}
     _confidence_cache = {}
     _source_cache = {}
-    logger.info("[genre_router] Genre cache cleared")
+    _sorted_map_keys = []
+    logger.info("[genre_router] Genre cache cleared (including sorted-keys cache)")

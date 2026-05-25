@@ -271,24 +271,24 @@ export function SocketProvider({ children }) {
       }
     }, 15000);  // DISCONNECT FIX
 
-    // Gemini rescued an unknown genre — routed automatically, no action needed
+    // AI rescued an unknown genre — routed automatically, no action needed
     socket.on('download_auto_classified', (data) => {
       const folder = (data.folder || '').replace('Library/', '');
       toastRef.current({
         type: 'success',
-        title: 'Auto-classified by Gemini',
+        title: 'Auto-classified by AI',
         description: `${data.title} · ${data.artist} → ${folder}`,
         duration: 5000,
       });
     });
 
-    // Unknown genre — Gemini unavailable, song landed in Electronic catch-all
+    // Unknown genre — AI unavailable, song landed in Electronic catch-all
     socket.on('download_needs_review', (data) => {
       const conf = Math.round((data.confidence || 0) * 100);
       toastRef.current({
         type: 'warning',
         title: 'Genre unknown — saved to Electronic',
-        description: `${data.title} · ${data.artist} (${conf}% confidence) — Gemini offline, add to SPOTIFY_GENRE_MAP to fix`,
+        description: `${data.title} · ${data.artist} (${conf}% confidence) — check Review Queue to fix`,
         duration: 8000,
       });
       setNeedsReviewItems((prev) => {
@@ -317,6 +317,7 @@ export function SocketProvider({ children }) {
         return next.length > 1000 ? next.slice(-1000) : next;
       });
       if (data.done) setMaintenanceRunning(false);
+      else setMaintenanceRunning(true);
     });
 
     return () => {
@@ -338,8 +339,16 @@ export function SocketProvider({ children }) {
     setDownloads((prev) => ({ ...prev, [bucket]: {} }));
   }, []);
 
+  const _TASK_LABELS = {
+    backfill_gemini: 'Re-classify Undetected Genres',
+    backfill_lastfm: 'Enrich Genre & Mood Tags',
+    organise:        'Re-sort Music into Folders',
+    repair_index:    'Fix Library Scan',
+  };
+
   const startMaintenance = useCallback((task) => {
-    setMaintenanceLogs([{ task, line: `Starting ${task}…`, done: false }]);
+    const label = _TASK_LABELS[task] || task;
+    setMaintenanceLogs([{ task, line: `Starting ${label}…`, done: false }]);
     setMaintenanceRunning(true);
   }, []);
 

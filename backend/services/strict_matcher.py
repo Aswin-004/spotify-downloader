@@ -41,18 +41,24 @@ HARD_DURATION_LIMIT_SEC = 60
 REJECT_KEYWORDS = [
     "karaoke", "instrumental", "lofi", "lo-fi",
     "slowed", "reverb", "8d", "nightcore",
-    "cover", "edit", "version",
+    "cover",
     "bass boosted", "sped up", "tiktok", "clip",
-    "mashup", "parody",  # QUALITY UPGRADE
+    "mashup", "parody",
+    # Unlabelled-instrumental detection — BGM/background tracks often lack
+    # "instrumental" in title but are still vocal-free
+    "bgm", "background music", "ringtone", "no vocals",
+    "minus one", "backing track", "music only",
 ]
 
 
 # QUALITY UPGRADE — Pre-scoring blacklist filter (applied before candidate scoring)
-BLACKLISTED_KEYWORDS = [  # QUALITY UPGRADE
-    'cover', 'karaoke', 'nightcore',  # QUALITY UPGRADE
-    'sped up', 'reverb', 'slowed',  # QUALITY UPGRADE
-    'mashup', 'parody',  # QUALITY UPGRADE
-]  # QUALITY UPGRADE
+BLACKLISTED_KEYWORDS = [
+    'cover', 'karaoke', 'nightcore',
+    'sped up', 'reverb', 'slowed',
+    'mashup', 'parody',
+    # Instrumental detection (pre-score, catches obvious cases before scoring)
+    'instrumental', 'bgm', 'ringtone', 'no vocals', 'minus one',
+]
 
 
 def is_blacklisted(title, original_track_title):  # QUALITY UPGRADE

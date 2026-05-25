@@ -122,8 +122,8 @@ def _scan_folder_tags(folder_path: Path, max_files: int = 10) -> dict:
 def _route_from_override(artist_name: str) -> str | None:
     """Check ARTIST_GENRE_OVERRIDE. Returns Library/ path or None."""
     try:
-        from services.genre_router import _library_path
-        genre = config.ARTIST_GENRE_OVERRIDE.get(artist_name.lower().strip(), "")
+        from services.genre_router import _library_path, normalize_artist_key
+        genre = config.ARTIST_GENRE_OVERRIDE.get(normalize_artist_key(artist_name), "")
         return _library_path(genre) if genre else None
     except Exception:
         return None

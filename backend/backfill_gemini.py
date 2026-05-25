@@ -28,7 +28,7 @@ NR      = BASE / "NeedsReview"
 DRY     = "--dry-run" in sys.argv
 LIMIT   = int(next((sys.argv[sys.argv.index("--limit") + 1]
                     for _ in ["x"] if "--limit" in sys.argv), 0))
-RATE_S  = 4.0   # seconds between Gemini calls (free tier: ~15 RPM)
+RATE_S  = 3.0   # seconds between AI calls — 20 req/min, safely under Groq's 30 RPM limit
 
 
 def _passes_requested() -> set[int]:
@@ -97,7 +97,7 @@ def _update_mongo_path(old: Path, new: Path) -> None:
             {"final_path": str(old)},
             {"$set": {
                 "final_path":   str(new),
-                "genre_folder": str(new.parent.relative_to(BASE)),
+                "genre_folder": new.parent.relative_to(BASE).as_posix(),
                 "last_seen":    datetime.now(timezone.utc),
             }},
         )

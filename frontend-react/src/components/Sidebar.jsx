@@ -29,7 +29,7 @@ const navItems = [
   { to: '/files', icon: FolderOpen, label: 'Files' },
   { to: '/library', icon: ListMusic, label: 'Library' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
-  { to: '/review', icon: AlertTriangle, label: 'Review' },
+  { to: '/review', icon: AlertTriangle, label: 'Unclassified' },
   { to: '/maintenance', icon: Wrench, label: 'Maintenance' },
   { to: '/settings', icon: Settings, label: 'Settings' },
   { to: '/getting-started', icon: BookOpen, label: 'Guide' },
@@ -109,47 +109,59 @@ export default function Sidebar({ collapsed, onToggle }) {
       {/* Bottom section */}
       <div className="px-3 pb-4 space-y-3">
         {/* Auto Downloader Status */}
-        <div
-          className={cn(
-            'rounded-xl p-3 border transition-colors',
-            isAutoActive
-              ? 'border-primary/30 bg-primary/5'
-              : 'border-border bg-surface-light/50'
-          )}
-        >
-          <div className="flex items-center gap-2">
-            <Radio
+        {(() => {
+          const isError = autoStatus.current?.startsWith('Fetch error') || autoStatus.current?.startsWith('Error');
+          return (
+            <div
               className={cn(
-                'w-4 h-4 flex-shrink-0',
-                isAutoActive ? 'text-primary animate-pulse' : 'text-gray-500'
+                'rounded-xl p-3 border transition-colors',
+                isAutoActive
+                  ? 'border-primary/30 bg-primary/5'
+                  : isError
+                  ? 'border-red-500/20 bg-red-500/5'
+                  : 'border-border bg-surface-light/50'
               )}
-            />
-            {!collapsed && (
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-medium text-gray-300">
-                  Auto Sync
-                </div>
-                <div className="text-xs text-gray-500 truncate">
-                  {capitalize(autoStatus.status || 'idle')}
-                  {autoStatus.playlist_total > 0 &&
-                    ` · ${autoStatus.synced_total}/${autoStatus.playlist_total}`}
-                </div>
+            >
+              <div className="flex items-center gap-2">
+                <Radio
+                  className={cn(
+                    'w-4 h-4 flex-shrink-0',
+                    isAutoActive ? 'text-primary animate-pulse' : isError ? 'text-red-400' : 'text-gray-500'
+                  )}
+                />
+                {!collapsed && (
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium text-gray-300">
+                      Auto Sync
+                    </div>
+                    <div className={cn('text-xs truncate', isError ? 'text-red-400' : 'text-gray-500')}>
+                      {isError ? 'Spotify unreachable' : capitalize(autoStatus.status || 'idle')}
+                      {!isError && autoStatus.playlist_total > 0 &&
+                        ` · ${autoStatus.synced_total}/${autoStatus.playlist_total}`}
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          {!collapsed && autoStatus.current && (
-            <div className="mt-2 text-[11px] text-gray-500 truncate">
-              {autoStatus.current}
+              {!collapsed && autoStatus.last_checked && !isAutoActive && (
+                <div className="mt-1.5 text-[10px] text-gray-600">
+                  Last check: {autoStatus.last_checked}
+                </div>
+              )}
+              {!collapsed && autoStatus.current && !isError && isAutoActive && (
+                <div className="mt-2 text-[11px] text-gray-500 truncate">
+                  {autoStatus.current}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          );
+        })()}
 
         {/* Queue Stats */}
         {!collapsed && (
           <div className="rounded-xl p-3 border border-border bg-surface-light/50">
             <div className="flex items-center gap-2 mb-2">
               <ListMusic className="w-4 h-4 text-gray-500" />
-              <span className="text-xs font-medium text-gray-300">Auto-Sync</span>
+              <span className="text-xs font-medium text-gray-300">Download Queue</span>
             </div>
             <div className="grid grid-cols-2 gap-1.5">
               {dlCounts.downloading > 0 && (
@@ -205,7 +217,7 @@ export default function Sidebar({ collapsed, onToggle }) {
         {/* Collapse toggle */}
         <button
           onClick={onToggle}
-          className="w-full flex items-center justify-center py-2 text-gray-500 hover:text-gray-300 transition-colors"
+          className="w-full flex items-center justify-center py-2 text-gray-500 hover:text-gray-300 transition-colors cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 rounded-lg"
         >
           {collapsed ? (
             <ChevronRight className="w-4 h-4" />

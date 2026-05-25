@@ -368,9 +368,11 @@ class MaintenanceWorker:
         import time as _time
         from mutagen.id3 import ID3 as _ID3
 
+        from services.genre_router import normalize_artist_key as _nak
+
         def _artist_lower(fp):
             try:
-                return str(_ID3(str(fp)).get("TPE1", "")).strip().lower()
+                return _nak(str(_ID3(str(fp)).get("TPE1", "")))
             except Exception:
                 return ""
 
@@ -387,7 +389,7 @@ class MaintenanceWorker:
                 _tags = _ID3(str(fp))
                 artist_name = str(_tags.get("TPE1", "")).strip()
                 title_tag = str(_tags.get("TIT2", "")).strip()
-                artist_lower = artist_name.lower()
+                artist_lower = _nak(artist_name)
 
                 genre_path = ""
                 route_source = "unknown"
@@ -487,12 +489,15 @@ class MaintenanceWorker:
 
                 # ── 7. Gemini (last resort — costs daily quota) ───────────────
                 if not genre_path:
-                    gemini = identify_audio(str(fp))
-                    raw = gemini.get("gemini_genre", "")
-                    if raw:
-                        canonical = normalize_genre(raw)
-                        genre_path = _library_path(canonical) if canonical else ""
-                        route_source = "gemini"
+                    from services.gemini_service import remaining_quota as _rq
+                    if _rq() > 0:
+                        gemini = identify_audio(str(fp))
+                        raw = gemini.get("gemini_genre", "")
+                        if raw:
+                            canonical = normalize_genre(raw)
+                            genre_path = _library_path(canonical) if canonical else ""
+                            route_source = "gemini"
+                    # else: quota 0 — leave this file in Electronic, try next
 
                 if not genre_path or genre_path == "Library/Electronic":
                     continue  # still unknown — leave for next cycle
@@ -524,8 +529,8 @@ class MaintenanceWorker:
                 if route_source == "gemini":
                     _time.sleep(4)  # rate limit only when Gemini was used
             except GeminiQuotaExceeded:
-                logger.warning(f"[maintenance] retag_catchall: Gemini budget exhausted, aborting batch ({moved} moved so far)")
-                break
+                logger.warning(f"[maintenance] retag_catchall: Gemini quota hit mid-file ({moved} moved so far) — continuing without Gemini")
+                continue  # don't abort the batch — next files may resolve via steps 1-6
             except Exception as exc:
                 logger.debug(f"[maintenance] retag_catchall error for {fp.name}: {exc}")
                 continue
