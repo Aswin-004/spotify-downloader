@@ -1,159 +1,126 @@
 import { motion } from 'framer-motion';
 import { Loader2, CheckCircle2, SkipForward, XCircle, Clock, FolderOpen } from 'lucide-react';
-import { Card } from '@/components/ui/card';
-import { ProgressBar } from '@/components/ProgressBar';
-import { StatusBadge } from '@/components/StatusBadge';
-import { cn } from '@/lib/utils';
+import { cn, formatTimeAgo } from '@/lib/utils';
+import { ease } from '@/lib/motion';
+import BPMDisplay from '@/components/BPMDisplay';
+import GenreBadge from '@/components/GenreBadge';
 
-const iconConfig = {
-  downloading: {
-    icon: Loader2,
-    color: 'text-yellow-400',
-    bg: 'bg-yellow-500/10',
-    spin: true,
-  },
-  completed: {
-    icon: CheckCircle2,
-    color: 'text-emerald-400',
-    bg: 'bg-emerald-500/10',
-  },
-  success: {
-    icon: CheckCircle2,
-    color: 'text-emerald-400',
-    bg: 'bg-emerald-500/10',
-  },
-  skipped: {
-    icon: SkipForward,
-    color: 'text-amber-400',
-    bg: 'bg-amber-500/10',
-  },
-  failed: {
-    icon: XCircle,
-    color: 'text-red-400',
-    bg: 'bg-red-500/10',
-  },
+const STATUS_CONFIG = {
+  downloading: { icon: Loader2,      spin: true,  accent: 'var(--accent-cyan)',    dim: 'var(--accent-cyan-dim)'    },
+  completed:   { icon: CheckCircle2, spin: false, accent: 'var(--accent-emerald)', dim: 'var(--accent-emerald-dim)' },
+  success:     { icon: CheckCircle2, spin: false, accent: 'var(--accent-emerald)', dim: 'var(--accent-emerald-dim)' },
+  skipped:     { icon: SkipForward,  spin: false, accent: 'var(--accent-slate)',   dim: 'var(--accent-slate-dim)'   },
+  failed:      { icon: XCircle,      spin: false, accent: 'var(--accent-rose)',    dim: 'var(--accent-rose-dim)'    },
 };
 
 export default function DownloadCard({ item, index = 0 }) {
-  const config = iconConfig[item.status] || iconConfig.downloading;
-  const Icon = config.icon;
+  const cfg = STATUS_CONFIG[item.status] ?? STATUS_CONFIG.downloading;
+  const Icon = cfg.icon;
+
+  const borderColor = item.status === 'downloading'
+    ? 'rgba(6,182,212,0.20)'
+    : item.status === 'failed'
+    ? 'rgba(244,63,94,0.18)'
+    : item.status === 'completed'
+    ? 'rgba(16,185,129,0.12)'
+    : 'var(--border-subtle)';
 
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, y: 16, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -12, scale: 0.97 }}
-      transition={{
-        duration: 0.3,
-        delay: Math.min(index * 0.05, 0.25),
-        layout: { duration: 0.25, ease: 'easeInOut' },
-      }}
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0  }}
+      exit={{ opacity: 0, y: -8    }}
+      whileHover={{ y: -3, transition: { duration: 0.15, ease: [0.22,1,0.36,1] } }}
+      transition={{ ...ease, delay: Math.min(index * 0.03, 0.2) }}
     >
-      <Card className={cn(
-        'overflow-hidden transition-all duration-300 hover:border-border-light group',
-        item.status === 'downloading' && 'border-yellow-500/20 glow-yellow',
-        item.status === 'completed' && 'border-emerald-500/20',
-        item.status === 'failed' && 'border-red-500/20 glow-red',
-      )}>
-        <div className="p-4 flex items-center gap-4">
+      <div
+        className={`rounded-xl overflow-hidden transition-all duration-200 ${item.status === 'downloading' ? 'glow-downloading' : ''}`}
+        style={{
+          background: 'var(--surface-0)',
+          border: `1px solid ${borderColor}`,
+        }}
+        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; }}
+        onMouseLeave={e => { e.currentTarget.style.borderColor = borderColor; }}
+      >
+        <div className="flex items-center gap-3 p-3">
+
           {/* Status icon */}
-          <div className={cn(
-            'w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0',
-            config.bg
-          )}>
-            <Icon className={cn('w-5 h-5', config.color, config.spin && 'animate-spin')} />
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+               style={{ background: cfg.dim }}>
+            <Icon
+              className={cn('w-4 h-4', cfg.spin && 'animate-spin')}
+              style={{ color: cfg.accent }}
+            />
           </div>
 
-          {/* Content */}
+          {/* Main content */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <p className="text-sm font-medium truncate">{item.title}</p>
-            </div>
-            <p className="text-xs text-gray-500 truncate mt-0.5">
+            {/* Track title + artist */}
+            <p className="font-display text-14 font-semibold truncate leading-tight"
+               style={{ color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
+              {item.title}
+            </p>
+            <p className="text-12 truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>
               {item.artist || 'Unknown Artist'}
-              {item.filename && (
-                <span className="text-gray-600"> · {item.filename}</span>
-              )}
             </p>
 
-            {/* Progress bar for downloading state */}
-            {item.status === 'downloading' && (
-              <div className="mt-2.5 flex items-center gap-3">
-                <ProgressBar value={item.progress} color="yellow" pulse className="flex-1" />
-                <motion.span
-                  key={Math.round(item.progress || 0)}
-                  initial={{ scale: 1.2, opacity: 0.7 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  transition={{ duration: 0.15 }}
-                  className="text-xs font-mono text-gray-500 flex-shrink-0 w-10 text-right"
-                >
-                  {Math.round(item.progress || 0)}%
-                </motion.span>
-              </div>
-            )}
-
-            {/* Destination folder badge for completed */}
+            {/* Metadata row — completed state */}
             {item.status === 'completed' && (
-              <div className="flex items-center flex-wrap gap-1.5 mt-1.5">
-                {item.routing_label && (
-                  <div className={cn(
-                    'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium',
-                    item.routing_label === 'Needs Sorting'
-                      ? 'bg-amber-500/15 text-amber-400'
-                      : item.routing_label === 'Unclassified'
-                      ? 'bg-gray-500/15 text-gray-400'
-                      : 'bg-emerald-500/15 text-emerald-400'
-                  )}>
-                    <FolderOpen className="w-3 h-3" />
-                    {item.routing_label}
-                  </div>
-                )}
-                {item.bpm && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-blue-500/10 text-blue-300 border border-blue-500/15">
-                    {item.bpm} BPM
-                  </span>
-                )}
-                {item.camelot && (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-purple-500/10 text-purple-300 border border-purple-500/15">
-                    {item.camelot}
-                  </span>
-                )}
-                {item.key && !item.camelot && (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-purple-500/10 text-purple-300 border border-purple-500/15">
-                    {item.key}
+              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                {item.routing_label && <GenreBadge genre={item.routing_label} />}
+                <BPMDisplay bpm={item.bpm} musicalKey={item.key} camelot={item.camelot} />
+                {item.energy != null && (
+                  <span className="text-10 font-mono px-1.5 py-0.5 rounded"
+                        style={{ background: 'var(--surface-1)', color: 'var(--text-tertiary)' }}>
+                    E{Math.round((item.energy ?? 0) * 10)}
                   </span>
                 )}
               </div>
             )}
 
-            {/* Error message for failed */}
+            {/* Progress bar — downloading state */}
+            {item.status === 'downloading' && (
+              <div className="flex items-center gap-2 mt-2">
+                <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: 'var(--surface-2)' }}>
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ background: 'var(--accent-cyan)', transformOrigin: 'left' }}
+                    animate={{ scaleX: (item.progress ?? 0) / 100 }}
+                    transition={{ type: 'spring', stiffness: 120, damping: 20 }}
+                  />
+                </div>
+                <span className="font-mono text-11 tabular-nums flex-shrink-0 w-9 text-right"
+                      style={{ color: 'var(--accent-cyan)' }}>
+                  {Math.round(item.progress ?? 0)}%
+                </span>
+              </div>
+            )}
+
+            {/* Error text — failed */}
             {item.status === 'failed' && item.error && (
-              <p className="text-xs text-red-400/80 mt-1.5 truncate">
+              <p className="text-11 mt-1.5 truncate" style={{ color: 'var(--accent-rose)' }}>
                 {item.error}
               </p>
             )}
 
-            {/* Reason for skipped */}
+            {/* Reason — skipped */}
             {item.status === 'skipped' && item.reason && (
-              <p className="text-xs text-amber-400/70 mt-1.5 truncate">
+              <p className="text-11 mt-1.5 truncate" style={{ color: 'var(--text-tertiary)' }}>
                 {item.reason}
               </p>
             )}
           </div>
 
-          {/* Right side: badge + timestamp */}
-          <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-            <StatusBadge status={item.status} />
-            {item.timestamp && (
-              <span className="text-[10px] text-gray-600 font-mono flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                {item.timestamp}
-              </span>
-            )}
-          </div>
+          {/* Right: timestamp */}
+          {item.timestamp && (
+            <div className="flex-shrink-0 flex items-center gap-1" style={{ color: 'var(--text-muted)' }}>
+              <Clock className="w-3 h-3" />
+              <span className="text-10 font-mono">{item.timestamp}</span>
+            </div>
+          )}
         </div>
-      </Card>
+      </div>
     </motion.div>
   );
 }

@@ -1,23 +1,17 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  CheckCircle2,
-  RotateCw,
-  Loader2,
-  Music,
-  PlayCircle,
-  Zap,
-  SkipForward,
-  Trash2,
-  FolderInput,
+  CheckCircle2, RotateCw, Loader2, Music, PlayCircle,
+  Zap, SkipForward, Trash2, FolderInput, ChevronRight,
 } from 'lucide-react';
-
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
 import { useToast } from '@/components/ui/toast';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import ConfidenceBar from '@/components/ConfidenceBar';
 import { cn } from '@/lib/utils';
+import { ease, fadeUp } from '@/lib/motion';
 
 const GENRE_OPTIONS = [
   'House', 'Trance', 'UK Garage', 'Drum & Bass', 'Dubstep',
@@ -29,295 +23,381 @@ const GENRE_OPTIONS = [
 export default function ReviewPage() {
   const { needsReviewItems, clearNeedsReviewItem } = useSocket();
   const { addToast } = useToast();
-  const [retrying, setRetrying] = useState({});
-  const [retryAllProgress, setRetryAllProgress] = useState(null); // null | { current, total }
-  const [geminiQuota, setGeminiQuota] = useState(null); // { remaining, total, exhausted }
-  const [skippedTracks, setSkippedTracks] = useState(null); // { skipped: {id: count}, threshold, total }
-  const [resettingSkipped, setResettingSkipped] = useState(false);
-  const [selectedGenres, setSelectedGenres] = useState({}); // { [itemKey]: genre }
-  const [moving, setMoving] = useState({}); // { [itemKey]: boolean }
+  const [selectedIdx,     setSelectedIdx]     = useState(0);
+  const [retrying,        setRetrying]        = useState({});
+  const [retryAllProgress,setRetryAllProgress]= useState(null);
+  const [geminiQuota,     setGeminiQuota]     = useState(null);
+  const [skippedTracks,   setSkippedTracks]   = useState(null);
+  const [resettingSkipped,setResettingSkipped]= useState(false);
+  const [selectedGenres,  setSelectedGenres]  = useState({});
+  const [moving,          setMoving]          = useState({});
 
   useEffect(() => {
     api.getGeminiQuota().then(setGeminiQuota).catch(() => {});
     api.getSkippedTracks().then(setSkippedTracks).catch(() => {});
   }, []);
 
+  // Keep selectedIdx in bounds
+  useEffect(() => {
+    if (selectedIdx >= needsReviewItems.length && needsReviewItems.length > 0)
+      setSelectedIdx(needsReviewItems.length - 1);
+  }, [needsReviewItems.length]);
+
   async function handleResetSkipped(trackId = null) {
     setResettingSkipped(true);
     try {
       await api.resetSkippedTracks(trackId);
-      const fresh = await api.getSkippedTracks();
-      setSkippedTracks(fresh);
+      setSkippedTracks(await api.getSkippedTracks());
       addToast({ type: 'success', title: trackId ? 'Track unblocked' : 'All skipped tracks reset', duration: 4000 });
     } catch (err) {
       addToast({ type: 'error', title: 'Reset failed', description: err.message, duration: 4000 });
-    } finally {
-      setResettingSkipped(false);
-    }
+    } finally { setResettingSkipped(false); }
   }
 
   function buildFilepath(item) {
     const folder = item.suggested_folder || 'Library/Electronic';
-    // Prefer explicit filename (set after the file lands on disk).
-    // Fall back to "Title - Artist.mp3" (current naming format), then title-only for
-    // older files that predate the title-artist format.
     if (item.filename) return `${folder}/${item.filename}`;
     const artist = item.artist || '';
-    return artist
-      ? `${folder}/${item.title} - ${artist}.mp3`
-      : `${folder}/${item.title}.mp3`;
+    return artist ? `${folder}/${item.title} - ${artist}.mp3` : `${folder}/${item.title}.mp3`;
   }
 
   async function handleRetry(item) {
     const key = item.title;
-    setRetrying((prev) => ({ ...prev, [key]: true }));
+    setRetrying(p => ({ ...p, [key]: true }));
     try {
-      const filepath = buildFilepath(item);
-      const result = await api.retagCatchallTrack(filepath);
+      const result = await api.retagCatchallTrack(buildFilepath(item));
       if (result.moved) {
-        addToast({
-          type: 'success',
-          title: 'Reclassified',
-          description: `${item.title} → ${result.new_folder}`,
-          duration: 5000,
-        });
+        addToast({ type: 'success', title: 'Reclassified', description: `${item.title} → ${result.new_folder}`, duration: 5000 });
         clearNeedsReviewItem(item.title);
       } else if (result.quota_exhausted) {
-        addToast({
-          type: 'error',
-          title: 'AI quota exhausted',
-          description: 'Daily limit reached — this track will be retried automatically tomorrow.',
-          duration: 8000,
-        });
+        addToast({ type: 'error', title: 'AI quota exhausted', description: 'Retried tomorrow automatically.', duration: 8000 });
       } else {
-        addToast({
-          type: 'warning',
-          title: 'Still unresolved',
-          description: result.reason || 'Could not classify this track',
-          duration: 5000,
-        });
+        addToast({ type: 'warning', title: 'Still unresolved', description: result.reason || 'Could not classify', duration: 5000 });
       }
     } catch (err) {
-      addToast({
-        type: 'error',
-        title: 'Retry failed',
-        description: err.message || 'Unknown error',
-        duration: 4000,
-      });
-    } finally {
-      setRetrying((prev) => ({ ...prev, [key]: false }));
-    }
+      addToast({ type: 'error', title: 'Retry failed', description: err.message, duration: 4000 });
+    } finally { setRetrying(p => ({ ...p, [key]: false })); }
   }
 
   async function handleRetryAll() {
     const items = [...needsReviewItems];
     setRetryAllProgress({ current: 0, total: items.length });
-    let processed = 0;
-    let notFound = 0;
-    let unresolved = 0;
+    let processed = 0, unresolved = 0, notFound = 0;
     for (let i = 0; i < items.length; i++) {
-      const item = items[i];
       setRetryAllProgress({ current: i + 1, total: items.length });
-      const filepath = buildFilepath(item);
       try {
-        const result = await api.retagCatchallTrack(filepath);
-        if (result.moved) {
-          clearNeedsReviewItem(item.title);
-          processed++;
-        } else if (result.quota_exhausted) {
-          addToast({
-            type: 'error',
-            title: 'AI quota hit mid-run',
-            description: `${processed} moved so far. Remaining tracks will be retried tomorrow.`,
-            duration: 8000,
-          });
-          break;
-        } else {
-          unresolved++;
-        }
+        const result = await api.retagCatchallTrack(buildFilepath(items[i]));
+        if (result.moved) { clearNeedsReviewItem(items[i].title); processed++; }
+        else if (result.quota_exhausted) { addToast({ type: 'error', title: 'AI quota hit mid-run', description: `${processed} moved so far.`, duration: 8000 }); break; }
+        else { unresolved++; }
       } catch (err) {
-        // 404 = file not found on disk (path mismatch or already moved)
-        if (err?.response?.status === 404) notFound++;
-        // else: network error — skip silently
+        if (err?.status === 404) notFound++;
       }
-      await new Promise((r) => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 2000));
     }
     setRetryAllProgress(null);
     api.getGeminiQuota().then(setGeminiQuota).catch(() => {});
-
-    if (processed > 0) {
-      addToast({
-        type: 'success',
-        title: `${processed} track${processed !== 1 ? 's' : ''} reclassified`,
-        description: unresolved > 0 ? `${unresolved} still unresolved — try again later or move manually` : undefined,
-        duration: 6000,
-      });
-    } else if (notFound > 0) {
-      addToast({
-        type: 'error',
-        title: 'Files not found on disk',
-        description: `${notFound} track${notFound !== 1 ? 's' : ''} couldn't be located. Refresh the page to reload the queue.`,
-        duration: 8000,
-      });
-    } else {
-      addToast({
-        type: 'warning',
-        title: 'Nothing reclassified',
-        description: unresolved > 0
-          ? `${unresolved} tracks could not be classified — try again later.`
-          : 'No tracks could be classified via artist lookup, Spotify, Last.fm, or MusicBrainz.',
-        duration: 8000,
-      });
-    }
+    if (processed > 0) addToast({ type: 'success', title: `${processed} track${processed !== 1 ? 's' : ''} reclassified`, description: unresolved > 0 ? `${unresolved} still unresolved` : undefined, duration: 6000 });
+    else addToast({ type: 'warning', title: 'Nothing reclassified', description: 'Try again later or move manually.', duration: 8000 });
   }
 
   async function handleMoveAndRemember(item) {
     const itemKey = item.id || (item.title + '__' + item.artist);
     const genre = selectedGenres[itemKey];
     if (!genre) return;
-    const key = itemKey;
-    setMoving((prev) => ({ ...prev, [key]: true }));
+    setMoving(p => ({ ...p, [itemKey]: true }));
     try {
-      const filepath = buildFilepath(item);
-      const result = await api.moveAndRemember(filepath, genre, item.artist || '');
+      const result = await api.moveAndRemember(buildFilepath(item), genre, item.artist || '');
       if (result.moved) {
-        addToast({
-          type: 'success',
-          title: `Moved to ${genre}`,
-          description: item.artist
-            ? `${item.artist} will auto-route to ${genre} from now on`
-            : item.title,
-          duration: 5000,
-        });
+        addToast({ type: 'success', title: `Moved to ${genre}`, description: item.artist ? `${item.artist} will auto-route to ${genre}` : item.title, duration: 5000 });
         clearNeedsReviewItem(item.title);
       } else {
         addToast({ type: 'error', title: 'Move failed', description: result.error, duration: 5000 });
       }
     } catch (err) {
       addToast({ type: 'error', title: 'Move failed', description: err.message, duration: 4000 });
-    } finally {
-      setMoving((prev) => ({ ...prev, [key]: false }));
-    }
+    } finally { setMoving(p => ({ ...p, [itemKey]: false })); }
   }
 
+  const selectedItem = needsReviewItems[selectedIdx] ?? null;
+  const selectedKey  = selectedItem ? (selectedItem.id || selectedItem.title + '__' + selectedItem.artist) : null;
+  const conf         = selectedItem ? Math.round((selectedItem.confidence || 0) * 100) : 0;
+
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      {/* Header */}
+    <div className="max-w-5xl mx-auto space-y-5">
+
+      {/* Page header */}
       <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold">Unclassified Tracks</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            These tracks need your genre pick before they join your crates.
-            Hit <strong className="text-amber-300">Retry</strong> to let the AI classify, or choose a genre and hit <strong className="text-emerald-400">Move &amp; Remember</strong> to sort it yourself.
+        <div>
+          <h1 className="font-display text-22 font-bold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+            Review Queue
+          </h1>
+          <p className="text-13 mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+            Tracks awaiting genre classification
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2">
           {geminiQuota && (
-            <Badge className={cn(
-              'border gap-1',
-              geminiQuota.exhausted
-                ? 'bg-red-500/20 text-red-400 border-red-500/30'
-                : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-            )}>
+            <Badge variant={geminiQuota.exhausted ? 'danger' : 'ai'} className="gap-1">
               <Zap className="w-3 h-3" />
-              {geminiQuota.exhausted
-                ? 'AI classifier paused'
-                : 'AI classifier: ready'}
+              {geminiQuota.exhausted ? 'AI paused' : 'AI ready'}
             </Badge>
           )}
           {needsReviewItems.length > 0 && (
-            <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30">
-              {needsReviewItems.length} pending
-            </Badge>
+            <Badge variant="warning">{needsReviewItems.length} pending</Badge>
           )}
           {needsReviewItems.length > 1 && (
-            <Button
-              size="sm"
-              disabled={!!retryAllProgress}
-              onClick={handleRetryAll}
-              className="bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50"
-            >
+            <Button size="sm" disabled={!!retryAllProgress} onClick={handleRetryAll}>
               {retryAllProgress ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                  {retryAllProgress.current}/{retryAllProgress.total}
-                </>
+                <><Loader2 className="w-3.5 h-3.5 animate-spin" />{retryAllProgress.current}/{retryAllProgress.total}</>
               ) : (
-                <>
-                  <PlayCircle className="w-3.5 h-3.5 mr-1.5" />
-                  Retry All
-                </>
+                <><PlayCircle className="w-3.5 h-3.5" />Retry All</>
               )}
             </Button>
           )}
         </div>
       </div>
 
+      {/* Retry All progress bar — shown independently of item count */}
+      <AnimatePresence>
+        {retryAllProgress && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="rounded-xl p-3 space-y-2 overflow-hidden"
+            style={{ background: 'var(--accent-amber-dim)', border: '1px solid rgba(245,158,11,0.2)' }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--accent-amber)' }} />
+                <span className="text-13 font-medium" style={{ color: 'var(--accent-amber)' }}>
+                  Retrying All Tracks
+                </span>
+              </div>
+              <span className="text-11 font-mono tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+                {retryAllProgress.current} / {retryAllProgress.total}
+              </span>
+            </div>
+            <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+              <motion.div
+                className="h-full rounded-full"
+                style={{ background: 'var(--accent-amber)' }}
+                animate={{ width: `${Math.round((retryAllProgress.current / retryAllProgress.total) * 100)}%` }}
+                transition={{ duration: 0.4, ease: 'easeOut' }}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Empty state */}
-      {needsReviewItems.length === 0 && (
+      {needsReviewItems.length === 0 && !retryAllProgress && (
         <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col items-center justify-center py-20 text-center"
+          {...fadeUp}
+          className="flex flex-col items-center justify-center py-20 rounded-2xl text-center"
+          style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
         >
-          <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center mb-4">
-            <CheckCircle2 className="w-7 h-7 text-emerald-400" />
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4"
+               style={{ background: 'var(--accent-emerald-dim)' }}>
+            <CheckCircle2 className="w-6 h-6" style={{ color: 'var(--accent-emerald)' }} />
           </div>
-          <p className="text-lg font-semibold text-emerald-400">All sorted — nothing to review</p>
-          <p className="text-sm text-gray-500 mt-1">Every downloaded track has been placed in a genre folder</p>
+          <p className="text-16 font-semibold" style={{ color: 'var(--accent-emerald)' }}>All clear</p>
+          <p className="text-13 mt-1" style={{ color: 'var(--text-tertiary)' }}>
+            Every track has been placed in a genre folder
+          </p>
         </motion.div>
       )}
 
-      {/* Skipped Tracks panel */}
+      {/* Two-pane layout */}
+      {needsReviewItems.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
+
+          {/* Left: track list */}
+          <div className="rounded-xl overflow-hidden" style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+            <div className="px-4 py-3 text-label" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              Pending · {needsReviewItems.length}
+            </div>
+            <div className="overflow-y-auto scrollbar-thin" style={{ maxHeight: 480 }}>
+              <AnimatePresence>
+                {needsReviewItems.map((item, i) => (
+                  <motion.button
+                    key={item.id || item.title + '__' + item.artist}
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0  }}
+                    exit={{ opacity: 0, x: 8     }}
+                    transition={{ ...ease, delay: i * 0.02 }}
+                    onClick={() => setSelectedIdx(i)}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left cursor-pointer transition-all"
+                    style={{
+                      background: i === selectedIdx ? 'var(--accent-amber-dim)' : 'transparent',
+                      borderBottom: '1px solid var(--border-subtle)',
+                      borderLeft: i === selectedIdx ? '2px solid var(--accent-amber)' : '2px solid transparent',
+                    }}
+                  >
+                    <div className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0"
+                         style={{ background: 'var(--accent-amber-dim)' }}>
+                      <Music className="w-3.5 h-3.5" style={{ color: 'var(--accent-amber)' }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-12 font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                        {item.title}
+                      </p>
+                      <p className="text-11 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                        {item.artist || 'Unknown Artist'}
+                      </p>
+                    </div>
+                    <ChevronRight className="w-3.5 h-3.5 flex-shrink-0"
+                                  style={{ color: i === selectedIdx ? 'var(--accent-amber)' : 'var(--text-muted)' }} />
+                  </motion.button>
+                ))}
+              </AnimatePresence>
+            </div>
+          </div>
+
+          {/* Right: classification panel */}
+          <AnimatePresence mode="wait">
+            {selectedItem && (
+              <motion.div
+                key={selectedKey}
+                initial={{ opacity: 0, x: 16 }}
+                animate={{ opacity: 1, x: 0  }}
+                exit={{ opacity: 0, x: -16   }}
+                transition={ease}
+                className="rounded-xl p-5 space-y-5"
+                style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+              >
+                {/* Track info */}
+                <div className="flex items-start gap-4">
+                  <div className="w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0"
+                       style={{ background: 'var(--accent-amber-dim)' }}>
+                    <Music className="w-8 h-8" style={{ color: 'var(--accent-amber)' }} />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="font-display text-18 font-semibold truncate"
+                        style={{ color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
+                      {selectedItem.title}
+                    </h2>
+                    <p className="text-13 truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                      {selectedItem.artist || 'Unknown Artist'}
+                    </p>
+                    <p className="text-11 mt-1" style={{ color: 'var(--text-tertiary)' }}>
+                      {selectedItem.suggested_folder}
+                    </p>
+                  </div>
+                </div>
+
+                {/* AI confidence */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-label">
+                    <Zap className="w-3 h-3" style={{ color: 'var(--accent-violet)' }} />
+                    Groq AI Classification
+                    <div className="w-1.5 h-1.5 rounded-full animate-pulse ml-1"
+                         style={{ background: 'var(--accent-violet)' }} />
+                  </div>
+                  <div className="rounded-lg p-3 space-y-2"
+                       style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+                    {selectedItem.confidence != null ? (
+                      <ConfidenceBar
+                        pct={conf}
+                        label={selectedItem.suggested_folder?.split('/').pop() || 'Unknown'}
+                      />
+                    ) : (
+                      <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>
+                        No AI classification available
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Manual genre override */}
+                <div className="space-y-2">
+                  <p className="text-label">Manual Override</p>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={selectedGenres[selectedKey] || ''}
+                      onChange={e => setSelectedGenres(p => ({ ...p, [selectedKey]: e.target.value }))}
+                      className="flex-1 text-13 rounded-lg px-3 py-2 cursor-pointer outline-none transition-all"
+                      style={{
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border-default)',
+                      }}
+                    >
+                      <option value="">Pick genre to move…</option>
+                      {GENRE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+                    </select>
+                    <Button
+                      size="sm"
+                      disabled={!selectedGenres[selectedKey] || moving[selectedKey]}
+                      onClick={() => handleMoveAndRemember(selectedItem)}
+                    >
+                      {moving[selectedKey]
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <><FolderInput className="w-3.5 h-3.5" />Move &amp; Remember</>}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex items-center gap-2 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={retrying[selectedItem.title]}
+                    onClick={() => handleRetry(selectedItem)}
+                    className="gap-1.5"
+                  >
+                    {retrying[selectedItem.title]
+                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      : <RotateCw className="w-3.5 h-3.5" />}
+                    Retry AI
+                  </Button>
+                  {selectedIdx < needsReviewItems.length - 1 && (
+                    <Button variant="ghost" size="sm" onClick={() => setSelectedIdx(i => i + 1)}>
+                      Skip →
+                    </Button>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {/* Skipped/blocked tracks panel */}
       {skippedTracks && skippedTracks.total > 0 && (
         <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 space-y-3"
+          {...fadeUp}
+          className="rounded-xl p-4 space-y-3"
+          style={{ background: 'var(--surface-0)', border: '1px solid rgba(244,63,94,0.2)' }}
         >
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <SkipForward className="w-4 h-4 text-red-400" />
-              <span className="text-sm font-semibold text-red-300">
+              <SkipForward className="w-4 h-4" style={{ color: 'var(--accent-rose)' }} />
+              <span className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>
                 Blocked Downloads
               </span>
-              <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
-                {skippedTracks.total}
-              </Badge>
+              <Badge variant="danger">{skippedTracks.total}</Badge>
             </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={resettingSkipped}
-              onClick={() => handleResetSkipped()}
-              className="text-red-400 hover:text-red-300 hover:bg-red-500/10 shrink-0"
-            >
-              {resettingSkipped ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <>
-                  <Trash2 className="w-3.5 h-3.5 mr-1.5" />
-                  Reset All
-                </>
-              )}
+            <Button variant="destructive" size="sm" disabled={resettingSkipped} onClick={() => handleResetSkipped()}>
+              {resettingSkipped ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Trash2 className="w-3.5 h-3.5" />Reset All</>}
             </Button>
           </div>
-          <p className="text-xs text-gray-500">
-            These tracks failed to download {skippedTracks.threshold}+ times in a row so the app stopped trying.
-            Click the reset button to try downloading them again.
+          <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>
+            These tracks failed {skippedTracks.threshold}+ times. Reset to retry.
           </p>
-          <div className="space-y-1 max-h-48 overflow-y-auto">
+          <div className="space-y-1 max-h-48 overflow-y-auto scrollbar-thin">
             {Object.entries(skippedTracks.skipped).map(([id, count]) => (
-              <div key={id} className="flex items-center justify-between gap-2 text-xs text-gray-400 py-1 border-b border-red-500/10 last:border-0">
-                <span className="font-mono truncate">{id}</span>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-red-400">{count} fails</span>
-                  <button
-                    onClick={() => handleResetSkipped(id)}
-                    disabled={resettingSkipped}
-                    className="text-gray-500 hover:text-red-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    title="Unblock this track"
-                  >
+              <div key={id} className="flex items-center justify-between gap-2 text-12 py-1"
+                   style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                <span className="font-mono truncate" style={{ color: 'var(--text-secondary)' }}>{id}</span>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span style={{ color: 'var(--accent-rose)' }}>{count} fails</span>
+                  <button onClick={() => handleResetSkipped(id)} disabled={resettingSkipped}
+                          className="cursor-pointer focus-ring rounded" style={{ color: 'var(--text-muted)' }}
+                          title="Unblock this track">
                     <RotateCw className="w-3 h-3" />
                   </button>
                 </div>
@@ -326,92 +406,6 @@ export default function ReviewPage() {
           </div>
         </motion.div>
       )}
-
-      {/* Track list */}
-      <AnimatePresence>
-        {needsReviewItems.map((item) => {
-          const itemKey = item.id || (item.title + '__' + item.artist);
-          const conf = Math.round((item.confidence || 0) * 100);
-          const isRetrying = retrying[item.title];
-          return (
-            <motion.div
-              key={item.id || (item.title + '__' + item.artist)}
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 10, height: 0, marginBottom: 0 }}
-              transition={{ duration: 0.2 }}
-              className="p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 space-y-3"
-            >
-              {/* Top row: icon + info + retry */}
-              <div className="flex items-center gap-4">
-                <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                  <Music className="w-4 h-4 text-amber-400" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{item.title}</p>
-                  <p className="text-xs text-gray-400 truncate">{item.artist}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className={cn(
-                      'text-[10px] px-1.5 py-0.5 rounded-full',
-                      conf >= 60 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'
-                    )}>
-                      {conf >= 60 ? 'Low confidence' : 'Genre unknown'}
-                    </span>
-                    {item.timestamp && (
-                      <span className="text-[10px] text-gray-600">{item.timestamp}</span>
-                    )}
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={isRetrying}
-                  onClick={() => handleRetry(item)}
-                  className="flex-shrink-0 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
-                >
-                  {isRetrying ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <>
-                      <RotateCw className="w-3.5 h-3.5 mr-1.5" />
-                      Retry
-                    </>
-                  )}
-                </Button>
-              </div>
-
-              {/* Bottom row: manual genre picker */}
-              <div className="flex items-center gap-2 pl-12">
-                <select
-                  value={selectedGenres[itemKey] || ''}
-                  onChange={(e) => setSelectedGenres((prev) => ({ ...prev, [itemKey]: e.target.value }))}
-                  className="flex-1 text-xs bg-gray-900 border border-gray-700 text-gray-300 rounded-md px-2 py-1.5 cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/60"
-                >
-                  <option value="">Pick genre to move…</option>
-                  {GENRE_OPTIONS.map((g) => (
-                    <option key={g} value={g}>{g}</option>
-                  ))}
-                </select>
-                <Button
-                  size="sm"
-                  disabled={!selectedGenres[itemKey] || moving[itemKey]}
-                  onClick={() => handleMoveAndRemember(item)}
-                  className="shrink-0 bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-40 text-xs"
-                >
-                  {moving[itemKey] ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <>
-                      <FolderInput className="w-3.5 h-3.5 mr-1" />
-                      Move &amp; Remember
-                    </>
-                  )}
-                </Button>
-              </div>
-            </motion.div>
-          );
-        })}
-      </AnimatePresence>
     </div>
   );
 }

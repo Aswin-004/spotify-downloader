@@ -1,25 +1,14 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  FolderSync,
-  DatabaseZap,
-  Sparkles,
-  Tags,
-  Play,
-  Square,
-  Trash2,
-  ChevronDown,
-  ChevronRight,
-  AlertTriangle,
-  CheckCircle2,
-  Loader2,
-  RefreshCw,
+  FolderSync, DatabaseZap, Sparkles, Tags,
+  Play, AlertTriangle, CheckCircle2, Loader2, RefreshCw,
+  ChevronRight, ChevronDown,
 } from 'lucide-react';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
+import { ease } from '@/lib/motion';
 import { cn } from '@/lib/utils';
 
 const TASKS = [
@@ -28,7 +17,9 @@ const TASKS = [
     icon: FolderSync,
     title: 'Re-sort Music into Folders',
     description: 'Tidies your library: splits mixed folders, removes near-empty ones, cleans up duplicates, and moves any "Needs Sorting" tracks into proper genre folders.',
-    color: 'purple',
+    accent: 'var(--accent-violet)',
+    dim: 'var(--accent-violet-dim)',
+    border: 'rgba(139,92,246,0.2)',
     steps: ['Split mixed genre folders', 'Remove near-empty folders', 'Remove duplicates', 'Clean up numbered rips', 'Sort pending tracks'],
   },
   {
@@ -36,7 +27,9 @@ const TASKS = [
     icon: DatabaseZap,
     title: 'Fix Library Scan',
     description: 'Rescans your music folder to fix any tracks that appear missing or out of place. Run this if files seem to be re-downloading even though you already have them.',
-    color: 'blue',
+    accent: 'var(--accent-cyan)',
+    dim: 'var(--accent-cyan-dim)',
+    border: 'rgba(6,182,212,0.2)',
     steps: ['Scan music folder', 'Fix broken file paths', 'Register untracked files'],
   },
   {
@@ -44,7 +37,9 @@ const TASKS = [
     icon: Sparkles,
     title: 'Re-classify Undetected Genres',
     description: 'Uses AI to detect the genre of tracks that ended up in the Unclassified folder, add BPM and musical key info, and fetch missing album artwork.',
-    color: 'amber',
+    accent: 'var(--accent-amber)',
+    dim: 'var(--accent-amber-dim)',
+    border: 'rgba(245,158,11,0.2)',
     passes: [
       { id: 1, label: 'Step 1 — Detect genres for Indian/Bollywood tracks (AI classifier, ~2s per track)' },
       { id: 2, label: 'Step 2 — Move tracks with a detected genre into the right folder (rule-based, fast)' },
@@ -58,30 +53,26 @@ const TASKS = [
     icon: Tags,
     title: 'Enrich Genre & Mood Tags (Last.fm)',
     description: 'Fetches community genre, mood, and listener data from Last.fm for all library tracks. Runs in batches of 200 — re-run until complete. Safe to run while downloads are active.',
-    color: 'teal',
+    accent: 'var(--accent-emerald)',
+    dim: 'var(--accent-emerald-dim)',
+    border: 'rgba(16,185,129,0.2)',
     hasLimit: true,
   },
 ];
-
-const COLOR = {
-  purple: { badge: 'bg-purple-500/20 text-purple-300', border: 'border-purple-500/30', icon: 'text-purple-400', btn: 'bg-purple-600 hover:bg-purple-700' },
-  blue:   { badge: 'bg-blue-500/20 text-blue-300',     border: 'border-blue-500/30',   icon: 'text-blue-400',   btn: 'bg-blue-600 hover:bg-blue-700'   },
-  amber:  { badge: 'bg-amber-500/20 text-amber-300',   border: 'border-amber-500/30',  icon: 'text-amber-400',  btn: 'bg-amber-600 hover:bg-amber-700'  },
-  teal:   { badge: 'bg-teal-500/20 text-teal-300',     border: 'border-teal-500/30',   icon: 'text-teal-400',   btn: 'bg-teal-600 hover:bg-teal-700'    },
-};
 
 function LogLine({ line }) {
   const isError  = /\[(?:error|fail|warn)\]|(?:error|fail|warn(?:ing)?):|✗/i.test(line);
   const isDone   = /✓|done|exit 0/i.test(line);
   const isHeader = line.startsWith('===') || line.startsWith('▶');
+  const color = isError
+    ? 'var(--accent-rose)'
+    : isDone
+      ? 'var(--accent-emerald)'
+      : isHeader
+        ? 'var(--accent-violet)'
+        : 'var(--text-secondary)';
   return (
-    <div className={cn(
-      'font-mono text-xs leading-5 px-1',
-      isError  && 'text-red-400',
-      isDone   && !isError && 'text-emerald-400',
-      isHeader && !isError && !isDone && 'text-purple-300 font-semibold',
-      !isError && !isDone && !isHeader && 'text-gray-300',
-    )}>
+    <div className="font-mono text-11 leading-5 px-1" style={{ color }}>
       {line}
     </div>
   );
@@ -91,12 +82,14 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
   const [expanded, setExpanded] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const defaultPasses = task.passes
-    ? (() => { const max = Math.max(...task.passes.map(p => p.id)); return task.passes.filter(p => p.id < max).map(p => p.id); })()
+    ? (() => {
+        const max = Math.max(...task.passes.map(p => p.id));
+        return task.passes.filter(p => p.id < max).map(p => p.id);
+      })()
     : [];
   const [passes, setPasses] = useState(defaultPasses);
   const [limit, setLimit] = useState('');
   const logRef = useRef(null);
-  const c = COLOR[task.color];
   const Icon = task.icon;
   const isMe    = useMemo(() => activeTask === task.id, [activeTask, task.id]);
   const myLogs  = useMemo(() => logs.filter(e => e.task === task.id), [logs, task.id]);
@@ -105,82 +98,94 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
   const exitOk  = useMemo(() => isDone && lastLog?.exit_code === 0, [isDone, lastLog]);
 
   useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [myLogs.length]);
 
-  // Auto-expand log when task has logs (even if triggered outside the UI)
   useEffect(() => {
     if (myLogs.length > 0) setExpanded(true);
   }, [myLogs.length]);
 
   function togglePass(id) {
-    setPasses((prev) =>
-      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id].sort()
-    );
+    setPasses(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id].sort());
   }
 
+  const isRunningMe = isMe && running;
+
   return (
-    <Card className={cn('overflow-hidden border', c.border, 'bg-white/5')}>
+    <motion.div
+      className="rounded-xl overflow-hidden"
+      style={{
+        background: 'var(--surface-0)',
+        border: `1px solid ${isRunningMe ? task.border : 'var(--border-subtle)'}`,
+        boxShadow: isRunningMe ? `0 0 0 1px ${task.border}` : 'none',
+        transition: 'border-color 0.3s, box-shadow 0.3s',
+      }}
+    >
       <div className="p-5 space-y-4">
         {/* Header */}
         <div className="flex items-start gap-4">
-          <div className={cn('p-2.5 rounded-xl', c.badge)}>
-            <Icon className={cn('w-5 h-5', c.icon)} />
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+               style={{ background: task.dim }}>
+            <Icon
+              className={cn('w-5 h-5', isRunningMe && 'animate-spin')}
+              style={{ color: task.accent }}
+            />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-semibold text-gray-100">{task.title}</h3>
-              {isMe && running && (
-                <Badge className="bg-blue-500/20 text-blue-300 text-[10px]">
-                  <Loader2 className="w-3 h-3 mr-1 animate-spin inline" />
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <h3 className="text-14 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {task.title}
+              </h3>
+              {isRunningMe && (
+                <span className="flex items-center gap-1 text-10 px-2 py-0.5 rounded-full"
+                      style={{ background: 'var(--accent-cyan-dim)', color: 'var(--accent-cyan)' }}>
+                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
                   Running
-                </Badge>
+                </span>
               )}
               {isDone && (
-                <Badge className={exitOk ? 'bg-emerald-500/20 text-emerald-300 text-[10px]' : 'bg-red-500/20 text-red-300 text-[10px]'}>
-                  {exitOk ? '✓ Done' : '✗ Failed'}
-                </Badge>
+                <span className="flex items-center gap-1 text-10 px-2 py-0.5 rounded-full"
+                      style={exitOk
+                        ? { background: 'var(--accent-emerald-dim)', color: 'var(--accent-emerald)' }
+                        : { background: 'var(--accent-rose-dim)', color: 'var(--accent-rose)' }}>
+                  {exitOk ? <><CheckCircle2 className="w-2.5 h-2.5" /> Done</> : <><AlertTriangle className="w-2.5 h-2.5" /> Failed</>}
+                </span>
               )}
             </div>
-            <p className="text-xs text-gray-400 mt-1">{task.description}</p>
+            <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>{task.description}</p>
           </div>
         </div>
 
         {/* Options */}
-        <div className="flex flex-wrap gap-4 items-center">
+        <div className="flex flex-wrap gap-3 items-center">
           {/* Dry-run toggle */}
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <div
-              onClick={() => setDryRun((v) => !v)}
-              className={cn(
-                'w-9 h-5 rounded-full transition-colors relative',
-                dryRun ? 'bg-amber-500' : 'bg-gray-700'
-              )}
+              onClick={() => setDryRun(v => !v)}
+              className="w-9 h-5 rounded-full relative transition-colors duration-200 cursor-pointer"
+              style={{ background: dryRun ? 'var(--accent-amber)' : 'var(--surface-2)' }}
             >
-              <div className={cn(
-                'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow',
-                dryRun ? 'translate-x-4' : 'translate-x-0.5'
-              )} />
+              <div
+                className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 shadow"
+                style={{ transform: dryRun ? 'translateX(16px)' : 'translateX(2px)' }}
+              />
             </div>
-            <span className="text-xs text-gray-400">Preview only (no changes)</span>
+            <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>Preview only (no changes)</span>
           </label>
 
-          {/* Backfill-only: pass selection */}
+          {/* Pass selection for backfill tasks */}
           {task.passes && (
             <div className="flex flex-wrap gap-1.5">
-              {task.passes.map((p) => (
+              {task.passes.map(p => (
                 <button
                   key={p.id}
                   onClick={() => togglePass(p.id)}
-                  className={cn(
-                    'px-2 py-0.5 rounded text-[11px] border transition-all',
-                    passes.includes(p.id)
-                      ? 'border-amber-500 bg-amber-500/15 text-amber-300'
-                      : 'border-gray-700 text-gray-500 hover:border-gray-500'
-                  )}
                   title={p.label}
+                  className="px-2 py-0.5 rounded-lg text-11 transition-all duration-150 cursor-pointer focus-ring"
+                  style={passes.includes(p.id)
+                    ? { border: `1px solid ${task.accent}`, background: task.dim, color: task.accent }
+                    : { border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', background: 'transparent' }
+                  }
                 >
                   Step {p.id}
                 </button>
@@ -188,14 +193,19 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
             </div>
           )}
 
-          {/* Backfill-only: limit */}
+          {/* Limit input */}
           {(task.passes || task.hasLimit) && (
             <input
               type="number"
               value={limit}
-              onChange={(e) => setLimit(e.target.value)}
+              onChange={e => setLimit(e.target.value)}
               placeholder="Limit (0=all)"
-              className="w-28 h-7 px-2 text-xs rounded-lg bg-white/5 border border-gray-700 text-gray-300 placeholder:text-gray-600 focus:outline-none focus:border-amber-500"
+              className="w-28 h-7 px-2 text-11 rounded-lg focus-ring"
+              style={{
+                background: 'var(--surface-1)',
+                border: '1px solid var(--border-default)',
+                color: 'var(--text-secondary)',
+              }}
             />
           )}
         </div>
@@ -204,19 +214,13 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
         <Button
           onClick={() => onRun(task.id, { dry_run: dryRun, passes, limit: Math.max(0, parseInt(limit) || 0) })}
           disabled={running || (task.passes && passes.length === 0)}
-          className={cn('w-full', c.btn, 'text-white disabled:opacity-40')}
+          className="w-full"
           size="sm"
         >
-          {isMe && running ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Running…
-            </>
+          {isRunningMe ? (
+            <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Running…</>
           ) : (
-            <>
-              <Play className="w-4 h-4 mr-2" />
-              {dryRun ? 'Preview (dry run)' : 'Run now'}
-            </>
+            <><Play className="w-3.5 h-3.5" /> {dryRun ? 'Preview (dry run)' : 'Run now'}</>
           )}
         </Button>
 
@@ -228,25 +232,29 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
               transition={{ duration: 0.2 }}
+              className="overflow-hidden"
             >
-              <div className="border border-gray-700/60 rounded-lg overflow-hidden">
+              <div className="rounded-xl overflow-hidden"
+                   style={{ border: '1px solid var(--border-subtle)' }}>
                 <button
-                  onClick={() => setExpanded((v) => !v)}
-                  className="w-full flex items-center justify-between px-3 py-2 bg-gray-900/60 hover:bg-gray-800/60 transition-colors"
+                  onClick={() => setExpanded(v => !v)}
+                  className="w-full flex items-center justify-between px-3 py-2 transition-colors duration-150 cursor-pointer focus-ring"
+                  style={{ background: 'var(--surface-1)' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-1)'}
                 >
-                  <span className="text-xs text-gray-400 font-medium">
+                  <span className="text-11 font-medium" style={{ color: 'var(--text-tertiary)' }}>
                     Output log ({myLogs.length} lines)
                   </span>
                   <div className="flex items-center gap-2">
                     {isDone && (
                       exitOk
-                        ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        : <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                        ? <CheckCircle2 className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
+                        : <AlertTriangle className="w-3.5 h-3.5" style={{ color: 'var(--accent-rose)' }} />
                     )}
-                    {expanded
-                      ? <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
-                      : <ChevronRight className="w-3.5 h-3.5 text-gray-500" />
-                    }
+                    <motion.div animate={{ rotate: expanded ? 90 : 0 }} transition={{ duration: 0.15 }}>
+                      <ChevronRight className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+                    </motion.div>
                   </div>
                 </button>
                 <AnimatePresence>
@@ -256,18 +264,20 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
                       animate={{ height: 'auto' }}
                       exit={{ height: 0 }}
                       transition={{ duration: 0.15 }}
+                      className="overflow-hidden"
                     >
                       <div
                         ref={logRef}
-                        className="max-h-60 overflow-y-auto bg-gray-950/80 p-3 space-y-0.5"
+                        className="max-h-60 overflow-y-auto scrollbar-thin p-3 space-y-0.5"
+                        style={{ background: 'var(--void)' }}
                       >
                         {myLogs.map((entry, i) => (
                           <LogLine key={i} line={entry.line} />
                         ))}
-                        {isMe && running && (
+                        {isRunningMe && (
                           <div className="flex items-center gap-1.5 pt-1">
-                            <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
-                            <span className="text-xs text-blue-400">Running…</span>
+                            <Loader2 className="w-3 h-3 animate-spin" style={{ color: 'var(--accent-cyan)' }} />
+                            <span className="text-11" style={{ color: 'var(--accent-cyan)' }}>Running…</span>
                           </div>
                         )}
                       </div>
@@ -279,7 +289,7 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
           )}
         </AnimatePresence>
       </div>
-    </Card>
+    </motion.div>
   );
 }
 
@@ -287,15 +297,11 @@ export default function MaintenancePage() {
   const { maintenanceLogs, maintenanceRunning, startMaintenance, stopMaintenance, clearMaintenanceLogs } = useSocket();
   const [activeTask, setActiveTask] = useState(null);
   const [error, setError] = useState('');
-  const [cacheClearState, setCacheClearState] = useState('idle'); // idle | loading | done | error
+  const [cacheClearState, setCacheClearState] = useState('idle');
 
-  // Sync running state from server on mount (catches tasks started outside the UI)
-  // NOTE: don't call startMaintenance here — that wipes logs. Just set state.
   useEffect(() => {
-    api.getMaintenanceStatus().then((s) => {
-      if (s?.running && s?.task) {
-        setActiveTask(s.task);
-      }
+    api.getMaintenanceStatus().then(s => {
+      if (s?.running && s?.task) setActiveTask(s.task);
     }).catch(() => {});
   }, []);
 
@@ -331,30 +337,32 @@ export default function MaintenancePage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6 pb-10">
+    <div className="max-w-3xl mx-auto space-y-5 pb-10">
+
       {/* Header */}
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        className="space-y-1"
+        transition={ease}
       >
-        <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
+        <h1 className="font-display text-22 font-bold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
           Maintenance
         </h1>
-        <p className="text-gray-400">Fix and improve your music library — run these occasionally to keep everything tidy</p>
+        <p className="text-12 mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+          Fix and improve your music library — run these occasionally to keep everything tidy
+        </p>
       </motion.div>
 
       {/* Running notice */}
       <AnimatePresence>
         {maintenanceRunning && (
           <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-500/10 border border-blue-500/20"
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl"
+            style={{ background: 'var(--accent-cyan-dim)', border: '1px solid rgba(6,182,212,0.2)' }}
           >
-            <Loader2 className="w-4 h-4 text-blue-400 animate-spin flex-shrink-0" />
-            <span className="text-sm text-blue-300">
+            <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: 'var(--accent-cyan)' }} />
+            <span className="text-13" style={{ color: 'var(--accent-cyan)' }}>
               Task running — output is streaming below
             </span>
           </motion.div>
@@ -365,25 +373,24 @@ export default function MaintenancePage() {
       <AnimatePresence>
         {error && (
           <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20"
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl"
+            style={{ background: 'var(--accent-rose-dim)', border: '1px solid rgba(244,63,94,0.2)' }}
           >
-            <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
-            <span className="text-sm text-red-300">{error}</span>
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-rose)' }} />
+            <span className="text-13" style={{ color: 'var(--text-secondary)' }}>{error}</span>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Task cards */}
-      <div className="space-y-4">
+      <div className="space-y-3">
         {TASKS.map((task, idx) => (
           <motion.div
             key={task.id}
-            initial={{ opacity: 0, y: 15 }}
+            initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: idx * 0.08 }}
+            transition={{ ...ease, delay: idx * 0.07 }}
           >
             <TaskCard
               task={task}
@@ -398,42 +405,47 @@ export default function MaintenancePage() {
 
       {/* Quick Actions */}
       <motion.div
-        initial={{ opacity: 0, y: 15 }}
+        initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.24 }}
+        transition={{ ...ease, delay: 0.28 }}
+        className="rounded-xl p-5"
+        style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
       >
-        <Card className="border border-gray-700/50 bg-white/5 p-5">
-          <h3 className="font-semibold text-gray-200 mb-1">Quick Actions</h3>
-          <p className="text-xs text-gray-500 mb-4">One-click utilities that take effect immediately.</p>
-          <div className="flex flex-wrap gap-3">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={cacheClearState === 'loading'}
-              onClick={handleClearGenreCache}
-              className={cn(
-                'border-gray-700 text-gray-300 hover:bg-white/5',
-                cacheClearState === 'done' && 'border-emerald-500/50 text-emerald-400',
-                cacheClearState === 'error' && 'border-red-500/50 text-red-400',
-              )}
-            >
-              {cacheClearState === 'loading' ? (
-                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-              )}
-              {cacheClearState === 'done' ? 'Reset ✓' : cacheClearState === 'error' ? 'Failed ✗' : 'Reset Genre Memory'}
-            </Button>
-          </div>
-          <p className="text-xs text-gray-600 mt-3">
-            Use this if a track keeps going to the wrong folder — it clears the app's remembered genre guesses so they're looked up fresh next time.
-          </p>
-        </Card>
+        <h3 className="text-14 font-semibold mb-0.5" style={{ color: 'var(--text-primary)' }}>Quick Actions</h3>
+        <p className="text-11 mb-4" style={{ color: 'var(--text-muted)' }}>One-click utilities that take effect immediately.</p>
+        <div className="flex flex-wrap gap-3">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={cacheClearState === 'loading'}
+            onClick={handleClearGenreCache}
+            style={cacheClearState === 'done'
+              ? { borderColor: 'var(--accent-emerald)', color: 'var(--accent-emerald)' }
+              : cacheClearState === 'error'
+                ? { borderColor: 'var(--accent-rose)', color: 'var(--accent-rose)' }
+                : {}
+            }
+          >
+            {cacheClearState === 'loading'
+              ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+            }
+            {cacheClearState === 'done'
+              ? 'Reset ✓'
+              : cacheClearState === 'error'
+                ? 'Failed ✗'
+                : 'Reset Genre Memory'}
+          </Button>
+        </div>
+        <p className="text-11 mt-3" style={{ color: 'var(--text-muted)' }}>
+          Use this if a track keeps going to the wrong folder — it clears the app's remembered genre guesses so they're looked up fresh next time.
+        </p>
       </motion.div>
 
       {/* Tip */}
-      <p className="text-xs text-gray-600 text-center">
-        For best results, run in order: <strong className="text-gray-500">Re-sort → Fix Library Scan → Re-classify Genres</strong>.
+      <p className="text-11 text-center" style={{ color: 'var(--text-muted)' }}>
+        For best results, run in order:{' '}
+        <strong style={{ color: 'var(--text-tertiary)' }}>Re-sort → Fix Library Scan → Re-classify Genres</strong>.
         All tasks are safe to run multiple times.
       </p>
     </div>

@@ -1,818 +1,693 @@
-// ANALYTICS — Complete Analytics Dashboard page
-import { useEffect, useState, useCallback } from 'react'; // ANALYTICS
-import { motion } from 'framer-motion'; // ANALYTICS
-import { // ANALYTICS
-  BarChart3, // ANALYTICS
-  Download, // ANALYTICS
-  CheckCircle2, // ANALYTICS
-  HardDrive, // ANALYTICS
-  Users, // ANALYTICS
-  XCircle, // ANALYTICS
-  RotateCw, // ANALYTICS
-  Loader2, // ANALYTICS
-  TrendingUp, // ANALYTICS
-  Music, // ANALYTICS
-  Database, // ANALYTICS
-  Zap, // ANALYTICS
-  AlertTriangle, // ANALYTICS
-  Calendar, // ANALYTICS
-  Star, // ANALYTICS
-} from 'lucide-react'; // ANALYTICS
-import { // ANALYTICS
-  LineChart, // ANALYTICS
-  Line, // ANALYTICS
-  BarChart, // ANALYTICS
-  Bar, // ANALYTICS
-  PieChart, // ANALYTICS
-  Pie, // ANALYTICS
-  Cell, // ANALYTICS
-  XAxis, // ANALYTICS
-  YAxis, // ANALYTICS
-  CartesianGrid, // ANALYTICS
-  Tooltip, // ANALYTICS
-  ResponsiveContainer, // ANALYTICS
-  Legend, // ANALYTICS
-} from 'recharts'; // ANALYTICS
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'; // ANALYTICS
-import { Button } from '@/components/ui/button'; // ANALYTICS
-import { Badge } from '@/components/ui/badge'; // ANALYTICS
-import { ScrollArea } from '@/components/ui/scroll-area'; // ANALYTICS
-import { useToast } from '@/components/ui/toast'; // ANALYTICS
-import { api } from '@/services/api'; // ANALYTICS
-import { cn } from '@/lib/utils'; // ANALYTICS
+import { useEffect, useState, useCallback } from 'react';
+import { motion } from 'framer-motion';
+import {
+  BarChart3, Download, CheckCircle2, HardDrive, Users,
+  XCircle, RotateCw, Loader2, TrendingUp, Music, Database,
+  Zap, AlertTriangle, Calendar, Star,
+} from 'lucide-react';
+import {
+  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Button } from '@/components/ui/button';
+import { useToast } from '@/components/ui/toast';
+import { api } from '@/services/api';
+import { ease } from '@/lib/motion';
 
-// ANALYTICS — Skeleton loader component
-function Skeleton({ className }) { // ANALYTICS
-  return ( // ANALYTICS
-    <div // ANALYTICS
-      className={cn( // ANALYTICS
-        'animate-pulse rounded-xl bg-surface-light/50', // ANALYTICS
-        className // ANALYTICS
-      )} // ANALYTICS
-    /> // ANALYTICS
-  ); // ANALYTICS
-} // ANALYTICS
+// Chart color palette using token hex values
+const CHART = {
+  emerald: '#10B981',
+  violet:  '#8B5CF6',
+  cyan:    '#06B6D4',
+  amber:   '#F59E0B',
+  rose:    '#F43F5E',
+  slate:   '#64748B',
+  grid:    '#17171F',
+  axis:    '#2D2D3A',
+  tick:    '#555566',
+  tick2:   '#888899',
+};
 
-// ANALYTICS — Custom tooltip for recharts
-function CustomTooltip({ active, payload, label }) { // ANALYTICS
-  if (!active || !payload?.length) return null; // ANALYTICS
-  return ( // ANALYTICS
-    <div className="rounded-lg border border-border bg-surface p-3 shadow-xl"> {/* ANALYTICS */}
-      <p className="text-xs font-medium text-gray-300 mb-1">{label}</p> {/* ANALYTICS */}
-      {payload.map((entry, i) => ( // ANALYTICS
-        <p key={i} className="text-xs" style={{ color: entry.color }}> {/* ANALYTICS */}
-          {entry.name}: <span className="font-mono font-bold">{entry.value}</span> {/* ANALYTICS */}
-        </p> // ANALYTICS
-      ))} {/* ANALYTICS */}
-    </div> // ANALYTICS
-  ); // ANALYTICS
-} // ANALYTICS
+const PIE_COLORS = [CHART.emerald, CHART.cyan, CHART.slate, CHART.amber, CHART.rose, CHART.violet];
 
-// ANALYTICS — Stat card for the overview row
-function StatCard({ icon: Icon, label, value, color, bg, loading }) { // ANALYTICS
-  return ( // ANALYTICS
-    <motion.div // ANALYTICS
-      initial={{ opacity: 0, y: 20 }} // ANALYTICS
-      animate={{ opacity: 1, y: 0 }} // ANALYTICS
-    > {/* ANALYTICS */}
-      <Card className="relative overflow-hidden"> {/* ANALYTICS */}
-        <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent" /> {/* ANALYTICS */}
-        <CardContent className="p-5"> {/* ANALYTICS */}
-          <div className="flex items-center gap-4"> {/* ANALYTICS */}
-            <div className={cn('p-2.5 rounded-xl', bg)}> {/* ANALYTICS */}
-              <Icon className={cn('w-5 h-5', color)} /> {/* ANALYTICS */}
-            </div> {/* ANALYTICS */}
-            <div className="min-w-0"> {/* ANALYTICS */}
-              <p className="text-xs text-gray-500 mb-0.5">{label}</p> {/* ANALYTICS */}
-              {loading ? ( // ANALYTICS
-                <Skeleton className="h-7 w-16" /> // ANALYTICS
-              ) : ( // ANALYTICS
-                <p className="text-2xl font-bold font-mono tracking-tight">{value}</p> // ANALYTICS
-              )} {/* ANALYTICS */}
-            </div> {/* ANALYTICS */}
-          </div> {/* ANALYTICS */}
-        </CardContent> {/* ANALYTICS */}
-      </Card> {/* ANALYTICS */}
-    </motion.div> // ANALYTICS
-  ); // ANALYTICS
-} // ANALYTICS
+const PLATFORM_COLORS = {
+  youtube:    CHART.emerald,
+  soundcloud: CHART.cyan,
+  unknown:    CHART.slate,
+};
 
-// ANALYTICS — Pie chart colors matching theme
-const PIE_COLORS = ['#22c55e', '#3b82f6', '#6b7280', '#f59e0b', '#ef4444', '#a855f7']; // ANALYTICS
+const ERROR_TYPE_COLORS = {
+  network:          CHART.cyan,
+  metadata_missing: CHART.amber,
+  format_invalid:   CHART.rose,
+  rate_limit:       CHART.violet,
+};
 
-// ANALYTICS — Source platform color map
-const PLATFORM_COLORS = { // ANALYTICS
-  youtube: '#22c55e', // ANALYTICS
-  soundcloud: '#3b82f6', // ANALYTICS
-  unknown: '#6b7280', // ANALYTICS
-}; // ANALYTICS
+function Skeleton({ className = '' }) {
+  return <div className={`shimmer rounded-xl ${className}`} />;
+}
 
-export default function Analytics() { // ANALYTICS
-  const { addToast } = useToast(); // ANALYTICS
+function CustomTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-xl p-3 shadow-xl"
+         style={{ background: 'var(--surface-2)', border: '1px solid var(--border-default)' }}>
+      <p className="text-11 font-medium mb-1" style={{ color: 'var(--text-tertiary)' }}>{label}</p>
+      {payload.map((entry, i) => (
+        <p key={i} className="text-11" style={{ color: entry.color }}>
+          {entry.name}: <span className="font-mono font-bold">{entry.value}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
 
-  // ANALYTICS — State for all data sections
-  const [overview, setOverview] = useState(null); // ANALYTICS
-  const [perDay, setPerDay] = useState([]); // ANALYTICS
-  const [topArtists, setTopArtists] = useState([]); // ANALYTICS
-  const [sourceBreakdown, setSourceBreakdown] = useState([]); // ANALYTICS
-  const [taggingBreakdown, setTaggingBreakdown] = useState([]); // ANALYTICS
-  const [recentDownloads, setRecentDownloads] = useState([]); // ANALYTICS
-  const [failedDownloads, setFailedDownloads] = useState([]); // ANALYTICS
-  const [cacheAnalytics, setCacheAnalytics] = useState(null); // ANALYTICS
-  const [failureSummary, setFailureSummary] = useState(null); // ANALYTICS
-  const [weeklyStats, setWeeklyStats] = useState(null); // ANALYTICS
-  const [dayRange, setDayRange] = useState(30); // ANALYTICS
-  const [loading, setLoading] = useState(true); // ANALYTICS
-  const [fetchError, setFetchError] = useState(false); // ANALYTICS
-  const [retrying, setRetrying] = useState({}); // ANALYTICS
+function StatCard({ icon: Icon, label, value, accent, dim, loading }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={ease}
+      className="rounded-xl p-4"
+      style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+    >
+      <div className="w-8 h-8 rounded-lg flex items-center justify-center mb-3"
+           style={{ background: dim }}>
+        <Icon className="w-4 h-4" style={{ color: accent }} />
+      </div>
+      {loading ? (
+        <Skeleton className="h-9 w-20 mb-1" />
+      ) : (
+        <p className="font-display text-36 font-bold tabular-nums leading-none mb-1"
+           style={{ color: accent, letterSpacing: '-0.03em' }}>
+          {value}
+        </p>
+      )}
+      <p className="text-11 font-medium" style={{ color: 'var(--text-tertiary)' }}>{label}</p>
+    </motion.div>
+  );
+}
 
-  // ANALYTICS — Fetch all analytics data
-  const fetchAll = useCallback(async () => { // ANALYTICS
-    setFetchError(false); // ANALYTICS
-    try { // ANALYTICS
-      const [ov, pd, ta, sb, tb, rd, fd, ca, fs, ws] = await Promise.all([ // ANALYTICS
-        api.getAnalyticsOverview(), // ANALYTICS
-        api.getAnalyticsDownloadsPerDay(dayRange), // ANALYTICS
-        api.getAnalyticsTopArtists(), // ANALYTICS
-        api.getAnalyticsSourceBreakdown(), // ANALYTICS
-        api.getAnalyticsTaggingBreakdown(), // ANALYTICS
-        api.getAnalyticsRecent(), // ANALYTICS
-        api.getAnalyticsFailed(), // ANALYTICS
-        api.getCacheAnalytics(), // ANALYTICS
-        api.getTaggingFailuresSummary(), // ANALYTICS
-        api.getDownloadHistoryStats(), // ANALYTICS
-      ]); // ANALYTICS
-      setOverview(ov); // ANALYTICS
-      setPerDay(pd); // ANALYTICS
-      setTopArtists(ta); // ANALYTICS
-      setSourceBreakdown(sb); // ANALYTICS
-      setTaggingBreakdown(tb); // ANALYTICS
-      setRecentDownloads(rd); // ANALYTICS
-      setFailedDownloads(fd); // ANALYTICS
-      setCacheAnalytics(ca); // ANALYTICS
-      setFailureSummary(fs); // ANALYTICS
-      setWeeklyStats(ws); // ANALYTICS
-    } catch { // ANALYTICS
-      setFetchError(true); // ANALYTICS
-    } finally { // ANALYTICS
-      setLoading(false); // ANALYTICS
-    } // ANALYTICS
-  }, [dayRange]); // ANALYTICS
+function ChartCard({ title, icon: Icon, accent, children, action }) {
+  return (
+    <div className="rounded-xl overflow-hidden"
+         style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+      <div className="flex items-center justify-between px-5 py-4"
+           style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+        <div className="flex items-center gap-2">
+          {Icon && <Icon className="w-4 h-4" style={{ color: accent || 'var(--accent-violet)' }} />}
+          <h3 className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</h3>
+        </div>
+        {action}
+      </div>
+      <div className="p-5">{children}</div>
+    </div>
+  );
+}
 
-  // ANALYTICS — Initial load + auto refresh every 60s
-  useEffect(() => { // ANALYTICS
-    fetchAll(); // ANALYTICS
-    const interval = setInterval(fetchAll, 60000); // ANALYTICS
-    return () => clearInterval(interval); // ANALYTICS
-  }, [fetchAll]); // ANALYTICS
+function EmptyChart({ icon: Icon = BarChart3, message }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-56">
+      <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3"
+           style={{ background: 'var(--surface-1)' }}>
+        <Icon className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+      </div>
+      <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>{message}</p>
+    </div>
+  );
+}
 
-  // ANALYTICS — Re-fetch when dayRange changes
-  useEffect(() => { // ANALYTICS
-    api.getAnalyticsDownloadsPerDay(dayRange).then(setPerDay).catch(() => {}); // ANALYTICS
-  }, [dayRange]); // ANALYTICS
+export default function Analytics() {
+  const { addToast } = useToast();
 
-  // ANALYTICS — Retry a failed download
-  async function handleRetry(trackId, idx) { // ANALYTICS
-    setRetrying((prev) => ({ ...prev, [idx]: true })); // ANALYTICS
-    try { // ANALYTICS
-      await api.retryDownload(trackId); // ANALYTICS
-      addToast({ type: 'success', title: 'Retry Queued', description: 'Track re-queued for download' }); // ANALYTICS
-      setFailedDownloads((prev) => prev.filter((_, i) => i !== idx)); // ANALYTICS
-    } catch { // ANALYTICS
-      addToast({ type: 'error', title: 'Retry Failed', description: 'Could not re-queue the track' }); // ANALYTICS
-    } finally { // ANALYTICS
-      setRetrying((prev) => ({ ...prev, [idx]: false })); // ANALYTICS
-    } // ANALYTICS
-  } // ANALYTICS
+  const [overview, setOverview] = useState(null);
+  const [perDay, setPerDay] = useState([]);
+  const [topArtists, setTopArtists] = useState([]);
+  const [sourceBreakdown, setSourceBreakdown] = useState([]);
+  const [taggingBreakdown, setTaggingBreakdown] = useState([]);
+  const [recentDownloads, setRecentDownloads] = useState([]);
+  const [failedDownloads, setFailedDownloads] = useState([]);
+  const [cacheAnalytics, setCacheAnalytics] = useState(null);
+  const [failureSummary, setFailureSummary] = useState(null);
+  const [weeklyStats, setWeeklyStats] = useState(null);
+  const [dayRange, setDayRange] = useState(30);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
+  const [retrying, setRetrying] = useState({});
 
-  // ANALYTICS — Format relative timestamp
-  function formatTime(isoStr) { // ANALYTICS
-    if (!isoStr) return '—'; // ANALYTICS
-    try { // ANALYTICS
-      const d = new Date(isoStr); // ANALYTICS
-      const now = new Date(); // ANALYTICS
-      const diff = Math.floor((now - d) / 1000); // ANALYTICS
-      if (diff < 60) return `${diff}s ago`; // ANALYTICS
-      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`; // ANALYTICS
-      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`; // ANALYTICS
-      return d.toLocaleDateString(); // ANALYTICS
-    } catch { // ANALYTICS
-      return isoStr; // ANALYTICS
-    } // ANALYTICS
-  } // ANALYTICS
+  const fetchAll = useCallback(async () => {
+    setFetchError(false);
+    try {
+      const [ov, pd, ta, sb, tb, rd, fd, ca, fs, ws] = await Promise.all([
+        api.getAnalyticsOverview(),
+        api.getAnalyticsDownloadsPerDay(dayRange),
+        api.getAnalyticsTopArtists(),
+        api.getAnalyticsSourceBreakdown(),
+        api.getAnalyticsTaggingBreakdown(),
+        api.getAnalyticsRecent(),
+        api.getAnalyticsFailed(),
+        api.getCacheAnalytics(),
+        api.getTaggingFailuresSummary(),
+        api.getDownloadHistoryStats(),
+      ]);
+      setOverview(ov);
+      setPerDay(pd);
+      setTopArtists(ta);
+      setSourceBreakdown(sb);
+      setTaggingBreakdown(tb);
+      setRecentDownloads(rd);
+      setFailedDownloads(fd);
+      setCacheAnalytics(ca);
+      setFailureSummary(fs);
+      setWeeklyStats(ws);
+    } catch {
+      setFetchError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [dayRange]);
 
-  return ( // ANALYTICS
-    <div className="max-w-5xl mx-auto space-y-6"> {/* ANALYTICS */}
-      {/* ANALYTICS — Page header */}
-      <motion.div // ANALYTICS
-        initial={{ opacity: 0, y: 20 }} // ANALYTICS
-        animate={{ opacity: 1, y: 0 }} // ANALYTICS
-        className="flex items-center justify-between" // ANALYTICS
-      > {/* ANALYTICS */}
-        <div className="flex items-center gap-3"> {/* ANALYTICS */}
-          <div className="p-2 rounded-xl bg-primary/10"> {/* ANALYTICS */}
-            <BarChart3 className="w-5 h-5 text-primary" /> {/* ANALYTICS */}
-          </div> {/* ANALYTICS */}
-          <div> {/* ANALYTICS */}
-            <h1 className="text-xl font-semibold">Analytics</h1> {/* ANALYTICS */}
-            <p className="text-sm text-gray-500">Library statistics & insights</p> {/* ANALYTICS */}
-          </div> {/* ANALYTICS */}
-        </div> {/* ANALYTICS */}
-        <Button variant="ghost" size="sm" onClick={() => { setLoading(true); setFetchError(false); fetchAll(); }}> {/* ANALYTICS */}
-          <RotateCw className={cn('w-4 h-4', loading && 'animate-spin')} /> {/* ANALYTICS */}
-          Refresh {/* ANALYTICS */}
-        </Button> {/* ANALYTICS */}
-      </motion.div> {/* ANALYTICS */}
+  useEffect(() => {
+    fetchAll();
+    const interval = setInterval(fetchAll, 60000);
+    return () => clearInterval(interval);
+  }, [fetchAll]);
 
-      {/* ANALYTICS — Error banner */}
+  useEffect(() => {
+    api.getAnalyticsDownloadsPerDay(dayRange).then(setPerDay).catch(() => {});
+  }, [dayRange]);
+
+  async function handleRetry(trackId, idx) {
+    setRetrying(prev => ({ ...prev, [idx]: true }));
+    try {
+      await api.retryDownload(trackId);
+      addToast({ type: 'success', title: 'Retry Queued', description: 'Track re-queued for download' });
+      setFailedDownloads(prev => prev.filter((_, i) => i !== idx));
+    } catch {
+      addToast({ type: 'error', title: 'Retry Failed', description: 'Could not re-queue the track' });
+    } finally {
+      setRetrying(prev => ({ ...prev, [idx]: false }));
+    }
+  }
+
+  function formatTime(isoStr) {
+    if (!isoStr) return '—';
+    try {
+      const d = new Date(isoStr);
+      const diff = Math.floor((Date.now() - d) / 1000);
+      if (diff < 60) return `${diff}s ago`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+      return d.toLocaleDateString();
+    } catch { return isoStr; }
+  }
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-5 pb-10">
+
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={ease}
+        className="flex items-center justify-between"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center"
+               style={{ background: 'var(--accent-violet-dim)' }}>
+            <BarChart3 className="w-4.5 h-4.5" style={{ color: 'var(--accent-violet)' }} />
+          </div>
+          <div>
+            <h1 className="font-display text-22 font-bold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+              Analytics
+            </h1>
+            <p className="text-11 mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+              Library statistics & insights
+            </p>
+          </div>
+        </div>
+        <Button variant="ghost" size="sm"
+                onClick={() => { setLoading(true); setFetchError(false); fetchAll(); }}>
+          <RotateCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
+      </motion.div>
+
+      {/* Error banner */}
       {fetchError && !loading && (
         <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20"
+          initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+          className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl"
+          style={{ background: 'var(--accent-rose-dim)', border: '1px solid rgba(244,63,94,0.2)' }}
         >
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
-            <span className="text-sm text-red-300">Failed to load analytics — backend may be unreachable.</span>
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-rose)' }} />
+            <span className="text-13" style={{ color: 'var(--text-secondary)' }}>
+              Failed to load analytics — backend may be unreachable.
+            </span>
           </div>
-          <Button size="sm" variant="ghost" onClick={() => { setLoading(true); setFetchError(false); fetchAll(); }} className="text-red-400 hover:text-red-300 shrink-0">
+          <Button size="sm" variant="ghost"
+                  onClick={() => { setLoading(true); setFetchError(false); fetchAll(); }}
+                  style={{ color: 'var(--accent-rose)', flexShrink: 0 }}>
             <RotateCw className="w-3.5 h-3.5 mr-1" /> Retry
           </Button>
         </motion.div>
       )}
 
-      {/* ANALYTICS — Row 1: Overview stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3"> {/* ANALYTICS */}
-        <StatCard // ANALYTICS
-          icon={Download} // ANALYTICS
-          label="Total Downloads" // ANALYTICS
-          value={overview?.total_downloads ?? '—'} // ANALYTICS
-          color="text-emerald-400" // ANALYTICS
-          bg="bg-emerald-400/10" // ANALYTICS
-          loading={loading} // ANALYTICS
-        /> {/* ANALYTICS */}
-        <StatCard // ANALYTICS
-          icon={TrendingUp} // ANALYTICS
-          label="Success Rate" // ANALYTICS
-          value={overview ? `${overview?.success_rate ?? '—'}%` : '—'} // ANALYTICS
-          color="text-blue-400" // ANALYTICS
-          bg="bg-blue-400/10" // ANALYTICS
-          loading={loading} // ANALYTICS
-        /> {/* ANALYTICS */}
-        <StatCard // ANALYTICS
-          icon={HardDrive} // ANALYTICS
-          label="MB Cached" // ANALYTICS
-          value={overview?.musicbrainz_cached ?? '—'} // ANALYTICS
-          color="text-yellow-400" // ANALYTICS
-          bg="bg-yellow-400/10" // ANALYTICS
-          loading={loading} // ANALYTICS
-        /> {/* ANALYTICS */}
-        <StatCard // ANALYTICS
-          icon={Users} // ANALYTICS
-          label="Total Artists" // ANALYTICS
-          value={overview?.total_artists ?? '—'} // ANALYTICS
-          color="text-purple-400" // ANALYTICS
-          bg="bg-purple-400/10" // ANALYTICS
-          loading={loading} // ANALYTICS
-        /> {/* ANALYTICS */}
-      </div> {/* ANALYTICS */}
-
-      {/* ANALYTICS — Row 2: Downloads per day chart */}
-      <Card> {/* ANALYTICS */}
-        <CardHeader> {/* ANALYTICS */}
-          <div className="flex items-center justify-between"> {/* ANALYTICS */}
-            <CardTitle className="text-sm font-medium text-gray-300">Downloads Per Day</CardTitle> {/* ANALYTICS */}
-            <div className="flex gap-1 bg-surface-light/50 rounded-lg p-0.5"> {/* ANALYTICS */}
-              {[7, 30, 90].map((d) => ( // ANALYTICS
-                <button // ANALYTICS
-                  key={d} // ANALYTICS
-                  onClick={() => setDayRange(d)} // ANALYTICS
-                  className={cn( // ANALYTICS
-                    'px-2.5 py-1 rounded-md text-xs font-medium transition-all', // ANALYTICS
-                    dayRange === d // ANALYTICS
-                      ? 'bg-primary/15 text-primary' // ANALYTICS
-                      : 'text-gray-500 hover:text-gray-300' // ANALYTICS
-                  )} // ANALYTICS
-                > {/* ANALYTICS */}
-                  {d}d {/* ANALYTICS */}
-                </button> // ANALYTICS
-              ))} {/* ANALYTICS */}
-            </div> {/* ANALYTICS */}
-          </div> {/* ANALYTICS */}
-        </CardHeader> {/* ANALYTICS */}
-        <CardContent> {/* ANALYTICS */}
-          {loading ? ( // ANALYTICS
-            <Skeleton className="h-64 w-full" /> // ANALYTICS
-          ) : perDay.length === 0 ? ( // ANALYTICS
-            <div className="flex flex-col items-center justify-center h-64 text-gray-600"> {/* ANALYTICS */}
-              <BarChart3 className="w-10 h-10 mb-3" /> {/* ANALYTICS */}
-              <p className="text-sm">No download data yet</p> {/* ANALYTICS */}
-            </div> // ANALYTICS
-          ) : ( // ANALYTICS
-            <ResponsiveContainer width="100%" height={260}> {/* ANALYTICS */}
-              <LineChart data={perDay}> {/* ANALYTICS */}
-                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" /> {/* ANALYTICS */}
-                <XAxis // ANALYTICS
-                  dataKey="date" // ANALYTICS
-                  tick={{ fill: '#6b7280', fontSize: 11 }} // ANALYTICS
-                  tickFormatter={(v) => v.slice(5)} // ANALYTICS
-                  stroke="#1f2937" // ANALYTICS
-                /> {/* ANALYTICS */}
-                <YAxis // ANALYTICS
-                  tick={{ fill: '#6b7280', fontSize: 11 }} // ANALYTICS
-                  stroke="#1f2937" // ANALYTICS
-                  allowDecimals={false} // ANALYTICS
-                /> {/* ANALYTICS */}
-                <Tooltip content={<CustomTooltip />} /> {/* ANALYTICS */}
-                <Line // ANALYTICS
-                  type="monotone" // ANALYTICS
-                  dataKey="count" // ANALYTICS
-                  name="Downloads" // ANALYTICS
-                  stroke="#22c55e" // ANALYTICS
-                  strokeWidth={2} // ANALYTICS
-                  dot={{ fill: '#22c55e', r: 3 }} // ANALYTICS
-                  activeDot={{ r: 5, fill: '#22c55e' }} // ANALYTICS
-                /> {/* ANALYTICS */}
-              </LineChart> {/* ANALYTICS */}
-            </ResponsiveContainer> // ANALYTICS
-          )} {/* ANALYTICS */}
-        </CardContent> {/* ANALYTICS */}
-      </Card> {/* ANALYTICS */}
-
-      {/* ANALYTICS — Row 3: Top artists + Source breakdown */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4"> {/* ANALYTICS */}
-        {/* ANALYTICS — Top Artists bar chart */}
-        <Card> {/* ANALYTICS */}
-          <CardHeader> {/* ANALYTICS */}
-            <CardTitle className="text-sm font-medium text-gray-300">Top Artists</CardTitle> {/* ANALYTICS */}
-          </CardHeader> {/* ANALYTICS */}
-          <CardContent> {/* ANALYTICS */}
-            {loading ? ( // ANALYTICS
-              <Skeleton className="h-64 w-full" /> // ANALYTICS
-            ) : topArtists.length === 0 ? ( // ANALYTICS
-              <div className="flex flex-col items-center justify-center h-64 text-gray-600"> {/* ANALYTICS */}
-                <Music className="w-10 h-10 mb-3" /> {/* ANALYTICS */}
-                <p className="text-sm">No artist data yet</p> {/* ANALYTICS */}
-              </div> // ANALYTICS
-            ) : ( // ANALYTICS
-              <ResponsiveContainer width="100%" height={260}> {/* ANALYTICS */}
-                <BarChart data={topArtists} layout="vertical" margin={{ left: 10 }}> {/* ANALYTICS */}
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" horizontal={false} /> {/* ANALYTICS */}
-                  <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 11 }} stroke="#1f2937" allowDecimals={false} /> {/* ANALYTICS */}
-                  <YAxis // ANALYTICS
-                    type="category" // ANALYTICS
-                    dataKey="artist" // ANALYTICS
-                    tick={{ fill: '#9ca3af', fontSize: 11 }} // ANALYTICS
-                    width={100} // ANALYTICS
-                    stroke="#1f2937" // ANALYTICS
-                  /> {/* ANALYTICS */}
-                  <Tooltip content={<CustomTooltip />} /> {/* ANALYTICS */}
-                  <Bar dataKey="count" name="Downloads" fill="#22c55e" radius={[0, 4, 4, 0]} /> {/* ANALYTICS */}
-                </BarChart> {/* ANALYTICS */}
-              </ResponsiveContainer> // ANALYTICS
-            )} {/* ANALYTICS */}
-          </CardContent> {/* ANALYTICS */}
-        </Card> {/* ANALYTICS */}
-
-        {/* ANALYTICS — Source breakdown pie chart */}
-        <Card> {/* ANALYTICS */}
-          <CardHeader> {/* ANALYTICS */}
-            <CardTitle className="text-sm font-medium text-gray-300">Source Breakdown</CardTitle> {/* ANALYTICS */}
-          </CardHeader> {/* ANALYTICS */}
-          <CardContent> {/* ANALYTICS */}
-            {loading ? ( // ANALYTICS
-              <Skeleton className="h-64 w-full" /> // ANALYTICS
-            ) : sourceBreakdown.length === 0 ? ( // ANALYTICS
-              <div className="flex flex-col items-center justify-center h-64 text-gray-600"> {/* ANALYTICS */}
-                <BarChart3 className="w-10 h-10 mb-3" /> {/* ANALYTICS */}
-                <p className="text-sm">No source data yet</p> {/* ANALYTICS */}
-              </div> // ANALYTICS
-            ) : ( // ANALYTICS
-              <div className="flex flex-col items-center"> {/* ANALYTICS */}
-                <ResponsiveContainer width="100%" height={220}> {/* ANALYTICS */}
-                  <PieChart> {/* ANALYTICS */}
-                    <Pie // ANALYTICS
-                      data={sourceBreakdown} // ANALYTICS
-                      dataKey="count" // ANALYTICS
-                      nameKey="platform" // ANALYTICS
-                      cx="50%" // ANALYTICS
-                      cy="50%" // ANALYTICS
-                      outerRadius={80} // ANALYTICS
-                      innerRadius={45} // ANALYTICS
-                      strokeWidth={0} // ANALYTICS
-                      paddingAngle={3} // ANALYTICS
-                    > {/* ANALYTICS */}
-                      {sourceBreakdown.map((entry, i) => ( // ANALYTICS
-                        <Cell // ANALYTICS
-                          key={entry.platform} // ANALYTICS
-                          fill={PLATFORM_COLORS[entry.platform] || PIE_COLORS[i % PIE_COLORS.length]} // ANALYTICS
-                        /> // ANALYTICS
-                      ))} {/* ANALYTICS */}
-                    </Pie> {/* ANALYTICS */}
-                    <Tooltip content={<CustomTooltip />} /> {/* ANALYTICS */}
-                    <Legend // ANALYTICS
-                      formatter={(value) => <span className="text-xs text-gray-400">{value}</span>} // ANALYTICS
-                    /> {/* ANALYTICS */}
-                  </PieChart> {/* ANALYTICS */}
-                </ResponsiveContainer> {/* ANALYTICS */}
-              </div> // ANALYTICS
-            )} {/* ANALYTICS */}
-          </CardContent> {/* ANALYTICS */}
-        </Card> {/* ANALYTICS */}
-      </div> {/* ANALYTICS */}
-
-      {/* ANALYTICS — Row 4: Recent downloads + Failed downloads tables */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4"> {/* ANALYTICS */}
-        {/* ANALYTICS — Recent downloads table */}
-        <Card> {/* ANALYTICS */}
-          <CardHeader> {/* ANALYTICS */}
-            <CardTitle className="text-sm font-medium text-gray-300">Recent Downloads</CardTitle> {/* ANALYTICS */}
-          </CardHeader> {/* ANALYTICS */}
-          <CardContent className="p-0"> {/* ANALYTICS */}
-            <ScrollArea className="max-h-[360px]"> {/* ANALYTICS */}
-              {loading ? ( // ANALYTICS
-                <div className="p-5 space-y-3"> {/* ANALYTICS */}
-                  {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)} {/* ANALYTICS */}
-                </div> // ANALYTICS
-              ) : recentDownloads.length === 0 ? ( // ANALYTICS
-                <div className="flex flex-col items-center justify-center py-12 text-gray-600"> {/* ANALYTICS */}
-                  <Download className="w-8 h-8 mb-2" /> {/* ANALYTICS */}
-                  <p className="text-sm">No downloads yet</p> {/* ANALYTICS */}
-                </div> // ANALYTICS
-              ) : ( // ANALYTICS
-                <table className="w-full text-xs"> {/* ANALYTICS */}
-                  <thead> {/* ANALYTICS */}
-                    <tr className="border-b border-border text-gray-500"> {/* ANALYTICS */}
-                      <th className="text-left px-4 py-2.5 font-medium">Title</th> {/* ANALYTICS */}
-                      <th className="text-left px-4 py-2.5 font-medium">Artist</th> {/* ANALYTICS */}
-                      <th className="text-left px-4 py-2.5 font-medium hidden sm:table-cell">Platform</th> {/* ANALYTICS */}
-                      <th className="text-left px-4 py-2.5 font-medium hidden sm:table-cell">Tagged</th> {/* ANALYTICS */}
-                      <th className="text-right px-4 py-2.5 font-medium">Time</th> {/* ANALYTICS */}
-                    </tr> {/* ANALYTICS */}
-                  </thead> {/* ANALYTICS */}
-                  <tbody className="divide-y divide-border"> {/* ANALYTICS */}
-                    {recentDownloads.map((item, i) => ( // ANALYTICS
-                      <tr key={item._id || i} className="hover:bg-surface-light/30 transition-colors"> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 truncate max-w-[140px] text-gray-200">{item.track_title || '—'}</td> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 truncate max-w-[100px] text-gray-400">{item.artist || '—'}</td> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 hidden sm:table-cell"> {/* ANALYTICS */}
-                          <Badge variant="secondary" className="text-[10px]">{item.source_platform || '—'}</Badge> {/* ANALYTICS */}
-                        </td> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 hidden sm:table-cell"> {/* ANALYTICS */}
-                          {item.tagging_report ? ( // ANALYTICS
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> // ANALYTICS
-                          ) : ( // ANALYTICS
-                            <XCircle className="w-3.5 h-3.5 text-gray-600" /> // ANALYTICS
-                          )} {/* ANALYTICS */}
-                        </td> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 text-right text-gray-500 font-mono whitespace-nowrap"> {/* ANALYTICS */}
-                          {formatTime(item.downloaded_at)} {/* ANALYTICS */}
-                        </td> {/* ANALYTICS */}
-                      </tr> // ANALYTICS
-                    ))} {/* ANALYTICS */}
-                  </tbody> {/* ANALYTICS */}
-                </table> // ANALYTICS
-              )} {/* ANALYTICS */}
-            </ScrollArea> {/* ANALYTICS */}
-          </CardContent> {/* ANALYTICS */}
-        </Card> {/* ANALYTICS */}
-
-        {/* ANALYTICS — Failed downloads table */}
-        <Card> {/* ANALYTICS */}
-          <CardHeader> {/* ANALYTICS */}
-            <div className="flex items-center justify-between"> {/* ANALYTICS */}
-              <CardTitle className="text-sm font-medium text-gray-300">Failed Downloads</CardTitle> {/* ANALYTICS */}
-              {failedDownloads.length > 0 && ( // ANALYTICS
-                <Badge variant="danger" className="text-[10px]">{failedDownloads.length}</Badge> // ANALYTICS
-              )} {/* ANALYTICS */}
-            </div> {/* ANALYTICS */}
-          </CardHeader> {/* ANALYTICS */}
-          <CardContent className="p-0"> {/* ANALYTICS */}
-            <ScrollArea className="max-h-[360px]"> {/* ANALYTICS */}
-              {loading ? ( // ANALYTICS
-                <div className="p-5 space-y-3"> {/* ANALYTICS */}
-                  {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)} {/* ANALYTICS */}
-                </div> // ANALYTICS
-              ) : failedDownloads.length === 0 ? ( // ANALYTICS
-                <div className="flex flex-col items-center justify-center py-12 text-gray-600"> {/* ANALYTICS */}
-                  <CheckCircle2 className="w-8 h-8 mb-2" /> {/* ANALYTICS */}
-                  <p className="text-sm">No failures — great!</p> {/* ANALYTICS */}
-                </div> // ANALYTICS
-              ) : ( // ANALYTICS
-                <table className="w-full text-xs"> {/* ANALYTICS */}
-                  <thead> {/* ANALYTICS */}
-                    <tr className="border-b border-border text-gray-500"> {/* ANALYTICS */}
-                      <th className="text-left px-4 py-2.5 font-medium">Title</th> {/* ANALYTICS */}
-                      <th className="text-left px-4 py-2.5 font-medium">Artist</th> {/* ANALYTICS */}
-                      <th className="text-left px-4 py-2.5 font-medium hidden sm:table-cell">Error</th> {/* ANALYTICS */}
-                      <th className="text-right px-4 py-2.5 font-medium">Time</th> {/* ANALYTICS */}
-                      <th className="text-right px-4 py-2.5 font-medium w-16"></th> {/* ANALYTICS */}
-                    </tr> {/* ANALYTICS */}
-                  </thead> {/* ANALYTICS */}
-                  <tbody className="divide-y divide-border"> {/* ANALYTICS */}
-                    {failedDownloads.map((item, i) => ( // ANALYTICS
-                      <tr key={item._id || i} className="hover:bg-surface-light/30 transition-colors"> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 truncate max-w-[120px] text-gray-200">{item.title || '—'}</td> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 truncate max-w-[80px] text-gray-400">{item.artist || '—'}</td> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 truncate max-w-[140px] text-red-400/70 hidden sm:table-cell">{item.error || '—'}</td> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 text-right text-gray-500 font-mono whitespace-nowrap"> {/* ANALYTICS */}
-                          {formatTime(item.timestamp)} {/* ANALYTICS */}
-                        </td> {/* ANALYTICS */}
-                        <td className="px-4 py-2.5 text-right"> {/* ANALYTICS */}
-                          <Button // ANALYTICS
-                            variant="ghost" // ANALYTICS
-                            size="sm" // ANALYTICS
-                            className="h-6 px-2 text-[10px]" // ANALYTICS
-                            disabled={retrying[i]} // ANALYTICS
-                            onClick={() => handleRetry(item.track_id, i)} // ANALYTICS
-                          > {/* ANALYTICS */}
-                            {retrying[i] ? ( // ANALYTICS
-                              <Loader2 className="w-3 h-3 animate-spin" /> // ANALYTICS
-                            ) : ( // ANALYTICS
-                              <RotateCw className="w-3 h-3" /> // ANALYTICS
-                            )} {/* ANALYTICS */}
-                            Retry {/* ANALYTICS */}
-                          </Button> {/* ANALYTICS */}
-                        </td> {/* ANALYTICS */}
-                      </tr> // ANALYTICS
-                    ))} {/* ANALYTICS */}
-                  </tbody> {/* ANALYTICS */}
-                </table> // ANALYTICS
-              )} {/* ANALYTICS */}
-            </ScrollArea> {/* ANALYTICS */}
-          </CardContent> {/* ANALYTICS */}
-        </Card> {/* ANALYTICS */}
-      </div> {/* ANALYTICS */}
-
-      {/* ANALYTICS — Tagging breakdown summary */}
-      <Card> {/* ANALYTICS */}
-        <CardHeader> {/* ANALYTICS */}
-          <CardTitle className="text-sm font-medium text-gray-300">Tagging Breakdown</CardTitle> {/* ANALYTICS */}
-        </CardHeader> {/* ANALYTICS */}
-        <CardContent> {/* ANALYTICS */}
-          {loading ? ( // ANALYTICS
-            <Skeleton className="h-16 w-full" /> // ANALYTICS
-          ) : ( // ANALYTICS
-            <div className="grid grid-cols-3 gap-4"> {/* ANALYTICS */}
-              {(taggingBreakdown ?? []).map((item) => ( // ANALYTICS
-                <div // ANALYTICS
-                  key={item.source} // ANALYTICS
-                  className="flex flex-col items-center rounded-xl border border-border bg-surface-light/30 p-4" // ANALYTICS
-                > {/* ANALYTICS */}
-                  <span className="text-2xl font-bold font-mono">{item.count}</span> {/* ANALYTICS */}
-                  <span className="text-xs text-gray-500 mt-1">{item.source}</span> {/* ANALYTICS */}
-                </div> // ANALYTICS
-              ))} {/* ANALYTICS */}
-            </div> // ANALYTICS
-          )} {/* ANALYTICS */}
-        </CardContent> {/* ANALYTICS */}
-      </Card> {/* ANALYTICS */}
-
-      {/* ── NEW: Download History Summary ─────────────────────────────── */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-blue-400" />
-            <CardTitle className="text-sm font-medium text-gray-300">This Week</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {loading || !weeklyStats ? (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* Total downloads this week */}
-              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-5">
-                <Download className="w-5 h-5 text-emerald-400 mb-2" />
-                <span className="text-3xl font-bold font-mono text-emerald-400">
-                  {weeklyStats?.total_this_week ?? '—'}
-                </span>
-                <span className="text-xs text-gray-500 mt-1">Downloads</span>
-              </div>
-              {/* Success rate */}
-              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-5">
-                <CheckCircle2 className="w-5 h-5 text-blue-400 mb-2" />
-                <span className="text-3xl font-bold font-mono text-blue-400">
-                  {weeklyStats?.success_rate ?? '—'}%
-                </span>
-                <span className="text-xs text-gray-500 mt-1">Tagged</span>
-              </div>
-              {/* Top 3 artists */}
-              <div className="rounded-xl border border-border bg-surface-light/30 p-4">
-                <div className="flex items-center gap-1.5 mb-3">
-                  <Star className="w-3.5 h-3.5 text-yellow-400" />
-                  <span className="text-xs font-medium text-gray-400">Top Artists</span>
-                </div>
-                {(weeklyStats?.top_artists ?? []).length === 0 ? (
-                  <p className="text-xs text-gray-600 text-center py-2">No data yet</p>
-                ) : (
-                  <ol className="space-y-1.5">
-                    {(weeklyStats?.top_artists ?? []).map((a, i) => (
-                      <li key={a.artist} className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-gray-500 w-4 shrink-0">{i + 1}.</span>
-                        <span className="text-xs text-gray-200 truncate flex-1">{a.artist}</span>
-                        <Badge variant="secondary" className="text-[10px] shrink-0">{a.count}</Badge>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* ── NEW: Cache Analytics ──────────────────────────────────────── */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Database className="w-4 h-4 text-yellow-400" />
-            <CardTitle className="text-sm font-medium text-gray-300">MusicBrainz Cache</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {loading || !cacheAnalytics ? (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {/* Hit rate donut */}
-              <div className="flex flex-col items-center rounded-xl border border-border bg-surface-light/30 p-4">
-                {Number.isFinite(cacheAnalytics.cache_hit_rate) &&
-                cacheAnalytics.cache_hit_rate >= 0 &&
-                cacheAnalytics.cache_hit_rate <= 100 ? (
-                  <div className="relative w-20 h-20">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={[
-                            { value: cacheAnalytics.cache_hit_rate },
-                            { value: 100 - cacheAnalytics.cache_hit_rate },
-                          ]}
-                          cx="50%" cy="50%"
-                          innerRadius={26} outerRadius={36}
-                          startAngle={90} endAngle={-270}
-                          strokeWidth={0}
-                        >
-                          <Cell fill="#f59e0b" />
-                          <Cell fill="#1f2937" />
-                        </Pie>
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <span className="absolute inset-0 flex items-center justify-center text-sm font-bold font-mono text-yellow-400">
-                      {cacheAnalytics.cache_hit_rate}%
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex h-20 w-20 flex-col items-center justify-center rounded-full border border-red-500/40 bg-red-500/10 text-red-400">
-                    <AlertTriangle className="h-5 w-5" />
-                    <span className="mt-1 text-[10px] font-medium leading-tight text-center">
-                      Invalid
-                    </span>
-                  </div>
-                )}
-                <span className="text-xs text-gray-500 mt-2">
-                  {Number.isFinite(cacheAnalytics.cache_hit_rate) &&
-                  cacheAnalytics.cache_hit_rate >= 0 &&
-                  cacheAnalytics.cache_hit_rate <= 100
-                    ? 'Hit Rate'
-                    : 'Invalid Hit Rate'}
-                </span>
-              </div>
-              {/* Cached tracks */}
-              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-4">
-                <Zap className="w-5 h-5 text-yellow-400 mb-2" />
-                <span className="text-2xl font-bold font-mono">{cacheAnalytics.total_cached_tracks}</span>
-                <span className="text-xs text-gray-500 mt-1">Cached Tracks</span>
-              </div>
-              {/* Avg age */}
-              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-4">
-                <HardDrive className="w-5 h-5 text-gray-400 mb-2" />
-                <span className="text-2xl font-bold font-mono">{cacheAnalytics.avg_age_days}d</span>
-                <span className="text-xs text-gray-500 mt-1">Avg Age</span>
-              </div>
-              {/* API calls saved */}
-              <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-light/30 p-4">
-                <TrendingUp className="w-5 h-5 text-emerald-400 mb-2" />
-                <span className="text-2xl font-bold font-mono text-emerald-400">
-                  {cacheAnalytics.api_calls_saved}
-                </span>
-                <span className="text-xs text-gray-500 mt-1">API Calls Saved</span>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* ── NEW: Tagging Failure Summary ──────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Error type breakdown pie */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-400" />
-              <CardTitle className="text-sm font-medium text-gray-300">Failure Types</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {loading || !failureSummary ? (
-              <Skeleton className="h-52 w-full" />
-            ) : failureSummary.by_error_type.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-52 text-gray-600">
-                <CheckCircle2 className="w-8 h-8 mb-2" />
-                <p className="text-sm">No failures recorded</p>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center">
-                <ResponsiveContainer width="100%" height={200}>
-                  <PieChart>
-                    <Pie
-                      data={failureSummary.by_error_type}
-                      dataKey="count"
-                      nameKey="error_type"
-                      cx="50%" cy="50%"
-                      outerRadius={70} innerRadius={38}
-                      strokeWidth={0} paddingAngle={3}
-                    >
-                      {failureSummary.by_error_type.map((entry, i) => (
-                        <Cell
-                          key={entry.error_type}
-                          fill={
-                            { network: '#3b82f6', metadata_missing: '#f59e0b', format_invalid: '#ef4444', rate_limit: '#a855f7' }[entry.error_type]
-                            || PIE_COLORS[i % PIE_COLORS.length]
-                          }
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} />
-                    <Legend formatter={(v) => <span className="text-xs text-gray-400">{v}</span>} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Retry trend + recent failures list */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <RotateCw className="w-4 h-4 text-yellow-400" />
-              <CardTitle className="text-sm font-medium text-gray-300">Retry Trend (7d)</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {loading || !failureSummary ? (
-              <Skeleton className="h-28 w-full" />
-            ) : failureSummary.retry_trend.length === 0 ? (
-              <div className="flex items-center justify-center h-28 text-gray-600 text-sm">
-                No retries in the last 7 days
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={110}>
-                <BarChart data={failureSummary.retry_trend} margin={{ left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                  <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => v.slice(5)} stroke="#1f2937" />
-                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} stroke="#1f2937" allowDecimals={false} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="retries" name="Retries" fill="#f59e0b" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-            {/* Recent failures list */}
-            {failureSummary?.recent_failures?.length > 0 && (
-              <div className="space-y-1.5">
-                <p className="text-xs font-medium text-gray-500 mb-2">Recent</p>
-                {failureSummary.recent_failures.slice(0, 5).map((f, i) => (
-                  <div key={i} className="flex items-center justify-between gap-2 rounded-lg bg-surface-light/30 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="text-xs text-gray-300 truncate">{f.title || '—'}</p>
-                      <p className="text-[10px] text-gray-600 truncate">{f.artist || ''}</p>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Badge
-                        variant="secondary"
-                        className={cn('text-[10px]', {
-                          'text-blue-400': f.error_type === 'network',
-                          'text-yellow-400': f.error_type === 'metadata_missing',
-                          'text-red-400': f.error_type === 'format_invalid',
-                          'text-purple-400': f.error_type === 'rate_limit',
-                        })}
-                      >
-                        {f.error_type || 'unknown'}
-                      </Badge>
-                      <span className="text-[10px] text-gray-600 font-mono">{formatTime(f.timestamp)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {/* KPI strip */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard icon={Download}   label="Total Downloads" value={overview?.total_downloads ?? '—'} accent="var(--accent-emerald)" dim="var(--accent-emerald-dim)" loading={loading} />
+        <StatCard icon={TrendingUp} label="Success Rate"    value={overview ? `${overview?.success_rate ?? '—'}%` : '—'} accent="var(--accent-cyan)" dim="var(--accent-cyan-dim)" loading={loading} />
+        <StatCard icon={HardDrive}  label="MB Cached"       value={overview?.musicbrainz_cached ?? '—'} accent="var(--accent-amber)" dim="var(--accent-amber-dim)" loading={loading} />
+        <StatCard icon={Users}      label="Total Artists"   value={overview?.total_artists ?? '—'} accent="var(--accent-violet)" dim="var(--accent-violet-dim)" loading={loading} />
       </div>
-    </div> // ANALYTICS
-  ); // ANALYTICS
-} // ANALYTICS
+
+      {/* Downloads per day */}
+      <ChartCard
+        title="Downloads Per Day"
+        icon={Download}
+        accent={CHART.emerald}
+        action={
+          <div className="flex gap-1 p-0.5 rounded-lg" style={{ background: 'var(--surface-1)' }}>
+            {[7, 30, 90].map(d => (
+              <button
+                key={d}
+                onClick={() => setDayRange(d)}
+                className="px-2.5 py-1 rounded-md text-11 font-medium transition-all duration-150 cursor-pointer focus-ring"
+                style={dayRange === d
+                  ? { background: 'var(--accent-violet-dim)', color: 'var(--accent-violet)' }
+                  : { color: 'var(--text-muted)' }
+                }
+              >
+                {d}d
+              </button>
+            ))}
+          </div>
+        }
+      >
+        {loading ? (
+          <Skeleton className="h-64 w-full" />
+        ) : perDay.length === 0 ? (
+          <EmptyChart icon={BarChart3} message="No download data yet" />
+        ) : (
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={perDay}>
+              <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} />
+              <XAxis dataKey="date" tick={{ fill: CHART.tick, fontSize: 11 }} tickFormatter={v => v.slice(5)} stroke={CHART.axis} />
+              <YAxis tick={{ fill: CHART.tick, fontSize: 11 }} stroke={CHART.axis} allowDecimals={false} />
+              <Tooltip content={<CustomTooltip />} />
+              <Line type="monotone" dataKey="count" name="Downloads" stroke={CHART.emerald} strokeWidth={2}
+                    dot={{ fill: CHART.emerald, r: 3 }} activeDot={{ r: 5, fill: CHART.emerald }} />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </ChartCard>
+
+      {/* Top artists + Source breakdown */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ChartCard title="Top Artists" icon={Music} accent={CHART.violet}>
+          {loading ? (
+            <Skeleton className="h-64 w-full" />
+          ) : topArtists.length === 0 ? (
+            <EmptyChart icon={Music} message="No artist data yet" />
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={topArtists} layout="vertical" margin={{ left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} horizontal={false} />
+                <XAxis type="number" tick={{ fill: CHART.tick, fontSize: 11 }} stroke={CHART.axis} allowDecimals={false} />
+                <YAxis type="category" dataKey="artist" tick={{ fill: CHART.tick2, fontSize: 11 }} width={100} stroke={CHART.axis} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="count" name="Downloads" fill={CHART.violet} radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </ChartCard>
+
+        <ChartCard title="Source Breakdown" icon={BarChart3} accent={CHART.cyan}>
+          {loading ? (
+            <Skeleton className="h-64 w-full" />
+          ) : sourceBreakdown.length === 0 ? (
+            <EmptyChart message="No source data yet" />
+          ) : (
+            <div className="flex flex-col items-center">
+              <ResponsiveContainer width="100%" height={220}>
+                <PieChart>
+                  <Pie data={sourceBreakdown} dataKey="count" nameKey="platform"
+                       cx="50%" cy="50%" outerRadius={80} innerRadius={45}
+                       strokeWidth={0} paddingAngle={3}>
+                    {sourceBreakdown.map((entry, i) => (
+                      <Cell key={entry.platform} fill={PLATFORM_COLORS[entry.platform] || PIE_COLORS[i % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend formatter={v => <span style={{ color: CHART.tick2, fontSize: 11 }}>{v}</span>} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </ChartCard>
+      </div>
+
+      {/* Recent + Failed tables */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Recent downloads */}
+        <div className="rounded-xl overflow-hidden"
+             style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+          <div className="flex items-center gap-2 px-5 py-4"
+               style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+            <Download className="w-4 h-4" style={{ color: CHART.emerald }} />
+            <h3 className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>Recent Downloads</h3>
+          </div>
+          <ScrollArea className="max-h-[360px]">
+            {loading ? (
+              <div className="p-4 space-y-2">
+                {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+              </div>
+            ) : recentDownloads.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Download className="w-7 h-7 mb-2" style={{ color: 'var(--text-muted)' }} />
+                <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>No downloads yet</p>
+              </div>
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    {['Title', 'Artist', 'Platform', 'Tagged', 'Time'].map((h, i) => (
+                      <th key={h} className={`text-left px-4 py-2.5 text-10 font-semibold uppercase tracking-wide${i >= 2 ? ' hidden sm:table-cell' : ''}${i === 4 ? ' text-right' : ''}`}
+                          style={{ color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentDownloads.map((item, i) => (
+                    <tr key={item._id || i}
+                        style={{ borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none' }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <td className="px-4 py-2.5 truncate max-w-[140px] text-12" style={{ color: 'var(--text-primary)' }}>
+                        {item.track_title || '—'}
+                      </td>
+                      <td className="px-4 py-2.5 truncate max-w-[100px] text-11" style={{ color: 'var(--text-tertiary)' }}>
+                        {item.artist || '—'}
+                      </td>
+                      <td className="px-4 py-2.5 hidden sm:table-cell">
+                        <span className="text-10 font-semibold px-2 py-0.5 rounded-full uppercase tracking-wide"
+                              style={{ background: 'var(--surface-2)', color: 'var(--text-tertiary)' }}>
+                          {item.source_platform || '—'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 hidden sm:table-cell">
+                        {item.tagging_report
+                          ? <CheckCircle2 className="w-3.5 h-3.5" style={{ color: CHART.emerald }} />
+                          : <XCircle className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+                        }
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-10 font-mono whitespace-nowrap"
+                          style={{ color: 'var(--text-muted)' }}>
+                        {formatTime(item.downloaded_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </ScrollArea>
+        </div>
+
+        {/* Failed downloads */}
+        <div className="rounded-xl overflow-hidden"
+             style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+          <div className="flex items-center justify-between px-5 py-4"
+               style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+            <div className="flex items-center gap-2">
+              <XCircle className="w-4 h-4" style={{ color: CHART.rose }} />
+              <h3 className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>Failed Downloads</h3>
+            </div>
+            {failedDownloads.length > 0 && (
+              <span className="text-10 font-mono px-2 py-0.5 rounded-full"
+                    style={{ background: 'var(--accent-rose-dim)', color: 'var(--accent-rose)' }}>
+                {failedDownloads.length}
+              </span>
+            )}
+          </div>
+          <ScrollArea className="max-h-[360px]">
+            {loading ? (
+              <div className="p-4 space-y-2">
+                {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+              </div>
+            ) : failedDownloads.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <CheckCircle2 className="w-7 h-7 mb-2" style={{ color: CHART.emerald }} />
+                <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>No failures — great!</p>
+              </div>
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    {['Title', 'Artist', 'Error', 'Time', ''].map((h, i) => (
+                      <th key={i} className={`text-left px-4 py-2.5 text-10 font-semibold uppercase tracking-wide${i === 2 ? ' hidden sm:table-cell' : ''}${i >= 3 ? ' text-right' : ''}`}
+                          style={{ color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {failedDownloads.map((item, i) => (
+                    <tr key={item._id || i}
+                        style={{ borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none' }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <td className="px-4 py-2.5 truncate max-w-[120px] text-12" style={{ color: 'var(--text-primary)' }}>
+                        {item.title || '—'}
+                      </td>
+                      <td className="px-4 py-2.5 truncate max-w-[80px] text-11" style={{ color: 'var(--text-tertiary)' }}>
+                        {item.artist || '—'}
+                      </td>
+                      <td className="px-4 py-2.5 truncate max-w-[140px] text-10 hidden sm:table-cell"
+                          style={{ color: 'var(--accent-rose)' }}>
+                        {item.error || '—'}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-10 font-mono whitespace-nowrap"
+                          style={{ color: 'var(--text-muted)' }}>
+                        {formatTime(item.timestamp)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <button
+                          disabled={retrying[i]}
+                          onClick={() => handleRetry(item.track_id, i)}
+                          className="text-11 px-2 py-1 rounded-lg transition-all duration-150 cursor-pointer focus-ring disabled:opacity-40"
+                          style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)' }}
+                          onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent-amber)'; e.currentTarget.style.borderColor = 'rgba(245,158,11,0.3)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
+                        >
+                          {retrying[i]
+                            ? <Loader2 className="w-3 h-3 animate-spin inline" />
+                            : <RotateCw className="w-3 h-3 inline" />
+                          }
+                          {' '}Retry
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </ScrollArea>
+        </div>
+      </div>
+
+      {/* Tagging breakdown */}
+      <ChartCard title="Tagging Breakdown" icon={Database} accent={CHART.amber}>
+        {loading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : (
+          <div className="grid grid-cols-3 gap-4">
+            {(taggingBreakdown ?? []).map(item => (
+              <div key={item.source}
+                   className="flex flex-col items-center rounded-xl py-4"
+                   style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+                <span className="font-display text-28 font-bold tabular-nums" style={{ color: 'var(--accent-amber)', letterSpacing: '-0.02em' }}>
+                  {item.count}
+                </span>
+                <span className="text-11 mt-1" style={{ color: 'var(--text-tertiary)' }}>{item.source}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </ChartCard>
+
+      {/* This Week */}
+      <ChartCard title="This Week" icon={Calendar} accent={CHART.cyan}>
+        {loading || !weeklyStats ? (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="flex flex-col items-center justify-center rounded-xl py-5"
+                 style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+              <Download className="w-5 h-5 mb-2" style={{ color: CHART.emerald }} />
+              <span className="font-display text-28 font-bold tabular-nums" style={{ color: CHART.emerald, letterSpacing: '-0.02em' }}>
+                {weeklyStats?.total_this_week ?? '—'}
+              </span>
+              <span className="text-11 mt-1" style={{ color: 'var(--text-tertiary)' }}>Downloads</span>
+            </div>
+            <div className="flex flex-col items-center justify-center rounded-xl py-5"
+                 style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+              <CheckCircle2 className="w-5 h-5 mb-2" style={{ color: CHART.cyan }} />
+              <span className="font-display text-28 font-bold tabular-nums" style={{ color: CHART.cyan, letterSpacing: '-0.02em' }}>
+                {weeklyStats?.success_rate ?? '—'}%
+              </span>
+              <span className="text-11 mt-1" style={{ color: 'var(--text-tertiary)' }}>Tagged</span>
+            </div>
+            <div className="rounded-xl p-4"
+                 style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+              <div className="flex items-center gap-1.5 mb-3">
+                <Star className="w-3.5 h-3.5" style={{ color: CHART.amber }} />
+                <span className="text-11 font-medium" style={{ color: 'var(--text-tertiary)' }}>Top Artists</span>
+              </div>
+              {(weeklyStats?.top_artists ?? []).length === 0 ? (
+                <p className="text-11 text-center" style={{ color: 'var(--text-muted)' }}>No data yet</p>
+              ) : (
+                <ol className="space-y-1.5">
+                  {(weeklyStats?.top_artists ?? []).map((a, i) => (
+                    <li key={a.artist} className="flex items-center gap-2">
+                      <span className="text-10 font-mono w-4 flex-shrink-0" style={{ color: 'var(--text-muted)' }}>{i + 1}.</span>
+                      <span className="text-11 truncate flex-1" style={{ color: 'var(--text-primary)' }}>{a.artist}</span>
+                      <span className="text-10 font-mono px-1.5 py-0.5 rounded-full flex-shrink-0"
+                            style={{ background: 'var(--surface-2)', color: 'var(--text-tertiary)' }}>{a.count}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </div>
+        )}
+      </ChartCard>
+
+      {/* MusicBrainz Cache */}
+      <ChartCard title="MusicBrainz Cache" icon={Database} accent={CHART.amber}>
+        {loading || !cacheAnalytics ? (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-28 w-full" />)}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Hit rate donut */}
+            <div className="flex flex-col items-center rounded-xl py-4"
+                 style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+              {Number.isFinite(cacheAnalytics.cache_hit_rate) && cacheAnalytics.cache_hit_rate >= 0 && cacheAnalytics.cache_hit_rate <= 100 ? (
+                <div className="relative w-20 h-20">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={[{ value: cacheAnalytics.cache_hit_rate }, { value: 100 - cacheAnalytics.cache_hit_rate }]}
+                           cx="50%" cy="50%" innerRadius={26} outerRadius={36}
+                           startAngle={90} endAngle={-270} strokeWidth={0}>
+                        <Cell fill={CHART.amber} />
+                        <Cell fill={CHART.grid} />
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <span className="absolute inset-0 flex items-center justify-center text-12 font-bold font-mono"
+                        style={{ color: CHART.amber }}>
+                    {cacheAnalytics.cache_hit_rate}%
+                  </span>
+                </div>
+              ) : (
+                <div className="flex h-20 w-20 flex-col items-center justify-center rounded-full"
+                     style={{ border: '1px solid rgba(244,63,94,0.3)', background: 'var(--accent-rose-dim)' }}>
+                  <AlertTriangle className="h-5 w-5" style={{ color: 'var(--accent-rose)' }} />
+                </div>
+              )}
+              <span className="text-11 mt-2" style={{ color: 'var(--text-tertiary)' }}>Hit Rate</span>
+            </div>
+            {[
+              { icon: Zap, value: cacheAnalytics.total_cached_tracks, label: 'Cached Tracks', color: CHART.amber },
+              { icon: HardDrive, value: `${cacheAnalytics.avg_age_days}d`, label: 'Avg Age', color: 'var(--text-secondary)' },
+              { icon: TrendingUp, value: cacheAnalytics.api_calls_saved, label: 'API Calls Saved', color: CHART.emerald },
+            ].map(({ icon: Icon, value, label, color }) => (
+              <div key={label} className="flex flex-col items-center justify-center rounded-xl py-4"
+                   style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+                <Icon className="w-5 h-5 mb-2" style={{ color }} />
+                <span className="font-display text-28 font-bold tabular-nums" style={{ color, letterSpacing: '-0.02em' }}>{value}</span>
+                <span className="text-11 mt-1" style={{ color: 'var(--text-tertiary)' }}>{label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </ChartCard>
+
+      {/* Failure Types + Retry Trend */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ChartCard title="Failure Types" icon={AlertTriangle} accent={CHART.rose}>
+          {loading || !failureSummary ? (
+            <Skeleton className="h-52 w-full" />
+          ) : failureSummary.by_error_type.length === 0 ? (
+            <EmptyChart icon={CheckCircle2} message="No failures recorded" />
+          ) : (
+            <div className="flex flex-col items-center">
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie data={failureSummary.by_error_type} dataKey="count" nameKey="error_type"
+                       cx="50%" cy="50%" outerRadius={70} innerRadius={38}
+                       strokeWidth={0} paddingAngle={3}>
+                    {failureSummary.by_error_type.map((entry, i) => (
+                      <Cell key={entry.error_type} fill={ERROR_TYPE_COLORS[entry.error_type] || PIE_COLORS[i % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend formatter={v => <span style={{ color: CHART.tick2, fontSize: 11 }}>{v}</span>} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </ChartCard>
+
+        <ChartCard title="Retry Trend (7d)" icon={RotateCw} accent={CHART.amber}>
+          {loading || !failureSummary ? (
+            <Skeleton className="h-28 w-full" />
+          ) : failureSummary.retry_trend.length === 0 ? (
+            <div className="flex items-center justify-center h-28 text-12" style={{ color: 'var(--text-tertiary)' }}>
+              No retries in the last 7 days
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={110}>
+              <BarChart data={failureSummary.retry_trend} margin={{ left: -10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} />
+                <XAxis dataKey="date" tick={{ fill: CHART.tick, fontSize: 10 }} tickFormatter={v => v.slice(5)} stroke={CHART.axis} />
+                <YAxis tick={{ fill: CHART.tick, fontSize: 10 }} stroke={CHART.axis} allowDecimals={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="retries" name="Retries" fill={CHART.amber} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+          {failureSummary?.recent_failures?.length > 0 && (
+            <div className="mt-4 space-y-1.5">
+              <p className="text-11 font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Recent</p>
+              {failureSummary.recent_failures.slice(0, 5).map((f, i) => (
+                <div key={i} className="flex items-center justify-between gap-2 rounded-lg px-3 py-2"
+                     style={{ background: 'var(--surface-1)' }}>
+                  <div className="min-w-0">
+                    <p className="text-11 truncate" style={{ color: 'var(--text-primary)' }}>{f.title || '—'}</p>
+                    <p className="text-10 truncate" style={{ color: 'var(--text-muted)' }}>{f.artist || ''}</p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="text-10 font-semibold px-2 py-0.5 rounded-full uppercase tracking-wide"
+                          style={{ background: 'var(--surface-2)', color: ERROR_TYPE_COLORS[f.error_type] || 'var(--text-tertiary)' }}>
+                      {f.error_type || 'unknown'}
+                    </span>
+                    <span className="text-10 font-mono" style={{ color: 'var(--text-muted)' }}>{formatTime(f.timestamp)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </ChartCard>
+      </div>
+    </div>
+  );
+}

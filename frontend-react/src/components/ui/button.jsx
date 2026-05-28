@@ -3,21 +3,23 @@ import { cva } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:pointer-events-none disabled:opacity-50 cursor-pointer',
+  'inline-flex items-center justify-center gap-2 rounded-lg text-13 font-medium transition-all duration-150 focus-ring disabled:pointer-events-none disabled:opacity-40 cursor-pointer active:scale-[0.97]',
   {
     variants: {
       variant: {
-        default: 'bg-primary text-white hover:bg-primary-hover shadow-lg shadow-primary/20 hover:shadow-primary/30',
-        secondary: 'bg-surface-light text-gray-100 hover:bg-surface-hover border border-border',
-        ghost: 'hover:bg-surface-light text-gray-400 hover:text-gray-100',
-        destructive: 'bg-danger-muted text-red-400 hover:bg-red-500/20 border border-red-500/20',
-        outline: 'border border-border bg-transparent text-gray-300 hover:bg-surface-light hover:text-white',
+        default:     'text-white hover:opacity-90',
+        secondary:   'border hover:opacity-90',
+        ghost:       'hover:opacity-80',
+        destructive: 'border',
+        outline:     'border bg-transparent hover:opacity-90',
+        link:        'underline-offset-4 hover:underline p-0 h-auto',
       },
       size: {
-        default: 'h-10 px-4 py-2',
-        sm: 'h-8 px-3 text-xs',
-        lg: 'h-12 px-8 text-base',
-        icon: 'h-10 w-10',
+        default: 'h-9 px-4',
+        sm:      'h-7 px-3 text-12',
+        lg:      'h-11 px-6 text-14',
+        icon:    'h-9 w-9 p-0',
+        'icon-sm': 'h-7 w-7 p-0',
       },
     },
     defaultVariants: {
@@ -27,11 +29,44 @@ const buttonVariants = cva(
   }
 );
 
-const Button = forwardRef(({ className, variant, size, ...props }, ref) => {
+// Style map — keeps inline styles out of className for token compatibility
+const variantStyles = {
+  default: {
+    background: 'var(--accent-violet)',
+    color: 'white',
+    boxShadow: '0 2px 8px var(--accent-violet-glow)',
+  },
+  secondary: {
+    background: 'var(--surface-1)',
+    color: 'var(--text-primary)',
+    borderColor: 'var(--border-default)',
+  },
+  ghost: {
+    background: 'transparent',
+    color: 'var(--text-secondary)',
+  },
+  destructive: {
+    background: 'var(--accent-rose-dim)',
+    color: 'var(--accent-rose)',
+    borderColor: 'rgba(244,63,94,0.25)',
+  },
+  outline: {
+    background: 'transparent',
+    color: 'var(--text-secondary)',
+    borderColor: 'var(--border-default)',
+  },
+  link: {
+    background: 'transparent',
+    color: 'var(--accent-violet)',
+  },
+};
+
+const Button = forwardRef(({ className, variant = 'default', size = 'default', style, ...props }, ref) => {
   return (
     <button
       className={cn(buttonVariants({ variant, size, className }))}
       ref={ref}
+      style={{ ...variantStyles[variant], ...style }}
       {...props}
     />
   );

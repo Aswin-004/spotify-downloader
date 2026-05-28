@@ -1,14 +1,18 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Music, Search, ChevronRight, ChevronDown, AlertTriangle, RotateCw, Loader2, MoreHorizontal, FolderInput, X } from 'lucide-react';
+import {
+  Music, Search, ChevronRight, ChevronDown,
+  AlertTriangle, RotateCw, Loader2, MoreHorizontal, FolderInput, X,
+} from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
 import { useToast } from '@/components/ui/toast';
+import GenreBadge from '@/components/GenreBadge';
+import { ease } from '@/lib/motion';
 
 const GENRE_OPTIONS = [
   'House', 'Trance', 'UK Garage', 'Drum & Bass', 'Dubstep',
@@ -16,6 +20,8 @@ const GENRE_OPTIONS = [
   'Bollywood', 'Punjabi', 'Tamil',
   'Hip Hop', 'R&B', 'Pop', 'Latin',
 ];
+
+const KNOWN_GENRES = new Set(GENRE_OPTIONS.map(g => g.toLowerCase()));
 
 function extractArtist(filename) {
   const base = filename.replace(/\.mp3$/i, '');
@@ -25,12 +31,19 @@ function extractArtist(filename) {
 
 function TrackArt({ path }) {
   const [failed, setFailed] = useState(false);
-  if (failed) return <Music className="w-4 h-4 text-blue-400 flex-shrink-0" />;
+  if (failed) {
+    return (
+      <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+           style={{ background: 'var(--surface-2)' }}>
+        <Music className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+      </div>
+    );
+  }
   return (
     <img
       src={`/api/artwork?path=${encodeURIComponent(path)}`}
       alt=""
-      className="w-8 h-8 rounded object-cover flex-shrink-0"
+      className="w-8 h-8 rounded-lg object-cover flex-shrink-0"
       onError={() => setFailed(true)}
     />
   );
@@ -38,19 +51,19 @@ function TrackArt({ path }) {
 
 function FolderSkeleton() {
   return (
-    <div className="rounded-xl border border-gray-700/50 bg-white/5 overflow-hidden animate-pulse">
+    <div className="rounded-xl overflow-hidden"
+         style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
       <div className="px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-5 h-5 rounded bg-gray-700/60" />
-          <div className="w-32 h-4 rounded bg-gray-700/60" />
+          <div className="w-4 h-4 rounded shimmer" />
+          <div className="w-28 h-3.5 rounded shimmer" />
         </div>
-        <div className="w-8 h-5 rounded-full bg-gray-700/60" />
+        <div className="w-8 h-4 rounded-full shimmer" />
       </div>
     </div>
   );
 }
 
-// Main LibraryPage Component
 export default function LibraryPage() {
   const { files: socketFiles } = useSocket();
   const { addToast } = useToast();
@@ -59,14 +72,14 @@ export default function LibraryPage() {
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [openMenu, setOpenMenu] = useState(null);       // file.path with picker open
-  const [selectedGenres, setSelectedGenres] = useState({}); // { [path]: genre }
-  const [moving, setMoving] = useState({});             // { [path]: boolean }
+  const [openMenu, setOpenMenu] = useState(null);
+  const [selectedGenres, setSelectedGenres] = useState({});
+  const [moving, setMoving] = useState({});
 
   async function handleMoveFromLibrary(file) {
     const genre = selectedGenres[file.path];
     if (!genre) return;
-    setMoving((p) => ({ ...p, [file.path]: true }));
+    setMoving(p => ({ ...p, [file.path]: true }));
     try {
       const artist = extractArtist(file.name);
       const result = await api.moveAndRemember(file.path, genre, artist);
@@ -85,38 +98,27 @@ export default function LibraryPage() {
     } catch (err) {
       addToast({ type: 'error', title: 'Move failed', description: err.message, duration: 4000 });
     } finally {
-      setMoving((p) => ({ ...p, [file.path]: false }));
+      setMoving(p => ({ ...p, [file.path]: false }));
     }
   }
 
   function loadFiles() {
     setLoading(true);
     setError('');
-    api.getFiles().then((data) => {
-      if (data.files) setFiles(data.files);
-    }).catch(() => {
-      setError('Failed to load library. Check that the backend is running.');
-    }).finally(() => {
-      setLoading(false);
-    });
+    api.getFiles()
+      .then(data => { if (data.files) setFiles(data.files); })
+      .catch(() => setError('Failed to load library. Check that the backend is running.'))
+      .finally(() => setLoading(false));
   }
 
-  useEffect(() => {
-    loadFiles();
-  }, []);
-
-  useEffect(() => {
-    if (socketFiles.length > 0) setFiles(socketFiles);
-  }, [socketFiles]);
+  useEffect(() => { loadFiles(); }, []);
+  useEffect(() => { if (socketFiles.length > 0) setFiles(socketFiles); }, [socketFiles]);
 
   const grouped = useMemo(() => {
     const q = search.toLowerCase();
-    const filtered = search
-      ? files.filter((f) => f.name.toLowerCase().includes(q))
-      : files;
-
+    const filtered = search ? files.filter(f => f.name.toLowerCase().includes(q)) : files;
     const groups = {};
-    filtered.forEach((f) => {
+    filtered.forEach(f => {
       const folder = f.folder || 'Root';
       if (!groups[folder]) groups[folder] = [];
       groups[folder].push(f);
@@ -124,13 +126,10 @@ export default function LibraryPage() {
     return groups;
   }, [files, search]);
 
-  const folderNames = useMemo(
-    () => Object.keys(grouped).sort(),
-    [grouped]
-  );
+  const folderNames = useMemo(() => Object.keys(grouped).sort(), [grouped]);
 
   function toggleFolder(name) {
-    setExpandedFolders((prev) => {
+    setExpandedFolders(prev => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
@@ -138,40 +137,43 @@ export default function LibraryPage() {
     });
   }
 
-  // Expand all folders on initial load
   useEffect(() => {
-    if (folderNames.length > 0 && expandedFolders.size === 0) {
+    if (folderNames.length > 0 && expandedFolders.size === 0)
       setExpandedFolders(new Set(folderNames.slice(0, 5)));
-    }
   }, [folderNames]);
 
   const totalFiles = files.length;
+  const isKnownGenre = (name) => KNOWN_GENRES.has(name.toLowerCase());
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 pb-10">
+    <div className="max-w-5xl mx-auto space-y-5 pb-10">
+
       {/* Header */}
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        className="space-y-3"
+        transition={ease}
+        className="flex items-center justify-between"
       >
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
-              Library
-            </h1>
-            <p className="text-gray-400 mt-2">Manage your downloaded tracks</p>
-          </div>
-          <div className="text-right">
-            {loading ? (
-              <Loader2 className="w-7 h-7 text-purple-400 animate-spin ml-auto" />
-            ) : (
-              <>
-                <div className="text-3xl font-bold text-purple-400">{totalFiles}</div>
-                <div className="text-sm text-gray-400">tracks</div>
-              </>
-            )}
-          </div>
+        <div>
+          <h1 className="font-display text-22 font-bold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+            Library
+          </h1>
+          <p className="text-12 mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+            Manage your downloaded tracks
+          </p>
+        </div>
+        <div className="text-right">
+          {loading ? (
+            <Loader2 className="w-5 h-5 animate-spin ml-auto" style={{ color: 'var(--accent-violet)' }} />
+          ) : (
+            <>
+              <div className="font-display text-28 font-bold tabular-nums" style={{ color: 'var(--accent-violet)', letterSpacing: '-0.03em' }}>
+                {totalFiles}
+              </div>
+              <div className="text-11" style={{ color: 'var(--text-tertiary)' }}>tracks</div>
+            </>
+          )}
         </div>
       </motion.div>
 
@@ -179,16 +181,15 @@ export default function LibraryPage() {
       <AnimatePresence>
         {error && (
           <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20"
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl"
+            style={{ background: 'var(--accent-rose-dim)', border: '1px solid rgba(244,63,94,0.2)' }}
           >
-            <div className="flex items-center gap-3">
-              <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
-              <span className="text-sm text-red-300">{error}</span>
+            <div className="flex items-center gap-2.5">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-rose)' }} />
+              <span className="text-13" style={{ color: 'var(--text-secondary)' }}>{error}</span>
             </div>
-            <Button size="sm" variant="ghost" onClick={loadFiles} className="text-red-400 hover:text-red-300 shrink-0">
+            <Button size="sm" variant="ghost" onClick={loadFiles} style={{ color: 'var(--accent-rose)', flexShrink: 0 }}>
               <RotateCw className="w-3.5 h-3.5 mr-1" /> Retry
             </Button>
           </motion.div>
@@ -197,158 +198,208 @@ export default function LibraryPage() {
 
       {/* Search */}
       <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.1 }}
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ ...ease, delay: 0.08 }}
         className="relative"
       >
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
+                style={{ color: 'var(--text-muted)' }} />
         <Input
           placeholder="Search tracks..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-10 bg-white/5 border-gray-700 text-white placeholder:text-gray-500"
+          onChange={e => setSearch(e.target.value)}
+          className="pl-9"
         />
       </motion.div>
 
       {/* Track List */}
       <ScrollArea className="h-[600px]">
-        <div className="pr-4 space-y-3">
+        <div className="pr-3 space-y-2.5">
           {loading ? (
-            <>
-              {[...Array(6)].map((_, i) => <FolderSkeleton key={i} />)}
-            </>
+            [...Array(6)].map((_, i) => <FolderSkeleton key={i} />)
           ) : folderNames.length === 0 ? (
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex flex-col items-center justify-center py-12 text-center"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              className="flex flex-col items-center justify-center py-16 rounded-xl"
+              style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
             >
-              <Music className="w-12 h-12 text-gray-600 mb-4" />
-              <p className="text-gray-400">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-4"
+                   style={{ background: 'var(--surface-1)' }}>
+                <Music className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+              </div>
+              <p className="text-13 font-medium" style={{ color: 'var(--text-tertiary)' }}>
                 {search ? 'No tracks found' : 'No tracks in library'}
+              </p>
+              <p className="text-11 mt-1" style={{ color: 'var(--text-muted)' }}>
+                {search ? 'Try a different search term' : 'Downloaded tracks appear here'}
               </p>
             </motion.div>
           ) : (
             <AnimatePresence>
-              {folderNames.map((folder, idx) => (
-                <motion.div
-                  key={folder}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  transition={{ delay: idx * 0.05 }}
-                >
-                  <Card className="bg-white/5 border-gray-700/50 overflow-hidden">
-                    {/* Folder Header */}
+              {folderNames.map((folder, idx) => {
+                const isExpanded = expandedFolders.has(folder);
+                const tracks = grouped[folder];
+                return (
+                  <motion.div
+                    key={folder}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ ...ease, delay: Math.min(idx * 0.04, 0.2) }}
+                    className="rounded-xl overflow-hidden"
+                    style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+                  >
+                    {/* Folder header */}
                     <button
                       onClick={() => toggleFolder(folder)}
-                      aria-expanded={expandedFolders.has(folder)}
-                      aria-label={`${expandedFolders.has(folder) ? 'Collapse' : 'Expand'} ${folder}`}
-                      className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.07] active:bg-white/10 transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-purple-500/50"
+                      aria-expanded={isExpanded}
+                      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${folder}`}
+                      className="w-full px-4 py-3 flex items-center justify-between transition-colors duration-150 cursor-pointer focus-ring"
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
-                      <div className="flex items-center gap-3 flex-1">
-                        {expandedFolders.has(folder) ? (
-                          <ChevronDown className="w-5 h-5 text-purple-400" />
-                        ) : (
-                          <ChevronRight className="w-5 h-5 text-gray-500" />
+                      <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                        <motion.div
+                          animate={{ rotate: isExpanded ? 90 : 0 }}
+                          transition={{ duration: 0.15 }}
+                        >
+                          <ChevronRight className="w-4 h-4 flex-shrink-0"
+                            style={{ color: isExpanded ? 'var(--accent-violet)' : 'var(--text-muted)' }} />
+                        </motion.div>
+                        <span className="text-13 font-semibold truncate"
+                              style={{ color: isExpanded ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                          {folder}
+                        </span>
+                        {isKnownGenre(folder) && (
+                          <GenreBadge genre={folder} className="flex-shrink-0" />
                         )}
-                        <span className="font-semibold text-gray-200">{folder}</span>
                       </div>
-                      <Badge variant="secondary" className="bg-purple-500/20 text-purple-300">
-                        {grouped[folder].length}
-                      </Badge>
+                      <span
+                        className="text-11 font-mono tabular-nums px-2 py-0.5 rounded-full ml-2 flex-shrink-0"
+                        style={{ background: 'var(--surface-2)', color: 'var(--text-tertiary)' }}
+                      >
+                        {tracks.length}
+                      </span>
                     </button>
 
-                    {/* Tracks */}
+                    {/* Track rows */}
                     <AnimatePresence>
-                      {expandedFolders.has(folder) && (
+                      {isExpanded && (
                         <motion.div
                           initial={{ height: 0, opacity: 0 }}
                           animate={{ height: 'auto', opacity: 1 }}
                           exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="border-t border-gray-700/50 divide-y divide-gray-700/50"
+                          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                          style={{ borderTop: '1px solid var(--border-subtle)' }}
                         >
-                          {grouped[folder].map((file, fileIdx) => (
+                          {tracks.map((file, fileIdx) => (
                             <motion.div
                               key={file.path}
-                              initial={{ opacity: 0, x: -20 }}
+                              initial={{ opacity: 0, x: -12 }}
                               animate={{ opacity: 1, x: 0 }}
-                              transition={{ delay: fileIdx * 0.02 }}
-                              className="px-4 py-3 flex items-center hover:bg-white/[0.07] transition-colors duration-150 group/track"
+                              transition={{ delay: Math.min(fileIdx * 0.02, 0.15), duration: 0.18 }}
+                              className="px-4 py-2.5 flex items-center group/track transition-colors duration-150"
+                              style={{ borderTop: fileIdx > 0 ? '1px solid var(--border-subtle)' : 'none' }}
+                              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                             >
-                              <div className="flex items-center gap-3 flex-1 min-w-0">
+                              {/* Track info */}
+                              <div className="flex items-center gap-2.5 flex-1 min-w-0">
                                 <TrackArt path={file.path} />
                                 <div className="min-w-0">
-                                  <div className="text-sm font-medium text-gray-200 truncate">
+                                  <p className="text-12 font-medium truncate"
+                                     style={{ color: 'var(--text-primary)' }}>
                                     {file.name}
-                                  </div>
-                                  <div className="text-xs text-gray-500">
-                                    {file.mtime ? new Date(file.mtime * 1000).toLocaleDateString() : 'Unknown'}
-                                  </div>
+                                  </p>
+                                  <p className="text-10 mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                    {file.mtime
+                                      ? new Date(file.mtime * 1000).toLocaleDateString()
+                                      : 'Unknown date'}
+                                  </p>
                                 </div>
                               </div>
 
-                              {/* Inline genre picker or ... button */}
-                              {openMenu === file.path ? (
-                                <div className="flex items-center gap-2 ml-3 flex-shrink-0">
-                                  <select
-                                    aria-label="Select genre"
-                                    value={selectedGenres[file.path] || ''}
-                                    onChange={(e) =>
-                                      setSelectedGenres((p) => ({ ...p, [file.path]: e.target.value }))
-                                    }
-                                    className="text-xs bg-gray-800 border border-gray-600 text-gray-200 rounded-lg px-2 py-1.5 cursor-pointer focus:outline-none focus:ring-2 focus:ring-purple-500/60 transition-colors hover:border-gray-500"
+                              {/* Inline genre picker or action button */}
+                              <AnimatePresence mode="wait">
+                                {openMenu === file.path ? (
+                                  <motion.div
+                                    key="picker"
+                                    initial={{ opacity: 0, x: 8 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    exit={{ opacity: 0, x: 8 }}
+                                    transition={{ duration: 0.15 }}
+                                    className="flex items-center gap-1.5 ml-3 flex-shrink-0"
                                   >
-                                    <option value="">Pick genre…</option>
-                                    {GENRE_OPTIONS.map((g) => (
-                                      <option key={g} value={g}>{g}</option>
-                                    ))}
-                                  </select>
-                                  <Button
-                                    size="sm"
-                                    disabled={!selectedGenres[file.path] || moving[file.path]}
-                                    onClick={() => handleMoveFromLibrary(file)}
-                                    className="text-xs h-7 px-2.5 bg-purple-600 hover:bg-purple-500 active:scale-95 text-white disabled:opacity-40 transition-all duration-150"
+                                    <select
+                                      aria-label="Select genre"
+                                      value={selectedGenres[file.path] || ''}
+                                      onChange={e =>
+                                        setSelectedGenres(p => ({ ...p, [file.path]: e.target.value }))
+                                      }
+                                      className="text-11 rounded-lg px-2 py-1.5 cursor-pointer focus-ring transition-colors"
+                                      style={{
+                                        background: 'var(--surface-2)',
+                                        border: '1px solid var(--border-default)',
+                                        color: 'var(--text-secondary)',
+                                      }}
+                                    >
+                                      <option value="">Pick genre…</option>
+                                      {GENRE_OPTIONS.map(g => (
+                                        <option key={g} value={g}>{g}</option>
+                                      ))}
+                                    </select>
+                                    <Button
+                                      size="sm"
+                                      disabled={!selectedGenres[file.path] || moving[file.path]}
+                                      onClick={() => handleMoveFromLibrary(file)}
+                                    >
+                                      {moving[file.path] ? (
+                                        <><Loader2 className="w-3 h-3 animate-spin" /> Moving…</>
+                                      ) : (
+                                        <><FolderInput className="w-3 h-3" /> Move</>
+                                      )}
+                                    </Button>
+                                    <button
+                                      aria-label="Cancel"
+                                      onClick={() => setOpenMenu(null)}
+                                      className="w-6 h-6 flex items-center justify-center rounded-lg cursor-pointer focus-ring transition-colors"
+                                      style={{ color: 'var(--text-muted)' }}
+                                      onMouseEnter={e => e.currentTarget.style.color = 'var(--text-tertiary)'}
+                                      onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </motion.div>
+                                ) : (
+                                  <motion.button
+                                    key="dots"
+                                    initial={{ opacity: 0 }}
+                                    animate={{ opacity: 1 }}
+                                    exit={{ opacity: 0 }}
+                                    aria-label="Move to genre"
+                                    onClick={() => setOpenMenu(file.path)}
+                                    className="ml-3 w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer sm:opacity-0 sm:group-hover/track:opacity-100 focus:opacity-100 active:scale-95 transition-all duration-150 flex-shrink-0 focus-ring"
+                                    style={{ color: 'var(--text-muted)' }}
+                                    onMouseEnter={e => {
+                                      e.currentTarget.style.background = 'var(--surface-2)';
+                                      e.currentTarget.style.color = 'var(--text-secondary)';
+                                    }}
+                                    onMouseLeave={e => {
+                                      e.currentTarget.style.background = 'transparent';
+                                      e.currentTarget.style.color = 'var(--text-muted)';
+                                    }}
                                   >
-                                    {moving[file.path] ? (
-                                      <span className="flex items-center gap-1">
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                        Moving…
-                                      </span>
-                                    ) : (
-                                      <span className="flex items-center gap-1">
-                                        <FolderInput className="w-3 h-3" />
-                                        Move
-                                      </span>
-                                    )}
-                                  </Button>
-                                  <button
-                                    aria-label="Cancel"
-                                    onClick={() => setOpenMenu(null)}
-                                    className="p-1.5 text-gray-500 hover:text-gray-300 active:scale-95 transition-all duration-150 cursor-pointer rounded-lg hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  aria-label="Move to genre"
-                                  onClick={() => setOpenMenu(file.path)}
-                                  className="ml-3 p-1.5 min-w-[32px] min-h-[32px] text-gray-600 hover:text-gray-300 sm:opacity-0 sm:group-hover/track:opacity-100 focus:opacity-100 active:scale-95 transition-all duration-150 cursor-pointer rounded-lg hover:bg-white/10 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50"
-                                >
-                                  <MoreHorizontal className="w-4 h-4" />
-                                </button>
-                              )}
+                                    <MoreHorizontal className="w-4 h-4" />
+                                  </motion.button>
+                                )}
+                              </AnimatePresence>
                             </motion.div>
                           ))}
                         </motion.div>
                       )}
                     </AnimatePresence>
-                  </Card>
-                </motion.div>
-              ))}
+                  </motion.div>
+                );
+              })}
             </AnimatePresence>
           )}
         </div>

@@ -1,74 +1,77 @@
 import { useEffect, useState, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Download, ListMusic, TrendingUp, XCircle } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { Download, Loader2, TrendingUp, XCircle } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
-import { cn } from '@/lib/utils';
+import { ease } from '@/lib/motion';
 
-function AnimatedNumber({ value }) {
+function AnimatedNumber({ value, suffix = '' }) {
   const [display, setDisplay] = useState(0);
   const prevRef = useRef(0);
+  const rafRef  = useRef(null);
 
   useEffect(() => {
     const start = prevRef.current;
-    const end = value;
+    const end   = value;
     if (start === end) return;
 
-    const duration = 400;
+    const duration  = 500;
     const startTime = performance.now();
 
     function tick(now) {
-      const elapsed = now - startTime;
+      const elapsed  = now - startTime;
       if (elapsed >= duration) {
         setDisplay(end);
         prevRef.current = end;
         return;
       }
-      const progress = elapsed / duration;
-      const eased = 1 - Math.pow(1 - progress, 3);
+      const t = elapsed / duration;
+      const eased = 1 - Math.pow(1 - t, 3);
       setDisplay(Math.round(start + (end - start) * eased));
-      requestAnimationFrame(tick);
+      rafRef.current = requestAnimationFrame(tick);
     }
 
-    requestAnimationFrame(tick);
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
   }, [value]);
 
-  return <span>{display}</span>;
+  return <span>{display}{suffix}</span>;
 }
 
-const cards = [
+const KPI_CONFIG = [
   {
-    key: 'total',
-    label: 'Total Downloads',
-    icon: Download,
-    color: 'text-primary',
-    bg: 'bg-primary/10',
-    gradient: 'from-primary/5 to-transparent',
+    key:     'downloading',
+    label:   'Active',
+    icon:    Loader2,
+    spin:    true,
+    accent:  'var(--accent-cyan)',
+    dim:     'var(--accent-cyan-dim)',
+    border:  'rgba(6,182,212,0.18)',
   },
   {
-    key: 'active',
-    label: 'Active Queue',
-    icon: ListMusic,
-    color: 'text-blue-400',
-    bg: 'bg-blue-400/10',
-    gradient: 'from-blue-400/5 to-transparent',
+    key:     'total',
+    label:   'Total Downloads',
+    icon:    Download,
+    accent:  'var(--accent-violet)',
+    dim:     'var(--accent-violet-dim)',
+    border:  'rgba(139,92,246,0.15)',
   },
   {
-    key: 'rate',
-    label: 'Success Rate',
-    icon: TrendingUp,
-    color: 'text-emerald-400',
-    bg: 'bg-emerald-400/10',
-    gradient: 'from-emerald-400/5 to-transparent',
+    key:     'rate',
+    label:   'Success Rate',
+    icon:    TrendingUp,
+    suffix:  '%',
+    accent:  'var(--accent-emerald)',
+    dim:     'var(--accent-emerald-dim)',
+    border:  'rgba(16,185,129,0.15)',
   },
   {
-    key: 'failed',
-    label: 'Failed',
-    icon: XCircle,
-    color: 'text-red-400',
-    bg: 'bg-red-400/10',
-    gradient: 'from-red-400/5 to-transparent',
+    key:     'failed',
+    label:   'Failed',
+    icon:    XCircle,
+    accent:  'var(--accent-rose)',
+    dim:     'var(--accent-rose-dim)',
+    border:  'rgba(244,63,94,0.15)',
   },
 ];
 
@@ -76,66 +79,73 @@ export default function StatsCards() {
   const { history, queueStatus, downloads } = useSocket();
   const [dbData, setDbData] = useState({ total: null, rate: null });
 
-  const ingestCompleted = Object.keys(downloads.completed).length;
-  const ingestFailed = Object.keys(downloads.failed).length;
-  const ingestDownloading = Object.keys(downloads.downloading).length;
+  const dlDownloading = Object.keys(downloads.downloading).length;
+  const dlCompleted   = Object.keys(downloads.completed).length;
+  const dlFailed      = Object.keys(downloads.failed).length;
 
-  // Fetch real totals from MongoDB on mount and whenever session downloads increase
   useEffect(() => {
     api.getAnalyticsOverview()
-      .then((data) => setDbData({
+      .then(data => setDbData({
         total: data.total_downloads ?? null,
-        rate: data.success_rate ?? null,
+        rate:  data.success_rate    ?? null,
       }))
       .catch(() => {});
-  }, [ingestCompleted]);
+  }, [dlCompleted]);
 
-  const total = dbData.total !== null ? dbData.total : history.length;
-  const failedCount = history.filter(
-    (h) => h.status !== 'success' && h.status !== 'skipped'
-  ).length + ingestFailed;
-  // Use the analytics API's all-time success rate; fall back to session estimate only if unavailable
-  const rate = dbData.rate !== null
+  const total  = dbData.total !== null ? dbData.total : history.length;
+  const rate   = dbData.rate  !== null
     ? Math.round(dbData.rate)
-    : (total > 0 ? Math.round((history.filter((h) => h.status === 'success').length + ingestCompleted) / total * 100) : 0);
-  const active =
-    ingestDownloading > 0
-      ? ingestDownloading
-      : queueStatus.total > 0
-        ? queueStatus.total - queueStatus.completed
-        : 0;
+    : (total > 0
+        ? Math.round((history.filter(h => h.status === 'success').length + dlCompleted) / total * 100)
+        : 0);
+  const failed = history.filter(h => h.status !== 'success' && h.status !== 'skipped').length + dlFailed;
+  const active = dlDownloading > 0
+    ? dlDownloading
+    : Math.max(0, (queueStatus.total ?? 0) - (queueStatus.completed ?? 0));
 
-  const values = { total, active, rate, failed: failedCount };
+  const values = { downloading: active, total, rate, failed };
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      {cards.map(({ key, label, icon: Icon, color, bg, gradient }, i) => (
+      {KPI_CONFIG.map(({ key, label, icon: Icon, spin, suffix, accent, dim, border }, i) => (
         <motion.div
           key={key}
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, delay: i * 0.08 }}
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0   }}
+          whileHover={{ y: -4, transition: { duration: 0.15, ease: [0.22,1,0.36,1] } }}
+          transition={{ ...ease, delay: i * 0.06 }}
         >
-          <Card className="relative overflow-hidden group hover:border-border-light transition-colors">
-            <div
-              className={cn(
-                'absolute inset-0 bg-gradient-to-br opacity-0 group-hover:opacity-100 transition-opacity duration-500',
-                gradient
-              )}
-            />
-            <div className="relative p-4">
-              <div className="flex items-center justify-between mb-2">
-                <div className={cn('p-2 rounded-lg transition-opacity duration-200 group-hover:opacity-80', bg)}>
-                  <Icon className={cn('w-4 h-4', color)} />
-                </div>
-              </div>
-              <div className="text-2xl font-bold tracking-tight">
-                <AnimatedNumber value={values[key]} />
-                {key === 'rate' && '%'}
-              </div>
-              <p className="text-xs text-gray-500 mt-1">{label}</p>
+          <div
+            className="rounded-xl p-4 transition-all duration-200 group cursor-default"
+            style={{
+              background: 'var(--surface-0)',
+              border:     `1px solid ${border}`,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.boxShadow = `0 12px 32px rgba(0,0,0,0.35), 0 0 0 1px ${border}`; }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = ''; }}
+          >
+            {/* Icon */}
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center mb-3"
+                 style={{ background: dim }}>
+              <Icon
+                className={spin && values[key] > 0 ? 'w-4 h-4 animate-spin' : 'w-4 h-4'}
+                style={{ color: accent }}
+              />
             </div>
-          </Card>
+
+            {/* Value */}
+            <div
+              className="font-display text-36 font-bold tabular-nums leading-none mb-1"
+              style={{ color: accent, letterSpacing: '-0.03em' }}
+            >
+              <AnimatedNumber value={values[key] ?? 0} suffix={suffix} />
+            </div>
+
+            {/* Label */}
+            <p className="text-11 font-medium" style={{ color: 'var(--text-tertiary)' }}>
+              {label}
+            </p>
+          </div>
         </motion.div>
       ))}
     </div>
