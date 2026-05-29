@@ -59,43 +59,6 @@ services:
       - key: MAX_QUEUE_DEPTH
         value: "10"
 
-  # ── Celery worker process ─────────────────────────────────────────────────
-  - name: spotify-downloader-worker
-    type: worker
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: >
-      celery -A celery_app worker
-        --loglevel=info
-        --concurrency=2
-        --max-tasks-per-child=50
-        --without-gossip
-        --without-mingle
-        --heartbeat-interval=10
-    envVars:
-      - key: FLASK_ENV
-        value: production
-      - key: REDIS_URL
-        fromService:
-          name: spotify-downloader-redis
-          type: redis
-          property: connectionString
-      - key: MONGODB_URI
-        sync: false
-      - key: SPOTIFY_CLIENT_ID
-        sync: false
-      - key: SPOTIFY_CLIENT_SECRET
-        sync: false
-      - key: GROQ_API_KEY
-        sync: false
-      - key: DISABLE_BPM_ANALYSIS
-        value: "1"
-      - key: DISABLE_FINGERPRINTING
-        value: "1"
-      - key: BASE_DOWNLOAD_DIR
-        value: /tmp/music   # workers don't write files in production
-
   # ── Redis (Render-managed) ────────────────────────────────────────────────
   - name: spotify-downloader-redis
     type: redis
