@@ -2,7 +2,18 @@
 Spotify Meta Downloader - Flask Backend Application
 Main application entry point
 """
-# Eventlet removed — using threading async_mode for SocketIO stability
+# GEVENT PATCH — must be the very first executable statement before any other
+# imports.  When SOCKETIO_ASYNC_MODE=gevent (production), Gunicorn's gevent
+# worker calls monkey.patch_all() AFTER the master process has already
+# imported ssl/pymongo, which causes RecursionError on TLS connections.
+# Patching here ensures ssl is monkey-patched before pymongo ever imports it.
+import os as _os
+if _os.getenv("SOCKETIO_ASYNC_MODE", "threading") == "gevent":
+    try:
+        from gevent import monkey as _monkey
+        _monkey.patch_all(thread=False)  # thread=False avoids breaking threading.Lock
+    except ImportError:
+        pass
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
