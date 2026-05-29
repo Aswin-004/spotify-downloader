@@ -121,6 +121,8 @@ def download_track_task(self, track_metadata: dict, output_path: str = None):
 
     logger.info(f"[task {task_id}] Starting download: {title} – {artist}")
 
+    _quality_report = {}
+    _deregister_on_exit = False  # set True only on terminal exit (success or final failure)
     try:
         ds = _get_downloader()
 
@@ -145,17 +147,17 @@ def download_track_task(self, track_metadata: dict, output_path: str = None):
             album_art_url=album_art_url,
         )
 
-        quality_report = result.get("quality_report", {})
+        _quality_report = result.get("quality_report", {})
 
         # Emit the same quality_report event the original pipeline emits
-        _emit_socketio_event("quality_report", quality_report)
+        _emit_socketio_event("quality_report", _quality_report)
 
+        _deregister_on_exit = True  # success → clear slot
         logger.info(f"[task {task_id}] Completed: {result.get('status')} — {result.get('filename', '')}")
-        return quality_report
+        return _quality_report
 
     except Exception as exc:
         retry_num = self.request.retries
-        # CELERY UPGRADE — emit task_retrying event
         if retry_num < self.max_retries:
             _emit_socketio_event("task_retrying", {
                 "task_id": task_id,
@@ -166,9 +168,9 @@ def download_track_task(self, track_metadata: dict, output_path: str = None):
                 "error": str(exc)[:200],
             })
             logger.warning(f"[task {task_id}] Retrying ({retry_num + 1}/{self.max_retries}): {exc}")
+            # _deregister_on_exit stays False — keep slot held during retry backoff
             raise  # Celery's autoretry will handle it
         else:
-            # CELERY UPGRADE — emit task_failed event
             _emit_socketio_event("task_failed", {
                 "task_id": task_id,
                 "title": title,
@@ -176,7 +178,21 @@ def download_track_task(self, track_metadata: dict, output_path: str = None):
                 "error": str(exc)[:200],
             })
             logger.error(f"[task {task_id}] All retries exhausted: {exc}")
+            _deregister_on_exit = True  # permanent failure → clear slot
             raise
+
+    finally:
+        # Deregister on terminal exits only (success or permanent failure).
+        # Intermediate retries leave the flag False so the slot stays held
+        # during the retry backoff period, preventing duplicate dispatches.
+        # External revoke (SIGTERM → SystemExit) also leaves the flag False;
+        # the Redis TTL (TASK_DEDUP_TTL, default 30 min) cleans up the key.
+        if _deregister_on_exit:
+            try:
+                from queue_manager import deregister_task
+                deregister_task(title, artist)
+            except Exception:
+                pass
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -1,8 +1,13 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  // Load .env so VITE_API_BASE_URL is available in vite.config.js itself
+  const env = loadEnv(mode, process.cwd(), '');
+  const backendTarget = env.VITE_BACKEND_PROXY_TARGET || 'http://localhost:5000';
+
+  return {
   plugins: [react()],
   resolve: {
     alias: {
@@ -13,11 +18,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: backendTarget,
         changeOrigin: true,
       },
       '/socket.io': {
-        target: 'http://localhost:5000',
+        target: backendTarget,
         changeOrigin: true,
         ws: true,
         timeout: 60000,
@@ -45,4 +50,5 @@ export default defineConfig({
       },
     },
   },
-});
+  }; // end of config object
+}); // end of defineConfig

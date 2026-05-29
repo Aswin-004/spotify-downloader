@@ -46,6 +46,29 @@ except ImportError as _tag_err:  # MUSICBRAINZ
     _tagger_available = False  # MUSICBRAINZ
     logging.getLogger(__name__).warning(f"Tagger service not available: {_tag_err}")  # MUSICBRAINZ
 
+# RATE LIMITING — Flask-Limiter with Redis storage
+from rate_limiter import (
+    limiter,
+    rate_limit_exceeded_handler,
+    check_queue_overload,
+    LIMIT_DOWNLOAD,
+    LIMIT_PLAYLIST,
+    LIMIT_MAINTENANCE,
+    LIMIT_METADATA,
+    LIMIT_READS,
+)
+
+# QUEUE MANAGER — dedup, stuck-task cleanup, SocketIO bridge
+from queue_manager import (
+    is_duplicate_task,
+    claim_task_slot,
+    register_task,
+    deregister_task,
+    get_queue_depth,
+    start_stuck_task_cleanup_thread,
+    start_socketio_bridge,
+)
+
 # CELERY UPGRADE — conditional Celery imports (graceful if Redis unavailable)
 _celery_available = False
 _celery_app = None
@@ -63,21 +86,40 @@ except ImportError:
 except Exception as _celery_err:
     logging.getLogger(__name__).warning(f"Celery init error: {_celery_err} — falling back to threading")
 
-# ── Loguru: structured file logging ──────────────────────────────────────────
+# ── Loguru: structured logging ────────────────────────────────────────────────
+# In production (Render/cloud) log to stdout so the platform captures it.
+# In development keep the rotating file log as well.
 try:
+    import sys as _sys_log
     from loguru import logger
 
-    _log_dir = Path(__file__).parent / "logs"
-    _log_dir.mkdir(exist_ok=True)
-    logger.add(
-        str(_log_dir / "app.log"),
-        rotation="5 MB",
-        retention="7 days",
-        level="INFO",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name} | {message}",
-    )
+    _IS_PRODUCTION = os.getenv("FLASK_ENV", "production") == "production"
+
+    if not _IS_PRODUCTION:
+        # Dev: also write to a rotating file
+        _log_dir = Path(__file__).parent / "logs"
+        _log_dir.mkdir(exist_ok=True)
+        logger.add(
+            str(_log_dir / "app.log"),
+            rotation="5 MB",
+            retention="7 days",
+            level="INFO",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name} | {message}",
+        )
+    else:
+        # Production: stdout only (Loguru's default sink is stderr — add stdout)
+        logger.remove()  # remove default stderr sink
+        logger.add(
+            _sys_log.stdout,
+            level="INFO",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name} | {message}",
+            colorize=False,
+        )
 except ImportError:
     logger = setup_logging(__name__, level=logging.INFO)  # type: ignore[assignment]
+
+# Process start time — used by /api/health to report uptime
+_START_TIME = time.time()
 
 # Download status tracking
 download_status = {
@@ -175,33 +217,43 @@ app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 app.config['SECRET_KEY'] = config.SECRET_KEY
 
-# SocketIO with CORS — threading for stable WebSocket support
+# RATE LIMITING — attach limiter to app + register 429 handler
+limiter.init_app(app)
+app.register_error_handler(429, rate_limit_exceeded_handler)
+
+# CORS origins — read from config (env-driven in production)
+_ALLOWED_ORIGINS = config.ALLOWED_ORIGINS
+
+# WebSocket upgrade guard: MUST be explicitly enabled in production.
+# Defaults to False (safe for Werkzeug dev server).
+# In production (Gunicorn + gevent worker): set SOCKETIO_ALLOW_UPGRADES=true
+_ALLOW_WS_UPGRADES = os.getenv("SOCKETIO_ALLOW_UPGRADES", "false").lower() in ("1", "true", "yes")
+
+# SocketIO with CORS — async_mode set by env (gevent in production, threading locally)
+_SOCKETIO_ASYNC_MODE = os.getenv("SOCKETIO_ASYNC_MODE", "threading")
+
 socketio = SocketIO(
     app,
-    async_mode="threading",
-    cors_allowed_origins=[
-        "http://localhost:5173", "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://localhost:5000", "http://127.0.0.1:5000",
-    ],
+    async_mode=_SOCKETIO_ASYNC_MODE,
+    cors_allowed_origins=_ALLOWED_ORIGINS,
     ping_timeout=300,
     ping_interval=10,
     max_http_buffer_size=1e8,
     logger=False,
     engineio_logger=False,
-    allow_upgrades=False,  # threading mode can't handle WS upgrades on Werkzeug dev server
+    allow_upgrades=_ALLOW_WS_UPGRADES,
 )
 set_socketio(socketio)
 set_downloader_socketio(socketio)  # quality_report events
 
+# QUEUE MANAGER — start background threads after socketio is ready
+start_socketio_bridge(socketio)   # forward Celery→Redis→SocketIO events
+start_stuck_task_cleanup_thread() # revoke tasks stuck > MAX_TASK_AGE
+
 # Enable CORS for all API routes
 CORS(app, resources={
     r"/api/*": {
-        "origins": [
-            "http://localhost:5173", "http://localhost:5174",
-            "http://127.0.0.1:5173",
-            "http://localhost:5000", "http://127.0.0.1:5000",
-        ],
+        "origins": _ALLOWED_ORIGINS,
         "methods": ["GET", "POST", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type"],
         "supports_credentials": False
@@ -261,6 +313,7 @@ def maintenance_status():
 
 
 @app.route('/api/maintenance/run', methods=['POST'])
+@limiter.limit(LIMIT_MAINTENANCE)
 def maintenance_run():
     global _maintenance_running
     data   = request.get_json() or {}
@@ -443,6 +496,7 @@ def serve_frontend(filename):
 
 
 @app.route('/api/track', methods=['POST'])
+@limiter.limit(LIMIT_METADATA)
 def get_track_metadata():
     """
     Extract metadata from Spotify URL (track or album)
@@ -527,6 +581,19 @@ def get_track_metadata():
             # Single track metadata
             metadata = spotify_service.get_track_metadata(url)
             source = metadata.get("source", "spotify")
+            # Duplicate detection — check library index by Spotify track ID
+            already_in_library = False
+            existing_folder = None
+            try:
+                from database import find_track_by_spotify_id as _find_by_sid
+                _sid = url_info.get("id", "")
+                if _sid:
+                    _existing = _find_by_sid(_sid)
+                    if _existing:
+                        already_in_library = True
+                        existing_folder = _existing.get("genre_folder", "")
+            except Exception:
+                pass
             return jsonify({
                 "type": "track",
                 "title": metadata["title"],
@@ -534,6 +601,8 @@ def get_track_metadata():
                 "album": metadata["album"],
                 "duration": metadata.get("duration_ms", 0) // 1000 if metadata.get("duration_ms") else 0,
                 "source": source,
+                "already_in_library": already_in_library,
+                "existing_folder": existing_folder,
             }), 200
     
     except ValueError as e:
@@ -547,11 +616,16 @@ def get_track_metadata():
 
 
 @app.route('/api/download', methods=['POST'])
+@limiter.limit(LIMIT_DOWNLOAD)
 def download_track():
     """
     Download track from Spotify URL
     Runs download in background and returns immediately with 202 Accepted
     """
+    # RATE LIMITING — reject if Celery queue is full
+    overloaded, err = check_queue_overload()
+    if overloaded:
+        return jsonify(err), 503
     try:
         global active_download, download_status
         
@@ -769,6 +843,19 @@ def _download_background(url):
 
             # Use Celery task queue when available, fall back to blocking download
             if _celery_available:
+                # QUEUE MANAGER — Atomic check-and-claim to prevent duplicate downloads.
+                # claim_task_slot uses Redis SET NX — no race condition.
+                if not claim_task_slot(title, artist):
+                    logger.info(f"[celery] Dedup skip (already queued): {title} - {artist}")
+                    with status_lock:
+                        active_download = False
+                    socketio.emit("download_duplicate", {
+                        "title": title,
+                        "artist": artist,
+                        "message": f"'{title}' by {artist} is already downloading.",
+                    })
+                    return  # exits background task cleanly; finally block still runs
+
                 logger.info(f"[celery] Dispatching track to Celery: {title} - {artist}")
                 task_meta = {
                     "title": title,
@@ -778,6 +865,8 @@ def _download_background(url):
                     "album_art_url": album_art_url,
                 }
                 task = download_track_task.delay(task_meta, manual_folder)
+                # Slot already claimed by claim_task_slot above; update with real task_id
+                register_task(title, artist, task.id)
                 with status_lock:
                     download_status["status"] = "queued"
                     download_status["current"] = f"{title} - {artist} (queued)"
@@ -992,6 +1081,7 @@ def _sanitize_force_folder(raw):
 
 
 @app.route('/api/refresh-playlist', methods=['POST'])
+@limiter.limit(LIMIT_PLAYLIST)
 def refresh_playlist():
     """Trigger a manual playlist refresh (force-fetches from Spotify, bypasses cache).
     Accepts optional JSON body:
@@ -1078,12 +1168,78 @@ def clear_genre_cache_endpoint():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        "status": "healthy",
-        "message": "Spotify Meta Downloader API is running",
-        "celery_available": _celery_available,
-    }), 200
+    """
+    Production health check — used by Render health probes and the frontend
+    status panel.  Returns 200 when healthy, 503 when degraded/critical.
+
+    Includes: Redis, MongoDB, Celery queue depth, worker count, uptime,
+    rate-limit storage, and pipeline metrics summary.
+    """
+    from database import is_mongo_available
+    from celery_app import is_redis_available
+    from queue_manager import get_queue_depth
+
+    mongo_ok  = is_mongo_available()
+    redis_ok  = is_redis_available()
+    queue     = get_queue_depth()
+    uptime    = int(time.time() - _START_TIME)
+
+    # Fetch pipeline metrics (non-blocking; returns empty dicts on failure)
+    pipeline_metrics: dict = {}
+    try:
+        from services.metrics_service import health_report as _metrics_health
+        pipeline_metrics = _metrics_health(window_minutes=60)
+    except Exception:
+        pass
+
+    # Determine overall status.
+    # 503 only for hard infrastructure failures so Render health probes don't
+    # restart the dyno due to stale/historical pipeline metrics.
+    # Pipeline metric status is informational only.
+    if not mongo_ok:
+        overall = "critical"    # 503 — MongoDB is required for all operations
+    elif _celery_available and not redis_ok:
+        overall = "degraded"    # 200 — Redis was expected but unreachable
+    else:
+        # Incorporate pipeline health only as an advisory — never escalate to
+        # 503 from pipeline metrics alone so health probes remain stable.
+        pipeline_status = pipeline_metrics.get("status", "unknown")
+        if pipeline_status in ("degraded", "critical"):
+            overall = "degraded"
+        else:
+            overall = "healthy"
+
+    redis_url_masked = ""
+    raw_redis = os.getenv("REDIS_URL", "")
+    if raw_redis:
+        # Mask credentials: redis://user:pass@host:port/db → host:port/db
+        redis_url_masked = raw_redis.split("@")[-1]
+
+    body = {
+        "status": overall,
+        "version": os.getenv("APP_VERSION", "alpha-1"),
+        "uptime_seconds": uptime,
+        "services": {
+            "mongodb": "ok" if mongo_ok else "unavailable",
+            "redis":   "ok" if redis_ok   else "unavailable",
+            "celery":  "ok" if _celery_available else "unavailable (threading fallback)",
+        },
+        "queue": queue,
+        "rate_limiter": {
+            "storage": redis_url_masked or "memory (dev)",
+        },
+        "pipeline": {
+            "status":   pipeline_metrics.get("status", "unknown"),
+            "alerts":   pipeline_metrics.get("alerts", []),
+            "counters": pipeline_metrics.get("counters", {}),
+        },
+        "environment": os.getenv("FLASK_ENV", "production"),
+    }
+
+    # Only return 503 for hard failures (MongoDB down) so Render doesn't
+    # restart the dyno on degraded-but-functional state.
+    http_status = 503 if overall == "critical" else 200
+    return jsonify(body), http_status
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1594,6 +1750,72 @@ def _with_timeout(fn, seconds=8):
     return result[0]
 
 
+@app.route('/api/duplicates', methods=['GET'])
+def list_duplicates():
+    """Return all files sitting in NeedsReview/Duplicates/."""
+    from mutagen.id3 import ID3 as _ID3
+    dup_dir = Path(BASE_DOWNLOAD_DIR) / "NeedsReview" / "Duplicates"
+    items = []
+    if dup_dir.is_dir():
+        for fp in sorted(dup_dir.glob("*.mp3")):
+            try:
+                tags = _ID3(str(fp))
+                title  = str(tags.get("TIT2", fp.stem)).strip() or fp.stem
+                artist = str(tags.get("TPE1", "")).strip()
+            except Exception:
+                title, artist = fp.stem, ""
+            items.append({"filename": fp.name, "title": title, "artist": artist})
+    return jsonify({"duplicates": items}), 200
+
+
+@app.route('/api/duplicates/delete', methods=['POST'])
+def delete_duplicate():
+    """Permanently delete a file from NeedsReview/Duplicates/."""
+    data = request.get_json() or {}
+    filename = (data.get("filename") or "").strip()
+    if not filename or "/" in filename or "\\" in filename or ".." in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    target = (Path(BASE_DOWNLOAD_DIR) / "NeedsReview" / "Duplicates" / filename).resolve()
+    allowed = (Path(BASE_DOWNLOAD_DIR) / "NeedsReview" / "Duplicates").resolve()
+    if not str(target).startswith(str(allowed)):
+        return jsonify({"error": "Access denied"}), 403
+    if not target.is_file():
+        return jsonify({"error": "File not found"}), 404
+    target.unlink()
+    logger.info(f"[duplicates] Deleted: {filename}")
+    return jsonify({"deleted": True, "filename": filename}), 200
+
+
+@app.route('/api/duplicates/keep', methods=['POST'])
+def keep_duplicate():
+    """Move a duplicate to the main library under a chosen genre."""
+    import shutil as _shutil
+    data = request.get_json() or {}
+    filename = (data.get("filename") or "").strip()
+    genre    = (data.get("genre") or "").strip()
+    if not filename or "/" in filename or "\\" in filename or ".." in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    if not genre:
+        return jsonify({"error": "genre required"}), 400
+
+    src = (Path(BASE_DOWNLOAD_DIR) / "NeedsReview" / "Duplicates" / filename).resolve()
+    allowed = (Path(BASE_DOWNLOAD_DIR) / "NeedsReview" / "Duplicates").resolve()
+    if not str(src).startswith(str(allowed)):
+        return jsonify({"error": "Access denied"}), 403
+    if not src.is_file():
+        return jsonify({"error": "File not found"}), 404
+
+    from services.genre_router import normalize_genre, _library_path
+    canonical = normalize_genre(genre)
+    lib_path  = _library_path(canonical) if canonical else f"Library/{genre}"
+    dest_dir  = Path(BASE_DOWNLOAD_DIR) / lib_path
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / src.name
+    _shutil.move(str(src), str(dest))
+    logger.info(f"[duplicates] Kept: {filename} → {lib_path}")
+    return jsonify({"moved": True, "filename": filename, "destination": lib_path}), 200
+
+
 @app.route('/api/retag-catchall-track', methods=['POST'])
 def retag_catchall_track():
     """Retry genre classification for one catch-all track using the full fallback chain."""
@@ -1754,7 +1976,7 @@ def retag_catchall_track():
                 genre_path = _library_path(canonical) if canonical else None
                 route_source = "gemini"
 
-        if not genre_path or genre_path == "Library/Electronic":
+        if not genre_path:
             return jsonify({"moved": False, "reason": f"Could not classify (source={route_source})"}), 200
 
         dest_dir = Path(BASE_DOWNLOAD_DIR) / genre_path
@@ -1905,6 +2127,209 @@ def get_catchall_tracks():
                 "id": fp.stem,  # stable unique id based on filename
             })
     return jsonify(items), 200
+
+
+@app.route('/api/preview-track', methods=['GET'])
+def preview_track():
+    """Stream an audio file for in-browser preview.
+
+    Query params:
+      filename  — bare filename (e.g. "Song - Artist.mp3"), looked up in Library/Electronic/
+      path      — relative path from BASE_DOWNLOAD_DIR (e.g. "Library/House/Song.mp3"),
+                  used when the file is not in Electronic/
+    """
+    filename = request.args.get("filename", "").strip()
+    rel_path  = request.args.get("path", "").strip()
+
+    if not filename and not rel_path:
+        return jsonify({"error": "filename or path required"}), 400
+
+    if rel_path:
+        target = Path(BASE_DOWNLOAD_DIR) / rel_path
+    else:
+        target = Path(BASE_DOWNLOAD_DIR) / "Library" / "Electronic" / filename
+
+    # Security: resolve and ensure it stays inside BASE_DOWNLOAD_DIR
+    try:
+        resolved = target.resolve()
+        base_resolved = Path(BASE_DOWNLOAD_DIR).resolve()
+        if not str(resolved).startswith(str(base_resolved)):
+            return jsonify({"error": "Access denied"}), 403
+    except Exception:
+        return jsonify({"error": "Invalid path"}), 400
+
+    if not resolved.is_file():
+        return jsonify({"error": "File not found"}), 404
+
+    return send_from_directory(
+        str(resolved.parent),
+        resolved.name,
+        mimetype="audio/mpeg",
+        conditional=True,  # enables Range request support for audio seeking
+    )
+
+
+@app.route('/api/track/bpm', methods=['POST'])
+def update_track_bpm():
+    """Manually correct BPM (and optionally key) for a track.
+
+    Body JSON:
+      filename   — bare filename (e.g. "Song - Artist.mp3")
+      path       — optional relative path from BASE_DOWNLOAD_DIR
+      bpm        — corrected BPM value (integer or float)
+      key        — optional corrected key string (e.g. "4A")
+    """
+    data = request.get_json(force=True) or {}
+    filename  = str(data.get("filename", "")).strip()
+    rel_path  = str(data.get("path", "")).strip()
+    bpm_raw   = data.get("bpm")
+    key_str   = str(data.get("key", "")).strip() or None
+
+    if not filename and not rel_path:
+        return jsonify({"error": "filename or path required"}), 400
+    if bpm_raw is None:
+        return jsonify({"error": "bpm required"}), 400
+
+    try:
+        bpm = float(bpm_raw)
+        if bpm <= 0 or bpm > 300:
+            raise ValueError()
+    except (ValueError, TypeError):
+        return jsonify({"error": "bpm must be a positive number ≤ 300"}), 400
+
+    # Locate the file
+    if rel_path:
+        target = Path(BASE_DOWNLOAD_DIR) / rel_path
+    elif filename:
+        # Search Library/Electronic first, then scan all library folders
+        candidate = Path(BASE_DOWNLOAD_DIR) / "Library" / "Electronic" / filename
+        if not candidate.is_file():
+            found = list(Path(BASE_DOWNLOAD_DIR).rglob(filename))
+            candidate = found[0] if found else candidate
+        target = candidate
+
+    # Security: must stay inside BASE_DOWNLOAD_DIR
+    try:
+        resolved = target.resolve()
+        if not str(resolved).startswith(str(Path(BASE_DOWNLOAD_DIR).resolve())):
+            return jsonify({"error": "Access denied"}), 403
+    except Exception:
+        return jsonify({"error": "Invalid path"}), 400
+
+    if not resolved.is_file():
+        return jsonify({"error": "File not found"}), 404
+
+    # Write BPM + key to ID3 tags
+    try:
+        from bpm_key_service import write_bpm_key_to_tags, persist_audio_features
+        write_bpm_key_to_tags(str(resolved), bpm, key_str)
+        persist_audio_features(
+            resolved.stem,
+            {"bpm": bpm, "key": key_str, "analyzed": True, "manual": True},
+        )
+        logger.info(f"[bpm-update] {resolved.name} → {bpm} BPM · {key_str or 'key unchanged'}")
+        return jsonify({"ok": True, "bpm": bpm, "key": key_str, "filename": resolved.name}), 200
+    except Exception as e:
+        logger.error(f"[bpm-update] Failed for {filename}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/export/rekordbox', methods=['GET'])
+def export_rekordbox():
+    """
+    Generate a Rekordbox-compatible XML playlist for a library folder.
+
+    Query params:
+        folder  — relative path inside BASE_DOWNLOAD_DIR (e.g. Library/Electronic)
+                  or "all" to include every .mp3 in the library
+        name    — playlist name shown inside Rekordbox (defaults to folder name)
+    """
+    import xml.etree.ElementTree as _ET
+    from mutagen.id3 import ID3 as _ID3
+    from mutagen.mp3 import MP3 as _MP3
+
+    folder_param = request.args.get("folder", "all").strip()
+    playlist_name = request.args.get("name", "").strip() or folder_param
+
+    base = Path(BASE_DOWNLOAD_DIR).resolve()
+
+    if folder_param.lower() == "all":
+        scan_root = base
+    else:
+        scan_root = (base / folder_param).resolve()
+        if not str(scan_root).startswith(str(base)):
+            return jsonify({"error": "Access denied"}), 403
+
+    if not scan_root.is_dir():
+        return jsonify({"error": "Folder not found"}), 404
+
+    mp3_files = sorted(scan_root.rglob("*.mp3"))
+
+    # Build Rekordbox XML
+    root_el = _ET.Element("DJ_PLAYLISTS", Version="1.0.0")
+    _ET.SubElement(root_el, "PRODUCT", Name="rekordbox", Version="6.8.5", Company="AlphaTheta")
+
+    collection = _ET.SubElement(root_el, "COLLECTION", Entries=str(len(mp3_files)))
+    playlist_keys = []
+
+    for idx, mp3_path in enumerate(mp3_files, start=1):
+        title, artist, bpm_val, key_val, duration_sec = "", "", "", "", 0
+        try:
+            tags = _ID3(str(mp3_path))
+            title  = str(tags.get("TIT2", mp3_path.stem))
+            artist = str(tags.get("TPE1", ""))
+            bpm_raw = str(tags.get("TBPM", ""))
+            bpm_val = bpm_raw.split(".")[0] if bpm_raw else ""
+            key_val = str(tags.get("TKEY", ""))
+        except Exception:
+            title = mp3_path.stem
+
+        try:
+            audio = _MP3(str(mp3_path))
+            duration_sec = int(audio.info.length)
+        except Exception:
+            pass
+
+        # Rekordbox expects file:// URI with forward slashes
+        file_uri = "file://localhost/" + str(mp3_path).replace("\\", "/").lstrip("/")
+
+        track_el = _ET.SubElement(
+            collection, "TRACK",
+            TrackID=str(idx),
+            Name=title,
+            Artist=artist,
+            TotalTime=str(duration_sec),
+            Tonality=key_val,
+            Location=file_uri,
+        )
+        if bpm_val:
+            track_el.set("AverageBpm", bpm_val)
+
+        playlist_keys.append(str(idx))
+
+    playlists_el = _ET.SubElement(root_el, "PLAYLISTS")
+    root_node = _ET.SubElement(playlists_el, "NODE", Name="ROOT", Type="0", Count="1")
+    folder_node = _ET.SubElement(
+        root_node, "NODE",
+        Name=playlist_name,
+        Type="1",
+        Entries=str(len(playlist_keys)),
+        KeyType="0",
+    )
+    for key in playlist_keys:
+        _ET.SubElement(folder_node, "TRACK", Key=key)
+
+    xml_bytes = b'<?xml version="1.0" encoding="UTF-8"?>\n' + _ET.tostring(root_el, encoding="unicode").encode("utf-8")
+
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in playlist_name).strip()
+    filename = f"rekordbox_{safe_name}.xml"
+
+    from flask import Response as _Response
+    return _Response(
+        xml_bytes,
+        mimetype="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.route('/api/stop-sync', methods=['POST'])

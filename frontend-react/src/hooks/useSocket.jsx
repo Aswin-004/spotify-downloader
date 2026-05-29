@@ -57,16 +57,30 @@ export function SocketProvider({ children }) {
   toastRef.current = addToast;
 
   useEffect(() => {
-    const socket = io('', {  // connect to same origin — works via Vite proxy on dev and Flask directly in prod
-      transports: ['polling'],  // websocket disabled — allow_upgrades=False on server
+    // PRODUCTION DEPLOY — connect to the Render backend URL in production.
+    // VITE_SOCKET_URL is empty in dev (same-origin via Vite proxy).
+    // In production: set VITE_SOCKET_URL=https://your-app.onrender.com
+    const _socketUrl = (import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '') || undefined;
+
+    // PRODUCTION DEPLOY — in production (gevent worker) WebSocket upgrades work;
+    // locally (threading + Werkzeug) they don't. VITE_SOCKET_TRANSPORTS lets
+    // the deployment control this without a code change.
+    // Default: polling only (safe for all environments).
+    // Production override: set VITE_SOCKET_TRANSPORTS=polling,websocket
+    const _transports = import.meta.env.VITE_SOCKET_TRANSPORTS
+      ? import.meta.env.VITE_SOCKET_TRANSPORTS.split(',').map((t) => t.trim())
+      : ['polling'];
+
+    const socket = io(_socketUrl, {
+      transports: _transports,
       autoConnect: true,
       reconnection: true,
-      reconnectionAttempts: Infinity,  // DISCONNECT FIX: never stop trying
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      timeout: 30000,  // DISCONNECT FIX: increased from 10s to 30s
-      pingTimeout: 300000,  // DISCONNECT FIX: 5 min to match server
-      pingInterval: 10000,  // DISCONNECT FIX: 10s to match server
+      timeout: 30000,
+      pingTimeout: 300000,
+      pingInterval: 10000,
     });
     socketRef.current = socket;
 
@@ -270,6 +284,16 @@ export function SocketProvider({ children }) {
         socket.emit('ping_keepalive');
       }
     }, 15000);  // DISCONNECT FIX
+
+    // Celery dedup: track is already queued or downloading
+    socket.on('download_duplicate', (data) => {
+      toastRef.current({
+        type: 'warning',
+        title: 'Already downloading',
+        description: data.message || `${data.title} is already in the queue.`,
+        duration: 4000,
+      });
+    });
 
     // AI rescued an unknown genre — routed automatically, no action needed
     socket.on('download_auto_classified', (data) => {

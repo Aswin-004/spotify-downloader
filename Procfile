@@ -1,0 +1,2 @@
+web: cd backend && python startup_check.py && gunicorn --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker --workers 1 --bind 0.0.0.0:$PORT --timeout 120 --keep-alive 5 --log-level info --access-logfile - --error-logfile - app:app
+worker: cd backend && celery -A celery_app worker --loglevel=info --concurrency=2 --max-tasks-per-child=50 --without-gossip --without-mingle --heartbeat-interval=10

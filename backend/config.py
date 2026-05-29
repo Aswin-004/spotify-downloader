@@ -2,20 +2,36 @@
 Configuration settings for Spotify Meta Downloader
 """
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _parse_origins(raw: str) -> list[str]:
+    """Split a comma-separated ALLOWED_ORIGINS string into a list."""
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+_DEV_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://localhost:5000",
+    "http://127.0.0.1:5000",
+]
+
 
 class Config:
     """Base configuration"""
     DEBUG = False
     FLASK_ENV = os.getenv("FLASK_ENV", "production")
-    
+
     # Server settings
-    PORT = 5000
+    PORT = int(os.getenv("PORT", "5000"))
     HOST = "0.0.0.0"
     SECRET_KEY = os.getenv("SECRET_KEY", "")
-    
+
     # Spotify API
     SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
     SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
@@ -28,13 +44,19 @@ class Config:
 
     # Last.fm API (free — register at last.fm/api)
     LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "")
-    
+
     # Playlist configuration (single ingest playlist)
     INGEST_PLAYLIST_ID = os.getenv("INGEST_PLAYLIST_ID", "")
-    
-    # OAuth
+
+    # OAuth — REDIRECT_URI must be updated in your Spotify Developer Dashboard
     REDIRECT_URI = os.getenv("REDIRECT_URI", "http://127.0.0.1:8888/callback")
-    
+
+    # CORS — comma-separated list of allowed origins for API + SocketIO
+    # Set ALLOWED_ORIGINS=https://your-app.vercel.app in production
+    ALLOWED_ORIGINS: list[str] = _parse_origins(
+        os.getenv("ALLOWED_ORIGINS", ",".join(_DEV_ORIGINS))
+    )
+
     # Auto-sync interval in seconds
     CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "500"))
     
@@ -742,15 +764,76 @@ class Config:
 
 
 class DevelopmentConfig(Config):
-    """Development configuration"""
+    """Development configuration — no hard requirement on secrets."""
     DEBUG = True
     FLASK_ENV = "development"
 
 
 class ProductionConfig(Config):
-    """Production configuration"""
+    """
+    Production configuration — fail fast if required secrets are missing.
+
+    Required env vars in production:
+      SECRET_KEY          — Flask session signing key (min 32 chars)
+      MONGODB_URI         — MongoDB Atlas connection string
+      REDIS_URL           — Upstash / Redis connection string
+      SPOTIFY_CLIENT_ID   — Spotify Developer app client ID
+      SPOTIFY_CLIENT_SECRET
+      REDIRECT_URI        — Must match your Spotify Dashboard redirect URI
+      ALLOWED_ORIGINS     — Comma-separated list of frontend origins
+    """
     DEBUG = False
     FLASK_ENV = "production"
+
+    # Redis + MongoDB URLs required in production
+    REDIS_URL: str = os.getenv("REDIS_URL", "")
+    MONGODB_URI: str = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+
+    def __init__(self):
+        missing = []
+
+        if not self.SECRET_KEY or len(self.SECRET_KEY) < 32:
+            missing.append(
+                "SECRET_KEY (must be at least 32 chars — "
+                "run: python -c \"import secrets; print(secrets.token_hex(32))\")"
+            )
+
+        if not self.REDIS_URL:
+            missing.append("REDIS_URL (required in production — use Upstash or Render Redis)")
+
+        _mongo = os.getenv("MONGODB_URI", "")
+        if not _mongo or _mongo == "mongodb://localhost:27017":
+            missing.append(
+                "MONGODB_URI (must point to MongoDB Atlas, not localhost)"
+            )
+
+        if not self.SPOTIFY_CLIENT_ID:
+            missing.append("SPOTIFY_CLIENT_ID")
+
+        if not self.SPOTIFY_CLIENT_SECRET:
+            missing.append("SPOTIFY_CLIENT_SECRET")
+
+        _redirect = os.getenv("REDIRECT_URI", "")
+        if not _redirect or "127.0.0.1" in _redirect or "localhost" in _redirect:
+            missing.append(
+                "REDIRECT_URI (must be your production backend URL, e.g. "
+                "https://your-app.onrender.com/callback)"
+            )
+
+        _origins = os.getenv("ALLOWED_ORIGINS", "")
+        if not _origins:
+            missing.append(
+                "ALLOWED_ORIGINS (comma-separated list of frontend origins, "
+                "e.g. https://your-app.vercel.app)"
+            )
+
+        if missing:
+            print("\n" + "=" * 70, file=sys.stderr)
+            print("FATAL: Production startup blocked — missing required env vars:", file=sys.stderr)
+            for item in missing:
+                print(f"  ✗  {item}", file=sys.stderr)
+            print("=" * 70 + "\n", file=sys.stderr)
+            sys.exit(1)
 
 
 # Get config based on environment

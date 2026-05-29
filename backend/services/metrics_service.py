@@ -55,6 +55,8 @@ M_GENRE_CONFIDENCE     = "genre_confidence"       # value: 0.0–1.0
 M_RETRY_QUEUE_DEPTH    = "retry_queue_depth"      # gauge
 M_RECON_ISSUES         = "reconciliation_issues"  # gauge
 M_COLLISION_RESOLVED   = "collision_resolved"     # counter: filename suffix applied
+M_CELERY_QUEUE_DEPTH   = "celery_queue_depth"     # gauge: tasks in Celery queue
+M_RATE_LIMIT_HIT       = "rate_limit_hit"         # counter: 429 responses served
 
 # Thresholds for health status
 _THRESHOLDS = {
@@ -237,6 +239,16 @@ def snapshot_retry_queue_depth():
         pass
 
 
+def snapshot_celery_queue_depth():
+    """Record current Celery queue depth (active + reserved tasks) as a gauge."""
+    try:
+        from queue_manager import get_queue_depth
+        info = get_queue_depth()
+        record_value(M_CELERY_QUEUE_DEPTH, float(info.get("total", 0)))
+    except Exception:
+        pass
+
+
 # ── Health report ─────────────────────────────────────────────────────────────
 
 def health_report(window_minutes: int = 60) -> dict:
@@ -255,14 +267,15 @@ def health_report(window_minutes: int = 60) -> dict:
         }
     """
     snapshot_retry_queue_depth()
+    snapshot_celery_queue_depth()
 
     latency_metrics = [
         M_DOWNLOAD_LATENCY, M_TAGGING_LATENCY, M_ORGANIZE_LATENCY, M_LOCK_WAIT
     ]
-    gauge_metrics = [M_RETRY_QUEUE_DEPTH, M_RECON_ISSUES]
+    gauge_metrics = [M_RETRY_QUEUE_DEPTH, M_RECON_ISSUES, M_CELERY_QUEUE_DEPTH]
     counter_metrics = [
         M_DUPLICATE_PREVENTED, M_NEEDS_REVIEW_ROUTED,
-        M_LOCK_CONTENTION, M_RETRY_COUNT
+        M_LOCK_CONTENTION, M_RETRY_COUNT, M_RATE_LIMIT_HIT
     ]
 
     metrics_out: dict[str, Any] = {}

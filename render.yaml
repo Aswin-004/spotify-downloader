@@ -1,0 +1,104 @@
+version: "1"
+
+services:
+  # ── Web / API process ──────────────────────────────────────────────────────
+  - name: spotify-downloader-api
+    type: web
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      python startup_check.py &&
+      gunicorn
+        --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker
+        --workers 1
+        --bind 0.0.0.0:$PORT
+        --timeout 120
+        --keep-alive 5
+        --log-level info
+        --access-logfile -
+        --error-logfile -
+        app:app
+    healthCheckPath: /api/health
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: SOCKETIO_ASYNC_MODE
+        value: gevent
+      - key: SOCKETIO_ALLOW_UPGRADES
+        value: "true"
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: REDIS_URL
+        fromService:
+          name: spotify-downloader-redis
+          type: redis
+          property: connectionString
+      - key: MONGODB_URI
+        sync: false   # set manually in Render dashboard → MongoDB Atlas URI
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: REDIRECT_URI
+        sync: false   # https://spotify-downloader-api.onrender.com/callback
+      - key: ALLOWED_ORIGINS
+        sync: false   # https://your-app.vercel.app
+      - key: INGEST_PLAYLIST_ID
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LASTFM_API_KEY
+        sync: false
+      - key: DISABLE_BPM_ANALYSIS
+        value: "1"      # CPU-heavy; disable on Render Starter (512 MB RAM)
+      - key: DISABLE_FINGERPRINTING
+        value: "1"
+      - key: MAX_QUEUE_DEPTH
+        value: "10"
+
+  # ── Celery worker process ─────────────────────────────────────────────────
+  - name: spotify-downloader-worker
+    type: worker
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      celery -A celery_app worker
+        --loglevel=info
+        --concurrency=2
+        --max-tasks-per-child=50
+        --without-gossip
+        --without-mingle
+        --heartbeat-interval=10
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: REDIS_URL
+        fromService:
+          name: spotify-downloader-redis
+          type: redis
+          property: connectionString
+      - key: MONGODB_URI
+        sync: false
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: DISABLE_BPM_ANALYSIS
+        value: "1"
+      - key: DISABLE_FINGERPRINTING
+        value: "1"
+      - key: BASE_DOWNLOAD_DIR
+        value: /tmp/music   # workers don't write files in production
+
+  # ── Redis (Render-managed) ────────────────────────────────────────────────
+  - name: spotify-downloader-redis
+    type: redis
+    ipAllowList: []   # only internal access
+    plan: free
+    maxmemoryPolicy: noeviction

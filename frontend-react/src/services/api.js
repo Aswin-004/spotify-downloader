@@ -1,3 +1,12 @@
+// PRODUCTION DEPLOY — prefix all API calls with the backend base URL.
+// In development (Vite proxy): VITE_API_BASE_URL is empty → relative URLs work as-is.
+// In production (Vercel + Render): set VITE_API_BASE_URL=https://your-app.onrender.com
+const _BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
+function apiFetch(path, opts) {
+  return globalThis.fetch(`${_BASE}${path}`, opts);
+}
+
 async function handleResponse(res) {
   const data = await res.json();
   if (!res.ok) {
@@ -11,7 +20,7 @@ async function handleResponse(res) {
 
 export const api = {
   fetchMetadata(url) {
-    return fetch('/api/track', {
+    return apiFetch('/api/track', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
@@ -19,7 +28,7 @@ export const api = {
   },
 
   startDownload(url) {
-    return fetch('/api/download', {
+    return apiFetch('/api/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
@@ -27,35 +36,35 @@ export const api = {
   },
 
   getFiles() {
-    return fetch('/api/files').then(handleResponse);
+    return apiFetch('/api/files').then(handleResponse);
   },
 
   getHistory() {
-    return fetch('/api/history').then(handleResponse);
+    return apiFetch('/api/history').then(handleResponse);
   },
 
   clearHistory() {
-    return fetch('/api/history/clear', { method: 'POST' }).then(handleResponse);
+    return apiFetch('/api/history/clear', { method: 'POST' }).then(handleResponse);
   },
 
   getAutoStatus() {
-    return fetch('/api/auto-status').then(handleResponse);
+    return apiFetch('/api/auto-status').then(handleResponse);
   },
 
   getQueueStatus() {
-    return fetch('/api/queue-status').then(handleResponse);
+    return apiFetch('/api/queue-status').then(handleResponse);
   },
 
   getApiUsage() {
-    return fetch('/api/api-usage').then(handleResponse);
+    return apiFetch('/api/api-usage').then(handleResponse);
   },
 
   getIngestConfig() {
-    return fetch('/api/ingest-config').then(handleResponse);
+    return apiFetch('/api/ingest-config').then(handleResponse);
   },
 
   setIngestPlaylist(playlistId) {
-    return fetch('/api/ingest-config', {
+    return apiFetch('/api/ingest-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ playlist_id: playlistId }),
@@ -63,7 +72,7 @@ export const api = {
   },
 
   retagCatchallTrack(filepath) {
-    return fetch('/api/retag-catchall-track', {
+    return apiFetch('/api/retag-catchall-track', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filepath }),
@@ -71,15 +80,15 @@ export const api = {
   },
 
   getCatchallTracks() {
-    return fetch('/api/catchall-tracks').then(handleResponse);
+    return apiFetch('/api/catchall-tracks').then(handleResponse);
   },
 
   getGeminiQuota() {
-    return fetch('/api/gemini-quota').then(handleResponse);
+    return apiFetch('/api/gemini-quota').then(handleResponse);
   },
 
   stopSync() {
-    return fetch('/api/stop-sync', { method: 'POST' }).then(handleResponse);
+    return apiFetch('/api/stop-sync', { method: 'POST' }).then(handleResponse);
   },
 
   refreshPlaylist(options = {}) {
@@ -94,7 +103,7 @@ export const api = {
     if (options.forceRedownload === true) {
       body.force_redownload = true;
     }
-    return fetch('/api/refresh-playlist', {
+    return apiFetch('/api/refresh-playlist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -103,7 +112,7 @@ export const api = {
 
   clearHistoryForPlaylist: async (playlistId = null) => {
     const body = playlistId ? { playlist_id: playlistId } : {};
-    return fetch('/api/clear-history-for-playlist', {
+    return apiFetch('/api/clear-history-for-playlist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -111,68 +120,68 @@ export const api = {
   },
 
   deleteFile(filename) {
-    return fetch(`/api/delete/${encodeURIComponent(filename)}`, {
+    return apiFetch(`/api/delete/${encodeURIComponent(filename)}`, {
       method: 'DELETE',
     }).then(handleResponse);
   },
 
   getHealth() {
-    return fetch('/api/health').then(handleResponse);
+    return apiFetch('/api/health').then(handleResponse);
   },
 
   // MUSICBRAINZ — Retag library
   retagLibrary() {
-    return fetch('/api/library/retag', { method: 'POST' }).then(handleResponse);
+    return apiFetch('/api/library/retag', { method: 'POST' }).then(handleResponse);
   },
 
   // MUSICBRAINZ — Get retag status
   getRetagStatus() {
-    return fetch('/api/library/retag/status').then(handleResponse);
+    return apiFetch('/api/library/retag/status').then(handleResponse);
   },
 
   // ANALYTICS — Analytics dashboard endpoints
   getAnalyticsOverview() { // ANALYTICS
-    return fetch('/api/analytics/overview').then(handleResponse); // ANALYTICS
+    return apiFetch('/api/analytics/overview').then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   getAnalyticsDownloadsPerDay(days = 30) { // ANALYTICS
-    return fetch(`/api/analytics/downloads-per-day?days=${days}`).then(handleResponse); // ANALYTICS
+    return apiFetch(`/api/analytics/downloads-per-day?days=${days}`).then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   getAnalyticsTopArtists(limit = 10) { // ANALYTICS
-    return fetch(`/api/analytics/top-artists?limit=${limit}`).then(handleResponse); // ANALYTICS
+    return apiFetch(`/api/analytics/top-artists?limit=${limit}`).then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   getAnalyticsSourceBreakdown() { // ANALYTICS
-    return fetch('/api/analytics/source-breakdown').then(handleResponse); // ANALYTICS
+    return apiFetch('/api/analytics/source-breakdown').then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   getAnalyticsTaggingBreakdown() { // ANALYTICS
-    return fetch('/api/analytics/tagging-breakdown').then(handleResponse); // ANALYTICS
+    return apiFetch('/api/analytics/tagging-breakdown').then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   getAnalyticsRecent() { // ANALYTICS
-    return fetch('/api/analytics/recent').then(handleResponse); // ANALYTICS
+    return apiFetch('/api/analytics/recent').then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   getAnalyticsFailed() { // ANALYTICS
-    return fetch('/api/analytics/failed').then(handleResponse); // ANALYTICS
+    return apiFetch('/api/analytics/failed').then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   retryDownload(trackId) { // ANALYTICS
-    return fetch('/api/download/retry', { // ANALYTICS
+    return apiFetch('/api/download/retry', { // ANALYTICS
       method: 'POST', // ANALYTICS
       headers: { 'Content-Type': 'application/json' }, // ANALYTICS
       body: JSON.stringify({ track_id: trackId }), // ANALYTICS
     }).then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   getCacheAnalytics() { // ANALYTICS
-    return fetch('/api/cache-analytics').then(handleResponse); // ANALYTICS
+    return apiFetch('/api/cache-analytics').then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   getTaggingFailuresSummary() { // ANALYTICS
-    return fetch('/api/tagging-failures/summary').then(handleResponse); // ANALYTICS
+    return apiFetch('/api/tagging-failures/summary').then(handleResponse); // ANALYTICS
   }, // ANALYTICS
   getDownloadHistoryStats() { // ANALYTICS
-    return fetch('/api/download-history/stats').then(handleResponse); // ANALYTICS
+    return apiFetch('/api/download-history/stats').then(handleResponse); // ANALYTICS
   }, // ANALYTICS
 
   // FILE ORGANIZER — Batch organize library
   organize(options = {}) {
     const mode = options.mode || 'artist';
-    return fetch('/api/library/organize', {
+    return apiFetch('/api/library/organize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode }),
@@ -183,7 +192,7 @@ export const api = {
   organizeRecent(options = {}) {
     const mode = options.mode || 'artist';
     const hours = options.hours || 24;
-    return fetch('/api/library/organize-recent', {
+    return apiFetch('/api/library/organize-recent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode, hours }),
@@ -191,7 +200,7 @@ export const api = {
   },
 
   runMaintenance(task, opts = {}) {
-    return fetch('/api/maintenance/run', {
+    return apiFetch('/api/maintenance/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task, ...opts }),
@@ -199,16 +208,16 @@ export const api = {
   },
 
   getMaintenanceStatus() {
-    return fetch('/api/maintenance/status').then(handleResponse);
+    return apiFetch('/api/maintenance/status').then(handleResponse);
   },
 
   // APP CONFIG — all user-configurable settings
   getAppConfig() {
-    return fetch('/api/settings/app-config').then(handleResponse);
+    return apiFetch('/api/settings/app-config').then(handleResponse);
   },
 
   saveAppConfig(data) {
-    return fetch('/api/settings/app-config', {
+    return apiFetch('/api/settings/app-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -217,11 +226,11 @@ export const api = {
 
   // SKIPPED TRACKS — permanently failed tracks
   getSkippedTracks() {
-    return fetch('/api/skipped-tracks').then(handleResponse);
+    return apiFetch('/api/skipped-tracks').then(handleResponse);
   },
 
   resetSkippedTracks(trackId = null) {
-    return fetch('/api/skipped-tracks/reset', {
+    return apiFetch('/api/skipped-tracks/reset', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(trackId ? { track_id: trackId } : {}),
@@ -229,11 +238,11 @@ export const api = {
   },
 
   clearGenreCache() {
-    return fetch('/api/clear-genre-cache', { method: 'POST' }).then(handleResponse);
+    return apiFetch('/api/clear-genre-cache', { method: 'POST' }).then(handleResponse);
   },
 
   moveAndRemember(filepath, genre, artist = '') {
-    return fetch('/api/move-and-remember', {
+    return apiFetch('/api/move-and-remember', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filepath, genre, artist }),
@@ -241,35 +250,35 @@ export const api = {
   },
 
   getGenreOverrides() {
-    return fetch('/api/genre-overrides').then(handleResponse);
+    return apiFetch('/api/genre-overrides').then(handleResponse);
   },
 
   deleteGenreOverride(artistKey) {
-    return fetch(`/api/genre-override/${encodeURIComponent(artistKey)}`, {
+    return apiFetch(`/api/genre-override/${encodeURIComponent(artistKey)}`, {
       method: 'DELETE',
     }).then(handleResponse);
   },
 
   // NOTIFICATIONS
   getNotificationStatus() {
-    return fetch('/api/notifications/status').then(handleResponse);
+    return apiFetch('/api/notifications/status').then(handleResponse);
   },
 
   testNotification() {
-    return fetch('/api/notifications/test', { method: 'POST' }).then(handleResponse);
+    return apiFetch('/api/notifications/test', { method: 'POST' }).then(handleResponse);
   },
 
   // SETTINGS — custom folder mappings
   scanFolders() {
-    return fetch('/api/settings/scan-folders').then(handleResponse);
+    return apiFetch('/api/settings/scan-folders').then(handleResponse);
   },
 
   getCustomFolders() {
-    return fetch('/api/settings/custom-folders').then(handleResponse);
+    return apiFetch('/api/settings/custom-folders').then(handleResponse);
   },
 
   saveCustomFolder(folderName, genreLabel) {
-    return fetch('/api/settings/custom-folders', {
+    return apiFetch('/api/settings/custom-folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder_name: folderName, genre_label: genreLabel }),
@@ -277,8 +286,46 @@ export const api = {
   },
 
   deleteCustomFolder(folderName) {
-    return fetch(`/api/settings/custom-folders/${encodeURIComponent(folderName)}`, {
+    return apiFetch(`/api/settings/custom-folders/${encodeURIComponent(folderName)}`, {
       method: 'DELETE',
     }).then(handleResponse);
+  },
+
+  updateTrackBpm(filename, bpm, key = null) {
+    return apiFetch('/api/track/bpm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, bpm, key }),
+    }).then(handleResponse);
+  },
+
+  previewTrackUrl(filename) {
+    return `${_BASE}/api/preview-track?filename=${encodeURIComponent(filename)}`;
+  },
+
+  getDuplicates() {
+    return apiFetch('/api/duplicates').then(handleResponse);
+  },
+
+  deleteDuplicate(filename) {
+    return apiFetch('/api/duplicates/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename }),
+    }).then(handleResponse);
+  },
+
+  keepDuplicate(filename, genre) {
+    return apiFetch('/api/duplicates/keep', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, genre }),
+    }).then(handleResponse);
+  },
+
+  rekordboxExportUrl(folder = 'all', name = '') {
+    const params = new URLSearchParams({ folder });
+    if (name) params.set('name', name);
+    return `${_BASE}/api/export/rekordbox?${params.toString()}`;
   },
 };
