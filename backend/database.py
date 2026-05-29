@@ -160,29 +160,11 @@ def _ensure_indexes():  # MUSICBRAINZ
 def is_mongo_available() -> bool:  # MUSICBRAINZ
     """Check if MongoDB is reachable.
 
-    Fast path: ping the existing singleton client if already initialized.
-    Slow path: create a throwaway client for the very first check.
-    Always logs the exception so Render logs show the real error.
+    Always uses _get_db() — the same singleton MongoClient the rest of the app
+    uses. Never creates a second MongoClient, which recurses under gevent+SRV DNS.
     """
-    global _client, _initialized
-
-    # Fast path — reuse the already-connected singleton (avoids new TLS handshake)
-    if _initialized and _client is not None:
-        try:
-            _client.admin.command("ping")
-            return True
-        except Exception as e:
-            logger.warning(f"[database] MongoDB ping failed on existing client: {e}")
-            return False
-
-    # Slow path — singleton not yet initialized, create a throwaway probe client
     try:
-        probe = MongoClient(
-            MONGODB_URI,
-            serverSelectionTimeoutMS=10000,  # Atlas M0 SRV cold-connect needs >5s
-        )
-        probe.admin.command("ping")
-        probe.close()
+        _get_db().command("ping")
         return True
     except Exception as e:
         logger.warning(f"[database] MongoDB availability check failed: {e}")
