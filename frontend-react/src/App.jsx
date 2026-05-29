@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { Analytics as VercelAnalytics } from '@vercel/analytics/react';
 import { ToastProvider } from '@/components/ui/toast';
 import { SocketProvider } from '@/hooks/useSocket';
 import Layout from '@/components/Layout';
@@ -32,6 +33,7 @@ export default function App() {
           </Routes>
         </BrowserRouter>
       </SocketProvider>
+      <VercelAnalytics />
     </ToastProvider>
   );
 }
