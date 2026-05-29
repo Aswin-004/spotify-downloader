@@ -53,8 +53,8 @@ def _get_db():  # MUSICBRAINZ
             return _db  # MUSICBRAINZ
         _client = MongoClient(  # MUSICBRAINZ
             MONGODB_URI,  # MUSICBRAINZ
-            serverSelectionTimeoutMS=5000,  # MUSICBRAINZ
-            connectTimeoutMS=5000,  # MUSICBRAINZ
+            serverSelectionTimeoutMS=10000,  # Atlas M0 SRV cold-connect needs >5s
+            connectTimeoutMS=10000,  # MUSICBRAINZ
         )  # MUSICBRAINZ
         _db = _client[MONGODB_DB]  # MUSICBRAINZ
         _ensure_indexes()  # MUSICBRAINZ
@@ -162,7 +162,7 @@ def is_mongo_available() -> bool:  # MUSICBRAINZ
     try:  # MUSICBRAINZ
         client = MongoClient(  # MUSICBRAINZ
             MONGODB_URI,  # MUSICBRAINZ
-            serverSelectionTimeoutMS=2000,  # MUSICBRAINZ
+            serverSelectionTimeoutMS=10000,  # Atlas M0 SRV cold-connect needs >5s
         )  # MUSICBRAINZ
         client.admin.command("ping")  # MUSICBRAINZ
         client.close()  # MUSICBRAINZ
