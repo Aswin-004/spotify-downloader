@@ -852,8 +852,11 @@ def _download_background(url):
             # Update global queue for manual download
             update_queue(total=1, completed=0, current=f"{title} - {artist}")
 
-            # Use Celery task queue when available, fall back to blocking download
-            if _celery_available:
+            # Use Celery task queue when available AND workers are running.
+            # If Redis is reachable but no workers exist, dispatching creates
+            # a stale dedup key (never cleared) that blocks re-downloads.
+            _live_workers = get_queue_depth().get("workers", 0) if _celery_available else 0
+            if _celery_available and _live_workers > 0:
                 # QUEUE MANAGER — Atomic check-and-claim to prevent duplicate downloads.
                 # claim_task_slot uses Redis SET NX — no race condition.
                 if not claim_task_slot(title, artist):
@@ -886,6 +889,8 @@ def _download_background(url):
                 emit_status()
                 add_history_entry(title, artist, "queued", "")
             else:
+                if _celery_available and _live_workers == 0:
+                    logger.info(f"[celery] No live workers — using threading for: {title} - {artist}")
                 def track_progress_cb(pct, status_text):
                     with status_lock:
                         download_status["progress"] = max(10, pct)
