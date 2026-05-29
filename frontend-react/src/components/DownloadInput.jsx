@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Loader2, Music2, Disc3, Play, AlertCircle } from 'lucide-react';
+import { Search, Loader2, Music2, Disc3, Play, AlertCircle, AlertTriangle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -188,6 +188,24 @@ export default function DownloadInput() {
                   </div>
                 </div>
 
+                {/* Duplicate warning */}
+                {metadata.type === 'track' && metadata.already_in_library && (
+                  <div className="mt-3 flex items-start gap-2 px-3 py-2.5 rounded-xl"
+                       style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)' }}>
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#f59e0b' }} />
+                    <div>
+                      <p className="text-12 font-medium" style={{ color: '#f59e0b' }}>
+                        Already in library
+                      </p>
+                      {metadata.existing_folder && (
+                        <p className="text-11 mt-0.5" style={{ color: 'rgba(245,158,11,0.7)' }}>
+                          {metadata.existing_folder}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Album tracks list */}
                 {metadata.type === 'album' && metadata.tracks && (
                   <div className="mt-4 max-h-60 overflow-y-auto scrollbar-thin space-y-0.5">
@@ -229,7 +247,9 @@ export default function DownloadInput() {
                         <Play className="w-4 h-4" />
                         {metadata.type === 'album'
                           ? 'Download All'
-                          : 'Download'}
+                          : metadata.already_in_library
+                            ? 'Download Again'
+                            : 'Download'}
                       </>
                     )}
                   </Button>

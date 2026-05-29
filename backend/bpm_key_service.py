@@ -100,7 +100,9 @@ def detect_bpm_and_key(filepath: str, genre_hint: str = "") -> dict:
             bpm = None
         else:
             # handle half/double tempo common in librosa
-            _dnb = genre_hint.lower() in ("dnb", "drum and bass", "drum & bass", "d&b")
+            _hint = genre_hint.lower()
+            _dnb = _hint in ("dnb", "drum and bass", "drum & bass", "d&b")
+            _techno = _hint in ("techno", "industrial", "minimal techno")
             if bpm > 190:
                 bpm = bpm // 2  # extreme double-tempo, safe for all genres
             elif 155 <= bpm <= 190:
@@ -109,6 +111,8 @@ def detect_bpm_and_key(filepath: str, genre_hint: str = "") -> dict:
                 # DnB: keep native tempo (160-180 BPM is correct)
             elif 78 <= bpm <= 95 and _dnb:
                 bpm = bpm * 2  # librosa half-time lock on DnB snare pattern (×2 stays ≤190)
+            elif 70 <= bpm <= 80 and _techno:
+                bpm = bpm * 2  # librosa half-time lock on Techno kick (70-75 → 140-150 BPM)
             elif bpm < 70:
                 bpm = bpm * 2
             logger.debug(f"BPM detected: {bpm}")

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CheckCircle2, RotateCw, Loader2, Music, PlayCircle,
   Zap, SkipForward, Trash2, FolderInput, ChevronRight,
+  Play, Pause, Volume2, Music2, Copy, X,
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
@@ -31,11 +32,46 @@ export default function ReviewPage() {
   const [resettingSkipped,setResettingSkipped]= useState(false);
   const [selectedGenres,  setSelectedGenres]  = useState({});
   const [moving,          setMoving]          = useState({});
+  const [playing,         setPlaying]         = useState(false);
+  const [bpmInputs,       setBpmInputs]       = useState({});
+  const [bpmSaving,       setBpmSaving]       = useState({});
+  const [duplicates,      setDuplicates]      = useState([]);
+  const [dupGenres,       setDupGenres]       = useState({});
+  const [dupDeleting,     setDupDeleting]     = useState({});
+  const [dupKeeping,      setDupKeeping]      = useState({});
+  const audioRef = useRef(null);
 
   useEffect(() => {
     api.getGeminiQuota().then(setGeminiQuota).catch(() => {});
     api.getSkippedTracks().then(setSkippedTracks).catch(() => {});
+    api.getDuplicates().then(d => setDuplicates(d.duplicates || [])).catch(() => {});
   }, []);
+
+  async function handleDeleteDuplicate(dup) {
+    setDupDeleting(p => ({ ...p, [dup.filename]: true }));
+    try {
+      await api.deleteDuplicate(dup.filename);
+      setDuplicates(prev => prev.filter(d => d.filename !== dup.filename));
+      addToast({ type: 'success', title: 'Deleted', description: dup.title, duration: 3000 });
+    } catch (err) {
+      addToast({ type: 'error', title: 'Delete failed', description: err.message, duration: 4000 });
+    } finally { setDupDeleting(p => ({ ...p, [dup.filename]: false })); }
+  }
+
+  async function handleKeepDuplicate(dup) {
+    const genre = dupGenres[dup.filename];
+    if (!genre) return;
+    setDupKeeping(p => ({ ...p, [dup.filename]: true }));
+    try {
+      const result = await api.keepDuplicate(dup.filename, genre);
+      if (result.moved) {
+        setDuplicates(prev => prev.filter(d => d.filename !== dup.filename));
+        addToast({ type: 'success', title: `Moved to ${result.destination}`, description: dup.title, duration: 5000 });
+      }
+    } catch (err) {
+      addToast({ type: 'error', title: 'Move failed', description: err.message, duration: 4000 });
+    } finally { setDupKeeping(p => ({ ...p, [dup.filename]: false })); }
+  }
 
   // Keep selectedIdx in bounds
   useEffect(() => {
@@ -119,12 +155,44 @@ export default function ReviewPage() {
     } finally { setMoving(p => ({ ...p, [itemKey]: false })); }
   }
 
+  function handleTogglePlay(item) {
+    if (!item?.filename) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+    const url = api.previewTrackUrl(item.filename);
+    if (audio.src !== window.location.origin + url) {
+      audio.src = url;
+      audio.load();
+      audio.play().then(() => setPlaying(true)).catch(() => {});
+    } else if (audio.paused) {
+      audio.play().then(() => setPlaying(true)).catch(() => {});
+    } else {
+      audio.pause();
+      setPlaying(false);
+    }
+  }
+
+  async function handleSaveBpm(item) {
+    const key = item.id || (item.title + '__' + item.artist);
+    const bpm = parseFloat(bpmInputs[key]);
+    if (!bpm || bpm <= 0) return;
+    setBpmSaving(p => ({ ...p, [key]: true }));
+    try {
+      await api.updateTrackBpm(item.filename, bpm);
+      addToast({ type: 'success', title: `BPM set to ${bpm}`, description: item.title, duration: 4000 });
+    } catch (err) {
+      addToast({ type: 'error', title: 'BPM update failed', description: err.message, duration: 4000 });
+    } finally { setBpmSaving(p => ({ ...p, [key]: false })); }
+  }
+
   const selectedItem = needsReviewItems[selectedIdx] ?? null;
   const selectedKey  = selectedItem ? (selectedItem.id || selectedItem.title + '__' + selectedItem.artist) : null;
   const conf         = selectedItem ? Math.round((selectedItem.confidence || 0) * 100) : 0;
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
+      {/* Hidden audio element for preview */}
+      <audio ref={audioRef} onEnded={() => setPlaying(false)} onPause={() => setPlaying(false)} />
 
       {/* Page header */}
       <div className="flex items-center justify-between gap-4">
@@ -270,11 +338,18 @@ export default function ReviewPage() {
               >
                 {/* Track info */}
                 <div className="flex items-start gap-4">
-                  <div className="w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0"
-                       style={{ background: 'var(--accent-amber-dim)' }}>
-                    <Music className="w-8 h-8" style={{ color: 'var(--accent-amber)' }} />
-                  </div>
-                  <div className="min-w-0">
+                  <button
+                    onClick={() => handleTogglePlay(selectedItem)}
+                    disabled={!selectedItem.filename}
+                    className="w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0 cursor-pointer transition-all"
+                    style={{ background: 'var(--accent-amber-dim)' }}
+                    title={playing ? 'Pause preview' : 'Play preview'}
+                  >
+                    {playing
+                      ? <Pause className="w-8 h-8" style={{ color: 'var(--accent-amber)' }} />
+                      : <Play  className="w-8 h-8" style={{ color: 'var(--accent-amber)' }} />}
+                  </button>
+                  <div className="min-w-0 flex-1">
                     <h2 className="font-display text-18 font-semibold truncate"
                         style={{ color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
                       {selectedItem.title}
@@ -340,6 +415,39 @@ export default function ReviewPage() {
                   </div>
                 </div>
 
+                {/* BPM correction */}
+                <div className="space-y-2">
+                  <p className="text-label flex items-center gap-1.5">
+                    <Music2 className="w-3 h-3" style={{ color: 'var(--accent-violet)' }} />
+                    BPM Correction
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="40" max="220" step="1"
+                      placeholder="e.g. 140"
+                      value={bpmInputs[selectedKey] || ''}
+                      onChange={e => setBpmInputs(p => ({ ...p, [selectedKey]: e.target.value }))}
+                      className="w-28 text-13 rounded-lg px-3 py-2 outline-none transition-all"
+                      style={{
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border-default)',
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={!bpmInputs[selectedKey] || bpmSaving[selectedKey]}
+                      onClick={() => handleSaveBpm(selectedItem)}
+                    >
+                      {bpmSaving[selectedKey]
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : 'Set BPM'}
+                    </Button>
+                  </div>
+                </div>
+
                 {/* Action buttons */}
                 <div className="flex items-center gap-2 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
                   <Button
@@ -365,6 +473,118 @@ export default function ReviewPage() {
           </AnimatePresence>
         </div>
       )}
+
+      {/* Duplicates panel */}
+      <AnimatePresence>
+        {duplicates.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={ease}
+            className="rounded-xl overflow-hidden"
+            style={{ background: 'var(--surface-0)', border: '1px solid rgba(6,182,212,0.2)' }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3"
+                 style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              <div className="flex items-center gap-2">
+                <Copy className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />
+                <span className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                  Duplicate Files
+                </span>
+                <span className="text-11 font-mono px-2 py-0.5 rounded-full"
+                      style={{ background: 'var(--accent-cyan-dim)', color: 'var(--accent-cyan)' }}>
+                  {duplicates.length}
+                </span>
+              </div>
+              <p className="text-11" style={{ color: 'var(--text-muted)' }}>
+                Keep (move to library) or delete
+              </p>
+            </div>
+
+            {/* Rows */}
+            <div className="divide-y" style={{ '--tw-divide-opacity': 1 }}>
+              {duplicates.map(dup => (
+                <motion.div
+                  key={dup.filename}
+                  layout
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="flex items-center gap-3 px-4 py-3"
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  {/* Icon */}
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                       style={{ background: 'var(--accent-cyan-dim)' }}>
+                    <Music className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
+                  </div>
+
+                  {/* Info */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-13 font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                      {dup.title}
+                    </p>
+                    <p className="text-10 truncate font-mono" style={{ color: 'var(--text-muted)' }}>
+                      {dup.artist && <span className="mr-2">{dup.artist}</span>}
+                      {dup.filename}
+                    </p>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <select
+                      value={dupGenres[dup.filename] || ''}
+                      onChange={e => setDupGenres(p => ({ ...p, [dup.filename]: e.target.value }))}
+                      className="text-11 rounded-lg px-2 py-1.5 cursor-pointer outline-none"
+                      style={{
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--border-default)',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      <option value="">Move to…</option>
+                      {GENRE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+                    </select>
+
+                    <Button
+                      size="sm"
+                      disabled={!dupGenres[dup.filename] || dupKeeping[dup.filename]}
+                      onClick={() => handleKeepDuplicate(dup)}
+                      title="Move to library"
+                    >
+                      {dupKeeping[dup.filename]
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <><FolderInput className="w-3.5 h-3.5" />Keep</>}
+                    </Button>
+
+                    <button
+                      onClick={() => handleDeleteDuplicate(dup)}
+                      disabled={dupDeleting[dup.filename]}
+                      title="Delete permanently"
+                      className="w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer transition-colors focus-ring"
+                      style={{ color: 'var(--text-muted)' }}
+                      onMouseEnter={e => {
+                        e.currentTarget.style.background = 'rgba(244,63,94,0.12)';
+                        e.currentTarget.style.color = 'var(--accent-rose)';
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.background = 'transparent';
+                        e.currentTarget.style.color = 'var(--text-muted)';
+                      }}
+                    >
+                      {dupDeleting[dup.filename]
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Skipped/blocked tracks panel */}
       {skippedTracks && skippedTracks.total > 0 && (

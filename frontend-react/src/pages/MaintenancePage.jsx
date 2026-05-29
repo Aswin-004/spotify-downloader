@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   FolderSync, DatabaseZap, Sparkles, Tags,
   Play, AlertTriangle, CheckCircle2, Loader2, RefreshCw,
-  ChevronRight, ChevronDown,
+  ChevronRight, ChevronDown, Code2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useSocket } from '@/hooks/useSocket';
@@ -78,7 +78,7 @@ function LogLine({ line }) {
   );
 }
 
-function TaskCard({ task, activeTask, onRun, running, logs }) {
+function TaskCard({ task, activeTask, onRun, running, logs, devMode }) {
   const [expanded, setExpanded] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const defaultPasses = task.passes
@@ -156,59 +156,61 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
           </div>
         </div>
 
-        {/* Options */}
-        <div className="flex flex-wrap gap-3 items-center">
-          {/* Dry-run toggle */}
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <div
-              onClick={() => setDryRun(v => !v)}
-              className="w-9 h-5 rounded-full relative transition-colors duration-200 cursor-pointer"
-              style={{ background: dryRun ? 'var(--accent-amber)' : 'var(--surface-2)' }}
-            >
+        {/* Options — developer mode only */}
+        {devMode && (
+          <div className="flex flex-wrap gap-3 items-center">
+            {/* Dry-run toggle */}
+            <label className="flex items-center gap-2 cursor-pointer select-none">
               <div
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 shadow"
-                style={{ transform: dryRun ? 'translateX(16px)' : 'translateX(2px)' }}
+                onClick={() => setDryRun(v => !v)}
+                className="w-9 h-5 rounded-full relative transition-colors duration-200 cursor-pointer"
+                style={{ background: dryRun ? 'var(--accent-amber)' : 'var(--surface-2)' }}
+              >
+                <div
+                  className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 shadow"
+                  style={{ transform: dryRun ? 'translateX(16px)' : 'translateX(2px)' }}
+                />
+              </div>
+              <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>Preview only (no changes)</span>
+            </label>
+
+            {/* Pass selection for backfill tasks */}
+            {task.passes && (
+              <div className="flex flex-wrap gap-1.5">
+                {task.passes.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => togglePass(p.id)}
+                    title={p.label}
+                    className="px-2 py-0.5 rounded-lg text-11 transition-all duration-150 cursor-pointer focus-ring"
+                    style={passes.includes(p.id)
+                      ? { border: `1px solid ${task.accent}`, background: task.dim, color: task.accent }
+                      : { border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', background: 'transparent' }
+                    }
+                  >
+                    Step {p.id}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Limit input */}
+            {(task.passes || task.hasLimit) && (
+              <input
+                type="number"
+                value={limit}
+                onChange={e => setLimit(e.target.value)}
+                placeholder="Limit (0=all)"
+                className="w-28 h-7 px-2 text-11 rounded-lg focus-ring"
+                style={{
+                  background: 'var(--surface-1)',
+                  border: '1px solid var(--border-default)',
+                  color: 'var(--text-secondary)',
+                }}
               />
-            </div>
-            <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>Preview only (no changes)</span>
-          </label>
-
-          {/* Pass selection for backfill tasks */}
-          {task.passes && (
-            <div className="flex flex-wrap gap-1.5">
-              {task.passes.map(p => (
-                <button
-                  key={p.id}
-                  onClick={() => togglePass(p.id)}
-                  title={p.label}
-                  className="px-2 py-0.5 rounded-lg text-11 transition-all duration-150 cursor-pointer focus-ring"
-                  style={passes.includes(p.id)
-                    ? { border: `1px solid ${task.accent}`, background: task.dim, color: task.accent }
-                    : { border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', background: 'transparent' }
-                  }
-                >
-                  Step {p.id}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Limit input */}
-          {(task.passes || task.hasLimit) && (
-            <input
-              type="number"
-              value={limit}
-              onChange={e => setLimit(e.target.value)}
-              placeholder="Limit (0=all)"
-              className="w-28 h-7 px-2 text-11 rounded-lg focus-ring"
-              style={{
-                background: 'var(--surface-1)',
-                border: '1px solid var(--border-default)',
-                color: 'var(--text-secondary)',
-              }}
-            />
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* Run button */}
         <Button
@@ -224,7 +226,7 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
           )}
         </Button>
 
-        {/* Log panel */}
+        {/* Log / status panel */}
         <AnimatePresence>
           {myLogs.length > 0 && (
             <motion.div
@@ -234,57 +236,87 @@ function TaskCard({ task, activeTask, onRun, running, logs }) {
               transition={{ duration: 0.2 }}
               className="overflow-hidden"
             >
-              <div className="rounded-xl overflow-hidden"
-                   style={{ border: '1px solid var(--border-subtle)' }}>
-                <button
-                  onClick={() => setExpanded(v => !v)}
-                  className="w-full flex items-center justify-between px-3 py-2 transition-colors duration-150 cursor-pointer focus-ring"
-                  style={{ background: 'var(--surface-1)' }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-1)'}
-                >
-                  <span className="text-11 font-medium" style={{ color: 'var(--text-tertiary)' }}>
-                    Output log ({myLogs.length} lines)
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {isDone && (
-                      exitOk
-                        ? <CheckCircle2 className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
-                        : <AlertTriangle className="w-3.5 h-3.5" style={{ color: 'var(--accent-rose)' }} />
-                    )}
-                    <motion.div animate={{ rotate: expanded ? 90 : 0 }} transition={{ duration: 0.15 }}>
-                      <ChevronRight className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
-                    </motion.div>
-                  </div>
-                </button>
-                <AnimatePresence>
-                  {expanded && (
-                    <motion.div
-                      initial={{ height: 0 }}
-                      animate={{ height: 'auto' }}
-                      exit={{ height: 0 }}
-                      transition={{ duration: 0.15 }}
-                      className="overflow-hidden"
-                    >
-                      <div
-                        ref={logRef}
-                        className="max-h-60 overflow-y-auto scrollbar-thin p-3 space-y-0.5"
-                        style={{ background: 'var(--void)' }}
+              {devMode ? (
+                /* Developer mode: full collapsible log */
+                <div className="rounded-xl overflow-hidden"
+                     style={{ border: '1px solid var(--border-subtle)' }}>
+                  <button
+                    onClick={() => setExpanded(v => !v)}
+                    className="w-full flex items-center justify-between px-3 py-2 transition-colors duration-150 cursor-pointer focus-ring"
+                    style={{ background: 'var(--surface-1)' }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                  >
+                    <span className="text-11 font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                      Output log ({myLogs.length} lines)
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {isDone && (
+                        exitOk
+                          ? <CheckCircle2 className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
+                          : <AlertTriangle className="w-3.5 h-3.5" style={{ color: 'var(--accent-rose)' }} />
+                      )}
+                      <motion.div animate={{ rotate: expanded ? 90 : 0 }} transition={{ duration: 0.15 }}>
+                        <ChevronRight className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+                      </motion.div>
+                    </div>
+                  </button>
+                  <AnimatePresence>
+                    {expanded && (
+                      <motion.div
+                        initial={{ height: 0 }}
+                        animate={{ height: 'auto' }}
+                        exit={{ height: 0 }}
+                        transition={{ duration: 0.15 }}
+                        className="overflow-hidden"
                       >
-                        {myLogs.map((entry, i) => (
-                          <LogLine key={i} line={entry.line} />
-                        ))}
-                        {isRunningMe && (
-                          <div className="flex items-center gap-1.5 pt-1">
-                            <Loader2 className="w-3 h-3 animate-spin" style={{ color: 'var(--accent-cyan)' }} />
-                            <span className="text-11" style={{ color: 'var(--accent-cyan)' }}>Running…</span>
-                          </div>
-                        )}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+                        <div
+                          ref={logRef}
+                          className="max-h-60 overflow-y-auto scrollbar-thin p-3 space-y-0.5"
+                          style={{ background: 'var(--void)' }}
+                        >
+                          {myLogs.map((entry, i) => (
+                            <LogLine key={i} line={entry.line} />
+                          ))}
+                          {isRunningMe && (
+                            <div className="flex items-center gap-1.5 pt-1">
+                              <Loader2 className="w-3 h-3 animate-spin" style={{ color: 'var(--accent-cyan)' }} />
+                              <span className="text-11" style={{ color: 'var(--accent-cyan)' }}>Running…</span>
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              ) : (
+                /* Simple mode: just status summary */
+                <div className="rounded-xl px-4 py-3 flex items-center gap-3"
+                     style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+                  {isRunningMe ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: 'var(--accent-cyan)' }} />
+                      <span className="text-12" style={{ color: 'var(--accent-cyan)' }}>
+                        Running… ({myLogs.length} steps)
+                      </span>
+                    </>
+                  ) : isDone ? (
+                    exitOk ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-emerald)' }} />
+                        <span className="text-12" style={{ color: 'var(--accent-emerald)' }}>Completed successfully</span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-rose)' }} />
+                        <span className="text-12" style={{ color: 'var(--accent-rose)' }}>
+                          Finished with errors — enable Developer mode for details
+                        </span>
+                      </>
+                    )
+                  ) : null}
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -298,6 +330,17 @@ export default function MaintenancePage() {
   const [activeTask, setActiveTask] = useState(null);
   const [error, setError] = useState('');
   const [cacheClearState, setCacheClearState] = useState('idle');
+  const [devMode, setDevMode] = useState(() => {
+    try { return localStorage.getItem('maintenance_devmode') === 'true'; } catch { return false; }
+  });
+
+  function toggleDevMode() {
+    setDevMode(v => {
+      const next = !v;
+      try { localStorage.setItem('maintenance_devmode', String(next)); } catch {}
+      return next;
+    });
+  }
 
   useEffect(() => {
     api.getMaintenanceStatus().then(s => {
@@ -344,13 +387,30 @@ export default function MaintenancePage() {
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={ease}
+        className="flex items-start justify-between gap-4"
       >
-        <h1 className="font-display text-22 font-bold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-          Maintenance
-        </h1>
-        <p className="text-12 mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-          Fix and improve your music library — run these occasionally to keep everything tidy
-        </p>
+        <div>
+          <h1 className="font-display text-22 font-bold" style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+            Maintenance
+          </h1>
+          <p className="text-12 mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+            Fix and improve your music library — run these occasionally to keep everything tidy
+          </p>
+        </div>
+
+        {/* Developer mode toggle */}
+        <button
+          onClick={toggleDevMode}
+          title={devMode ? 'Disable developer mode' : 'Enable developer mode (shows raw logs and advanced options)'}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-xl flex-shrink-0 transition-all duration-200 cursor-pointer focus-ring"
+          style={devMode
+            ? { background: 'var(--accent-violet-dim)', border: '1px solid rgba(139,92,246,0.35)', color: 'var(--accent-violet)' }
+            : { background: 'var(--surface-1)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }
+          }
+        >
+          <Code2 className="w-3.5 h-3.5" />
+          <span className="text-11 font-medium">Dev mode</span>
+        </button>
       </motion.div>
 
       {/* Running notice */}
@@ -398,6 +458,7 @@ export default function MaintenancePage() {
               onRun={handleRun}
               running={maintenanceRunning}
               logs={maintenanceLogs}
+              devMode={devMode}
             />
           </motion.div>
         ))}

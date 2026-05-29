@@ -683,68 +683,89 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     genre_confidence = 1.0
                 else:
                     from services.genre_router import resolve_genre_folder_with_confidence
-                    # Try MusicBrainz genre first (conf=0.9 — most accurate)
-                    mb_genre = (result.get("tagging_report") or {}).get("genre", "")
-                    if mb_genre:
-                        mapped = map_genre_string(mb_genre)
-                        if mapped:
-                            # map_genre_string returns a Library/-prefixed path — flat, no artist subfolder.
-                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, mapped)
-                            genre_confidence = 0.9
-                            logger.info(f"[ingest] MB genre routing: {title} → {mapped} (conf=0.9)")
-                        else:
-                            # MB genre not in map — Gemini fallback then Electronic catch-all
-                            gemini_path = _gemini_genre_fallback(staged_filepath)
-                            if gemini_path:
-                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
-                                logger.info(f"[ingest] Gemini fallback (MB miss): {title} → {gemini_path}")
-                                _emit("download_auto_classified", {
-                                    "title": title, "artist": artist,
-                                    "folder": gemini_path, "method": "gemini",
-                                    "source": "ingest",
-                                })
-                            else:
-                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
-                                _is_catchall = True
-                                logger.info(f"[ingest] Electronic catch-all (MB miss, Gemini unavail): {title}")
-                    else:
-                        # Spotify artist genres with confidence scoring
-                        folder_structure, genre_confidence, genre_source = resolve_genre_folder_with_confidence(
-                            artist_id=track_info.get("artist_id", ""),
-                            artist_name=artist,
-                            sp=sp_service.sp,
-                        )
-                        if genre_confidence >= NEEDS_REVIEW_THRESHOLD:
-                            # CANONICAL-BASE: folder_structure is a Library/ path;
-                            # anchor to BASE_DOWNLOAD_DIR, not INGEST_FOLDER.
-                            final_folder = os.path.join(BASE_DOWNLOAD_DIR, folder_structure)
-                            logger.info(f"[ingest] Genre routing: {title} → {folder_structure} "
-                                        f"(conf={genre_confidence:.2f}, src={genre_source})")
-                        else:
-                            # Low-confidence — try Gemini before falling back to catch-all.
-                            # Never routes to NeedsReview for genre failures.
-                            gemini_path = _gemini_genre_fallback(staged_filepath)
-                            if gemini_path:
-                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
+                    # ── artist_memory: user-confirmed associations override Spotify/Groq ──
+                    _memory_routed = False
+                    try:
+                        from services.artist_memory_service import lookup_artist as _mem_lookup
+                        from services.genre_router import normalize_genre as _norm_g, _library_path as _lib_p
+                        _mem_rec = _mem_lookup(artist)
+                        if _mem_rec and _mem_rec.get("confidence", 0) >= 0.5:
+                            _mem_genre = _norm_g(_mem_rec.get("genre", "")) or _mem_rec.get("genre", "")
+                            if _mem_genre:
+                                _mem_lib_path = _lib_p(_mem_genre)
+                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, _mem_lib_path)
+                                genre_confidence = _mem_rec.get("confidence", 0.5)
                                 logger.info(
-                                    f"[ingest] Gemini fallback: {title} → {gemini_path} "
-                                    f"(Spotify conf={genre_confidence:.2f} was too low)"
+                                    f"[ingest] artist_memory: {title} → {_mem_lib_path} "
+                                    f"(conf={genre_confidence:.2f}, src={_mem_rec.get('source', 'memory')})"
                                 )
-                                _emit("download_auto_classified", {
-                                    "title": title, "artist": artist,
-                                    "folder": gemini_path, "method": "gemini",
-                                    "spotify_confidence": genre_confidence,
-                                    "source": "ingest",
-                                })
+                                _memory_routed = True
+                    except Exception as _me:
+                        logger.debug(f"[ingest] artist_memory lookup skipped: {_me}")
+
+                    if not _memory_routed:
+                        # Try MusicBrainz genre first (conf=0.9 — most accurate)
+                        mb_genre = (result.get("tagging_report") or {}).get("genre", "")
+                        if mb_genre:
+                            mapped = map_genre_string(mb_genre)
+                            if mapped:
+                                # map_genre_string returns a Library/-prefixed path — flat, no artist subfolder.
+                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, mapped)
+                                genre_confidence = 0.9
+                                logger.info(f"[ingest] MB genre routing: {title} → {mapped} (conf=0.9)")
                             else:
-                                # Gemini unavailable (quota/error) → Electronic catch-all.
-                                # Song is never lost — always lands somewhere in Library/.
-                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
-                                _is_catchall = True
-                                logger.warning(
-                                    f"[ingest] Electronic catch-all: {title} "
-                                    f"(Spotify conf={genre_confidence:.2f}, Gemini unavail)"
-                                )
+                                # MB genre not in map — Gemini fallback then Electronic catch-all
+                                gemini_path = _gemini_genre_fallback(staged_filepath)
+                                if gemini_path:
+                                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
+                                    logger.info(f"[ingest] Gemini fallback (MB miss): {title} → {gemini_path}")
+                                    _emit("download_auto_classified", {
+                                        "title": title, "artist": artist,
+                                        "folder": gemini_path, "method": "gemini",
+                                        "source": "ingest",
+                                    })
+                                else:
+                                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
+                                    _is_catchall = True
+                                    logger.info(f"[ingest] Electronic catch-all (MB miss, Gemini unavail): {title}")
+                        else:
+                            # Spotify artist genres with confidence scoring
+                            folder_structure, genre_confidence, genre_source = resolve_genre_folder_with_confidence(
+                                artist_id=track_info.get("artist_id", ""),
+                                artist_name=artist,
+                                sp=sp_service.sp,
+                            )
+                            if genre_confidence >= NEEDS_REVIEW_THRESHOLD:
+                                # CANONICAL-BASE: folder_structure is a Library/ path;
+                                # anchor to BASE_DOWNLOAD_DIR, not INGEST_FOLDER.
+                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, folder_structure)
+                                logger.info(f"[ingest] Genre routing: {title} → {folder_structure} "
+                                            f"(conf={genre_confidence:.2f}, src={genre_source})")
+                            else:
+                                # Low-confidence — try Gemini before falling back to catch-all.
+                                # Never routes to NeedsReview for genre failures.
+                                gemini_path = _gemini_genre_fallback(staged_filepath)
+                                if gemini_path:
+                                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
+                                    logger.info(
+                                        f"[ingest] Gemini fallback: {title} → {gemini_path} "
+                                        f"(Spotify conf={genre_confidence:.2f} was too low)"
+                                    )
+                                    _emit("download_auto_classified", {
+                                        "title": title, "artist": artist,
+                                        "folder": gemini_path, "method": "gemini",
+                                        "spotify_confidence": genre_confidence,
+                                        "source": "ingest",
+                                    })
+                                else:
+                                    # Gemini unavailable (quota/error) → Electronic catch-all.
+                                    # Song is never lost — always lands somewhere in Library/.
+                                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
+                                    _is_catchall = True
+                                    logger.warning(
+                                        f"[ingest] Electronic catch-all: {title} "
+                                        f"(Spotify conf={genre_confidence:.2f}, Gemini unavail)"
+                                    )
 
                 os.makedirs(final_folder, exist_ok=True)
 
@@ -877,6 +898,24 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                 )
                         except Exception as _dnb_err:
                             logger.debug(f"[ingest] DnB BPM re-analysis skipped: {_dnb_err}")
+                    # Techno BPM correction: same half-time problem as DnB (70-75 BPM → 140-150 BPM).
+                    elif any(k in _gf_lower for k in ("techno", "industrial")):
+                        try:
+                            from bpm_key_service import (
+                                detect_bpm_and_key as _dbk,
+                                write_bpm_key_to_tags as _wbkt,
+                                persist_audio_features as _paf,
+                            )
+                            _techno_result = _dbk(final_filepath, genre_hint="techno")
+                            if _techno_result.get("analyzed") and _techno_result.get("bpm"):
+                                _wbkt(final_filepath, _techno_result["bpm"], _techno_result.get("key"))
+                                _paf(track_key, _techno_result)
+                                logger.info(
+                                    f"[ingest] Techno BPM corrected: {title} → "
+                                    f"{_techno_result['bpm']} BPM · {_techno_result.get('key')}"
+                                )
+                        except Exception as _techno_err:
+                            logger.debug(f"[ingest] Techno BPM re-analysis skipped: {_techno_err}")
                 except Exception as _idx_err:
                     logger.warning(f"[ingest] library_index write failed: {_idx_err}")
                 _routing_label = (

@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Music, Search, ChevronRight, ChevronDown,
-  AlertTriangle, RotateCw, Loader2, MoreHorizontal, FolderInput, X,
+  AlertTriangle, RotateCw, Loader2, MoreHorizontal, FolderInput, X, Download,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -253,7 +253,7 @@ export default function LibraryPage() {
                       onClick={() => toggleFolder(folder)}
                       aria-expanded={isExpanded}
                       aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${folder}`}
-                      className="w-full px-4 py-3 flex items-center justify-between transition-colors duration-150 cursor-pointer focus-ring"
+                      className="w-full px-4 py-3 flex items-center justify-between transition-colors duration-150 cursor-pointer focus-ring group/folder"
                       onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
@@ -279,6 +279,24 @@ export default function LibraryPage() {
                       >
                         {tracks.length}
                       </span>
+                      <a
+                        href={api.rekordboxExportUrl(folder, folder.split('/').pop())}
+                        download
+                        title={`Export "${folder}" as Rekordbox XML`}
+                        onClick={e => e.stopPropagation()}
+                        className="ml-2 w-6 h-6 flex items-center justify-center rounded-lg opacity-0 group-hover/folder:opacity-100 focus:opacity-100 transition-opacity duration-150 flex-shrink-0 focus-ring cursor-pointer"
+                        style={{ color: 'var(--text-muted)' }}
+                        onMouseEnter={e => {
+                          e.currentTarget.style.background = 'var(--surface-2)';
+                          e.currentTarget.style.color = 'var(--accent-violet)';
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.background = 'transparent';
+                          e.currentTarget.style.color = 'var(--text-muted)';
+                        }}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </a>
                     </button>
 
                     {/* Track rows */}

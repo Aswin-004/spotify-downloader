@@ -275,10 +275,16 @@ def _trim_silence(filepath: str, ffmpeg_bin: Optional[str] = None) -> bool:
         tmp,
     ])
     if ok and os.path.isfile(tmp) and os.path.getsize(tmp) > 1000:
-        os.replace(tmp, filepath)
-        return True
+        try:
+            os.replace(tmp, filepath)
+            return True
+        except OSError:
+            pass  # replace failed — clean up temp and leave original intact
     if os.path.isfile(tmp):
-        os.remove(tmp)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
     return False
 
 

@@ -59,12 +59,16 @@ def _read_tags(filepath: str) -> dict:
 
 _GENRE_LIST = (
     "Bollywood, Punjabi, Tamil, House, Trance, Drum & Bass, "
-    "UK Garage, Dubstep, Techno, Grime, Electronic, Hip Hop, R&B, Pop, Latin"
+    "UK Garage, Dubstep, Techno, Grime, Electronic, Hip Hop, R&B, Pop, Latin, Afrobeats"
 )
 
 _SYSTEM = (
     "You are a music genre classifier for a DJ library. "
-    "Return ONLY a valid JSON object — no markdown, no explanation."
+    "Return ONLY a valid JSON object — no markdown, no explanation. "
+    "CRITICAL RULES: (1) Only use 'Punjabi' for artists who explicitly make Punjabi/Bhangra music "
+    "from the Punjab region of India or Pakistan — do NOT use it as a default for any non-Western music. "
+    "(2) For African artists or African-influenced music, use 'Afrobeats'. "
+    "(3) For unknown world/global artists, default to 'Electronic' or 'R&B' rather than 'Punjabi'."
 )
 
 

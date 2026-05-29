@@ -471,7 +471,12 @@ def tag_file(  # MUSICBRAINZ
         try:
             from bpm_key_service import detect_bpm_and_key as _local_bpm, persist_audio_features as _persist_af
             _path_lower = file_path.lower().replace("\\", "/")
-            _genre_hint = "dnb" if any(k in _path_lower for k in ("/dnb/", "/drum and bass/", "/d&b/")) else ""
+            if any(k in _path_lower for k in ("/dnb/", "/drum and bass/", "/d&b/")):
+                _genre_hint = "dnb"
+            elif any(k in _path_lower for k in ("/techno/", "/industrial/")):
+                _genre_hint = "techno"
+            else:
+                _genre_hint = ""
             local = _local_bpm(file_path, genre_hint=_genre_hint)
             if local.get("analyzed"):
                 bpm_val = local.get("bpm")
