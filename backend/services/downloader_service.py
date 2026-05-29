@@ -1091,7 +1091,7 @@ class DownloaderService:
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'extract_flat': False,
+            'extract_flat': True,   # avoids per-video format resolution — eliminates datacenter IP bot-check
             'socket_timeout': 15,
         }
 
