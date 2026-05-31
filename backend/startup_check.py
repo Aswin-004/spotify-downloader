@@ -78,5 +78,19 @@ if base_dir:
 else:
     print("[startup] WARNING: BASE_DOWNLOAD_DIR not set — file downloads will fail")
 
+# ── 5. YouTube cookies (optional) ────────────────────────────────────────────
+_yt_cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64", "")
+if _yt_cookies_b64:
+    try:
+        import base64
+        _cookies_path = "/tmp/youtube_cookies.txt"
+        with open(_cookies_path, "wb") as _f:
+            _f.write(base64.b64decode(_yt_cookies_b64))
+        print(f"[startup] YouTube cookies decoded → {_cookies_path}")
+    except Exception as _e:
+        print(f"[startup] WARNING: Failed to decode YOUTUBE_COOKIES_B64: {_e}", file=sys.stderr)
+else:
+    print("[startup] YOUTUBE_COOKIES_B64 not set — downloads will run without auth")
+
 print("[startup] All checks passed — starting Gunicorn")
 sys.exit(0)

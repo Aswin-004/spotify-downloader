@@ -918,6 +918,11 @@ class DownloaderService:
             'progress_hooks': [_progress_hook],
         }
 
+        # YouTube cookies — injected if YOUTUBE_COOKIES_B64 was decoded at startup
+        _yt_cookies = "/tmp/youtube_cookies.txt"
+        if os.path.isfile(_yt_cookies):
+            ydl_opts['cookiefile'] = _yt_cookies
+
         if ffmpeg_dir:
             ydl_opts['ffmpeg_location'] = ffmpeg_dir
 

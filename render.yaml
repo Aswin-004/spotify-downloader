@@ -58,6 +58,8 @@ services:
         value: "1"
       - key: MAX_QUEUE_DEPTH
         value: "10"
+      - key: YOUTUBE_COOKIES_B64
+        sync: false   # base64-encoded Netscape cookies.txt from a YouTube-logged-in browser session
 
   # ── Redis (Render-managed) ────────────────────────────────────────────────
   - name: spotify-downloader-redis
