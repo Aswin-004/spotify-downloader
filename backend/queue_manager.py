@@ -275,7 +275,7 @@ def start_stuck_task_cleanup_thread() -> None:
 # (see tasks.py:_emit_socketio_event).  The Flask process subscribes here and
 # re-emits them to connected WebSocket clients.
 
-_bridge_thread: Optional[threading.Thread] = None
+_bridge_thread: Optional[object] = None  # True once started (socketio background task, not a Thread)
 
 
 def start_socketio_bridge(socketio_instance) -> None:
@@ -288,13 +288,19 @@ def start_socketio_bridge(socketio_instance) -> None:
 
     No-op when Redis is unavailable at startup.
     """
-    global _bridge_thread
-    if _bridge_thread is not None and _bridge_thread.is_alive():
-        return  # already running
+    global _bridge_thread, _redis_client
+    if _bridge_thread is not None:
+        return  # already started
 
     if _get_redis() is None:
         logger.info("[queue_manager] Redis unavailable — socketio bridge not started")
         return
+
+    # Reset the Redis client so the pub/sub connection is created fresh inside
+    # the Gunicorn worker process, not inherited from the master.  A connection
+    # inherited across fork runs in the wrong greenlet context and blocks the
+    # gevent event loop, causing WORKER TIMEOUT after 120 s.
+    _redis_client = None
 
     def _listener_loop():
         """Outer loop: reconnect on any connection failure."""
@@ -331,6 +337,10 @@ def start_socketio_bridge(socketio_instance) -> None:
                 global _redis_client
                 _redis_client = None
 
-    _bridge_thread = threading.Thread(target=_listener_loop, daemon=True, name="socketio-bridge")
-    _bridge_thread.start()
-    logger.info("[queue_manager] SocketIO bridge thread started (auto-reconnect enabled)")
+    # Use socketio.start_background_task() — creates a gevent greenlet inside
+    # the worker's event loop instead of a threading.Thread created in the master.
+    # threading.Thread after fork runs in the wrong greenlet context (different
+    # otid) and cannot yield to gevent, blocking the event loop until WORKER TIMEOUT.
+    socketio_instance.start_background_task(target=_listener_loop)
+    _bridge_thread = True  # sentinel: not None = already started
+    logger.info("[queue_manager] SocketIO bridge started as gevent background task (auto-reconnect enabled)")
