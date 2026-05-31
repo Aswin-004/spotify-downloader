@@ -1999,6 +1999,18 @@ def retag_catchall_track():
         dest_dir.mkdir(parents=True, exist_ok=True)
         src_path = Path(full_path)
         dest = dest_dir / src_path.name
+
+        # Already in the correct folder — mark as reviewed so it drops from the catchall
+        if src_path.resolve() == dest.resolve():
+            try:
+                from mutagen.id3 import TXXX as _TXXX
+                _tags = ID3(str(src_path))
+                _tags.add(_TXXX(encoding=3, desc="catchall_reviewed", text=["1"]))
+                _tags.save()
+            except Exception:
+                pass
+            return jsonify({"moved": False, "confirmed": True, "reason": "already in correct folder", "new_folder": genre_path}), 200
+
         _shutil.move(str(src_path), str(dest))
         try:
             tags = ID3(str(dest))
@@ -2126,6 +2138,9 @@ def get_catchall_tracks():
         for fp in sorted(electronic_dir.glob("*.mp3")):
             try:
                 tags = ID3(str(fp))
+                # Skip files already confirmed as correctly placed
+                if str(tags.get("TXXX:catchall_reviewed", "")).strip() == "1":
+                    continue
                 title = str(tags.get("TIT2", fp.stem)).strip() or fp.stem
                 artist = str(tags.get("TPE1", "")).strip()
                 conf_tag = tags.get("TXXX:gemini_confidence")

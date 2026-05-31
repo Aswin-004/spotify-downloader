@@ -102,8 +102,8 @@ export default function ReviewPage() {
     setRetrying(p => ({ ...p, [key]: true }));
     try {
       const result = await api.retagCatchallTrack(buildFilepath(item));
-      if (result.moved) {
-        addToast({ type: 'success', title: 'Reclassified', description: `${item.title} → ${result.new_folder}`, duration: 5000 });
+      if (result.moved || result.confirmed) {
+        addToast({ type: 'success', title: result.moved ? 'Reclassified' : 'Confirmed', description: `${item.title} → ${result.new_folder}`, duration: 5000 });
         clearNeedsReviewItem(item.title);
       } else if (result.quota_exhausted) {
         addToast({ type: 'error', title: 'AI quota exhausted', description: 'Retried tomorrow automatically.', duration: 8000 });
@@ -123,7 +123,7 @@ export default function ReviewPage() {
       setRetryAllProgress({ current: i + 1, total: items.length });
       try {
         const result = await api.retagCatchallTrack(buildFilepath(items[i]));
-        if (result.moved) { clearNeedsReviewItem(items[i].title); processed++; }
+        if (result.moved || result.confirmed) { clearNeedsReviewItem(items[i].title); processed++; }
         else if (result.quota_exhausted) { addToast({ type: 'error', title: 'AI quota hit mid-run', description: `${processed} moved so far.`, duration: 8000 }); break; }
         else { unresolved++; }
       } catch (err) {
