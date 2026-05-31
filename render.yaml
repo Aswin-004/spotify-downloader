@@ -43,9 +43,9 @@ services:
       - key: SPOTIFY_CLIENT_SECRET
         sync: false
       - key: REDIRECT_URI
-        sync: false   # https://spotify-downloader-api.onrender.com/callback
+        value: "https://spotify-downloader-asyp.onrender.com/callback"
       - key: ALLOWED_ORIGINS
-        sync: false   # https://your-app.vercel.app
+        value: "https://spotify-downloader-three.vercel.app"
       - key: INGEST_PLAYLIST_ID
         sync: false
       - key: GROQ_API_KEY
