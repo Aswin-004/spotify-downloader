@@ -6,7 +6,7 @@ services:
     type: web
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
+    buildCommand: apt-get install -y ffmpeg && pip install -r requirements.txt
     startCommand: >
       python startup_check.py &&
       gunicorn
