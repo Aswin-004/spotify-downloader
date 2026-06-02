@@ -9,26 +9,25 @@ import { ease } from '@/lib/motion';
 const steps = [
   {
     num: '1',
-    title: 'Copy .env.example → .env',
-    desc: 'Inside the backend/ folder, copy .env.example to .env and fill in your API keys.',
-    code: 'backend/.env.example → backend/.env',
+    title: 'Paste a Spotify URL',
+    desc: 'Copy any Spotify track, album, or playlist link and paste it into the search box on the Download page.',
+    code: 'open.spotify.com/track/...',
   },
   {
     num: '2',
-    title: 'Get your API keys',
-    desc: 'You need: Spotify (developer.spotify.com), Gemini (aistudio.google.com), Last.fm, AcoustID. All have free tiers.',
+    title: 'Fetch & confirm',
+    desc: 'Click Fetch to see the track details — title, artist, album art, and duration. Confirm it\'s the right one before downloading.',
   },
   {
     num: '3',
-    title: 'Set BASE_DOWNLOAD_DIR',
-    desc: 'Point BASE_DOWNLOAD_DIR to your music folder. The app creates genre subfolders (House/, Techno/, etc.) automatically.',
-    code: 'BASE_DOWNLOAD_DIR=C:\\Users\\You\\Music',
+    title: 'Download to your computer',
+    desc: 'Click Download. The MP3 file will save directly to your Downloads folder. Takes 30–60 seconds.',
+    code: '~/Downloads/Artist - Title.mp3',
   },
   {
     num: '4',
-    title: 'Run start.bat',
-    desc: 'Double-click start.bat. It builds the frontend, starts Redis + Celery (optional), then launches the backend.',
-    code: 'start.bat → http://localhost:5000',
+    title: 'Manage your library',
+    desc: 'Use the Analytics, Review, and Files pages to track your downloads, fix genre routing, and manage your DJ collection.',
   },
 ];
 
@@ -46,10 +45,10 @@ const pages = [
 const workflow = [
   { label: 'Paste URL',       detail: 'Spotify track / album / playlist' },
   { label: 'Fetch metadata',  detail: 'Title, artist, album, duration' },
-  { label: 'Queue download',  detail: 'yt-dlp finds best audio match' },
-  { label: 'Tag MP3',         detail: 'ID3 tags: title, artist, album art' },
-  { label: 'Identify genre',  detail: 'Spotify data + AI detection → pick the right folder' },
-  { label: 'Route to folder', detail: 'BASE_DOWNLOAD_DIR/Genre/track.mp3' },
+  { label: 'Find audio',      detail: 'Searches YouTube for best audio match' },
+  { label: 'Download MP3',    detail: '192kbps MP3 saved to your Downloads folder' },
+  { label: 'Tag & embed',     detail: 'ID3 tags: title, artist, album art' },
+  { label: 'Track history',   detail: 'Analytics, genre stats, download log' },
 ];
 
 const faqs = [
@@ -58,20 +57,20 @@ const faqs = [
     a: "Tracks land in the Unclassified folder when the app can't figure out their genre automatically (usually because today's AI detection limit was reached). The Review page lets you retry them — or just wait until tomorrow when the limit resets.",
   },
   {
-    q: 'How does Auto-Sync work?',
-    a: "Set your Spotify playlist ID in Settings, and the app checks it regularly. New tracks are downloaded and routed to the right folder automatically. Tracks you've already downloaded are skipped.",
+    q: 'Is this completely free?',
+    a: 'Yes — completely free. No account needed, no subscription, no limits on how many tracks you download.',
   },
   {
-    q: 'What if the AI genre limit is hit?',
-    a: 'The free AI tier allows 15 genre detections per day, resetting at midnight. Tracks that couldn\'t be classified are saved to the Review page and retried automatically the next day.',
+    q: 'What quality are the downloads?',
+    a: 'MP3 at 192kbps. The app finds the best available audio match on YouTube for each Spotify track.',
   },
   {
-    q: 'Can I use my existing DJ folder structure?',
-    a: 'Yes. Go to Settings → Scan My Music Folder. The app detects your existing folders (e.g. "Drum and Bass", "House") and lets you map them to genres. Future downloads go straight into those folders.',
+    q: "What are \"Unclassified\" tracks?",
+    a: "Tracks that the app couldn't automatically classify into a genre. The Review page lets you manually assign a genre or retry the AI detection.",
   },
   {
-    q: 'Do I need Redis and Celery?',
-    a: "No — both are optional. Without Redis the app works fine for most use cases. With Redis + Celery you get better handling of large playlist downloads. start.bat tries to start Redis automatically if it's installed.",
+    q: 'Can I download a full playlist?',
+    a: 'Yes — paste a Spotify playlist URL, fetch it, and download all tracks. Each track saves to your Downloads folder in sequence.',
   },
 ];
 

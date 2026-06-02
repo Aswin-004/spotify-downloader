@@ -305,21 +305,26 @@ def start_socketio_bridge(socketio_instance) -> None:
     def _listener_loop():
         """Outer loop: reconnect on any connection failure."""
         global _bridge_thread
-        backoff = 1
+        backoff = 5
         while True:
-            r = _get_redis()
-            if r is None:
-                logger.warning("[queue_manager] Bridge: Redis unavailable, retrying in %ds", backoff)
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30)
-                continue
-            backoff = 1  # reset on successful connection
             try:
-                pubsub = r.pubsub()
+                import redis as _redis_lib
+                # Dedicated pubsub client — no socket_timeout so get_message() can block
+                pubsub_client = _redis_lib.from_url(
+                    REDIS_URL,
+                    socket_connect_timeout=5,
+                    socket_timeout=None,   # no timeout — avoids spurious reconnects
+                )
+                pubsub = pubsub_client.pubsub()
                 pubsub.subscribe(_SOCKETIO_BRIDGE_CHANNEL)
                 logger.info("[queue_manager] SocketIO bridge subscribed to Redis channel")
-                for message in pubsub.listen():
-                    if message["type"] != "message":
+                backoff = 5  # reset on successful connect
+                while True:
+                    # Poll every 30s; returns None when no message (not an error)
+                    message = pubsub.get_message(timeout=30)
+                    if message is None:
+                        continue
+                    if message.get("type") != "message":
                         continue
                     try:
                         payload = json.loads(message["data"])
@@ -332,7 +337,7 @@ def start_socketio_bridge(socketio_instance) -> None:
             except Exception as exc:
                 logger.warning(f"[queue_manager] SocketIO bridge disconnected ({exc}), reconnecting in {backoff}s")
                 time.sleep(backoff)
-                backoff = min(backoff * 2, 30)
+                backoff = min(backoff * 2, 60)
                 # Force Redis client re-probe on next iteration
                 global _redis_client
                 _redis_client = None

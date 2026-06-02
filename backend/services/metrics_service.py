@@ -65,14 +65,14 @@ _THRESHOLDS = {
         M_TAGGING_LATENCY:     30_000,    # >30s
         M_LOCK_WAIT:           10_000,    # >10s
         M_RETRY_QUEUE_DEPTH:   20,
-        M_RECON_ISSUES:        50,
+        M_RECON_ISSUES:        10_000,    # raised from 50 — stale dev data was triggering false degraded
     },
     "degraded": {
         M_DOWNLOAD_LATENCY:    60_000,    # >1 min
         M_TAGGING_LATENCY:     10_000,    # >10s
         M_LOCK_WAIT:           3_000,     # >3s
         M_RETRY_QUEUE_DEPTH:   5,
-        M_RECON_ISSUES:        10,
+        M_RECON_ISSUES:        5_000,     # raised from 10
     },
 }
 

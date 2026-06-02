@@ -1,11 +1,8 @@
 {
-  "experimentalServices": {
-    "spotify-downloader-api": {
-      "type": "web",
-      "root": "backend",
-      "entrypoint": "app:app",
-      "routePrefix": "/",
-      "buildCommand": "pip install -r requirements.txt"
+  "git": {
+    "deploymentEnabled": {
+      "main": false,
+      "production": true
     }
   }
 }
