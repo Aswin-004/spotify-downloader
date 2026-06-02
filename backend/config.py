@@ -760,6 +760,9 @@ class Config:
         "beatpella house":        "House",
         "scuchi":                 "Electronic",
         "dp369":                  "Electronic",
+        # ── House additions ───────────────────────────────────────────────────
+        "hugel":                  "House",
+        "diaz":                   "House",
     }
 
 
