@@ -1,8 +1,8 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, Trash2, CheckCircle2, XCircle, SkipForward,
-  RotateCw, History as HistoryIcon,
+  RotateCw, History as HistoryIcon, Play, Pause,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -69,6 +69,25 @@ export default function History() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [confirmClear, setConfirmClear] = useState(false);
+  const [playingFilename, setPlayingFilename] = useState(null);
+  const audioRef = useRef(null);
+
+  function handleTogglePlay(filename) {
+    if (!filename) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+    const url = api.previewTrackUrl(filename);
+    if (audio.src !== window.location.origin + url) {
+      audio.src = url;
+      audio.load();
+      audio.play().then(() => setPlayingFilename(filename)).catch(() => {});
+    } else if (audio.paused) {
+      audio.play().then(() => setPlayingFilename(filename)).catch(() => {});
+    } else {
+      audio.pause();
+      setPlayingFilename(null);
+    }
+  }
 
   useEffect(() => {
     if (!confirmClear) return;
@@ -115,6 +134,11 @@ export default function History() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-5 pb-10">
+      <audio
+        ref={audioRef}
+        onEnded={() => setPlayingFilename(null)}
+        onPause={() => setPlayingFilename(null)}
+      />
 
       {/* Header */}
       <motion.div
@@ -255,6 +279,24 @@ export default function History() {
                         </p>
                       )}
                     </div>
+
+                    {/* Play button — only for successful downloads with a filename */}
+                    {item.status === 'success' && item.filename && (
+                      <button
+                        onClick={() => handleTogglePlay(item.filename)}
+                        title={playingFilename === item.filename ? 'Pause' : 'Preview'}
+                        className="w-6 h-6 flex items-center justify-center rounded-lg flex-shrink-0 transition-colors"
+                        style={{
+                          background: playingFilename === item.filename
+                            ? 'var(--accent-violet-dim)' : 'transparent',
+                          color: 'var(--accent-violet)',
+                        }}
+                      >
+                        {playingFilename === item.filename
+                          ? <Pause className="w-3 h-3" />
+                          : <Play  className="w-3 h-3" />}
+                      </button>
+                    )}
 
                     {/* Status badge */}
                     <span

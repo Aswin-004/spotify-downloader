@@ -303,6 +303,10 @@ export const api = {
     return `${_BASE}/api/preview-track?filename=${encodeURIComponent(filename)}`;
   },
 
+  previewTrackByPath(relativePath) {
+    return `${_BASE}/api/preview-track?path=${encodeURIComponent(relativePath)}`;
+  },
+
   getDuplicates() {
     return apiFetch('/api/duplicates').then(handleResponse);
   },
