@@ -177,6 +177,18 @@ def _load_history_spotify_ids() -> set[str]:
         return set()
 
 
+def _load_history_titles() -> set[str]:
+    """Return lowercased track_title set from download_history (pipeline rarely stores filename)."""
+    try:
+        from database import get_download_history_collection
+        col = get_download_history_collection()
+        docs = col.find({"track_title": {"$exists": True, "$ne": ""}}, {"track_title": 1, "_id": 0})
+        return {d["track_title"].lower().strip() for d in docs if d.get("track_title")}
+    except Exception as e:
+        logger.warning(f"[reconcile] Cannot load history titles: {e}")
+        return set()
+
+
 # ── Repair helpers ────────────────────────────────────────────────────────────
 
 def _reindex_file(filepath: str, dry_run: bool) -> bool:
@@ -252,14 +264,23 @@ def _detect_stale_index(index_docs: list[dict]) -> list[dict]:
 
 def _detect_missing_history(index_docs: list[dict],
                              history_filenames: set[str],
-                             history_spotify_ids: set[str]) -> list[dict]:
-    """Index rows with no corresponding download_history entry."""
+                             history_spotify_ids: set[str],
+                             history_titles: set[str] | None = None) -> list[dict]:
+    """Index rows with no corresponding download_history entry.
+
+    Matches by filename, spotify_id, or track_title (fallback — the pipeline
+    historically stored track_title but not filename in many records).
+    """
     missing = []
     for doc in index_docs:
-        fname = doc.get("filename", "")
-        sid   = doc.get("spotify_id", "")
-        has_hist = (fname and fname in history_filenames) or \
-                   (sid and sid in history_spotify_ids)
+        fname  = doc.get("filename", "")
+        sid    = doc.get("spotify_id", "")
+        title  = (doc.get("title") or "").lower().strip()
+        has_hist = (
+            (fname and fname in history_filenames) or
+            (sid   and sid   in history_spotify_ids) or
+            (title and history_titles and title in history_titles)
+        )
         if not has_hist:
             missing.append(doc)
     return missing
@@ -414,7 +435,9 @@ def build_report(
     now = datetime.now(timezone.utc).isoformat()
     pre_mig_issues = len(temp_indexed or []) + len(spotify_id_collisions or [])
     total_issues = sum([
-        len(orphaned_files), len(stale_index), len(missing_history),
+        len(orphaned_files), len(stale_index),
+        # missing_history excluded: manually-placed files always lack download
+        # history and are not actionable — reported separately for visibility.
         len(dup_hashes), len(missing_metadata), len(invalid_camelot),
         len(missing_artwork), len(staging_stuck), len(needs_review_stuck),
         len(orphan_manifests), pre_mig_issues,
@@ -489,14 +512,15 @@ def reconcile(
     logger.info(f"[reconcile] library_index has {total_index} entries")
 
     logger.info("[reconcile] Loading download_history…")
-    history_filenames  = _load_history_filenames()
+    history_filenames   = _load_history_filenames()
     history_spotify_ids = _load_history_spotify_ids()
+    history_titles      = _load_history_titles()
 
     logger.info("[reconcile] Detecting issues…")
 
     orphaned_files    = _detect_orphaned_files(fs_files, index_paths)
     stale_index       = _detect_stale_index(index_docs)
-    missing_history   = _detect_missing_history(index_docs, history_filenames, history_spotify_ids)
+    missing_history   = _detect_missing_history(index_docs, history_filenames, history_spotify_ids, history_titles)
     dup_hashes        = _detect_duplicate_hashes(index_docs)
     missing_metadata  = _detect_missing_metadata(fs_files)
     invalid_camelot   = _detect_invalid_camelot(fs_files)
