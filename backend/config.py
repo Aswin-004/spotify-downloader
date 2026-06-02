@@ -790,7 +790,7 @@ class Config:
         "alan walker":            "Electronic",
         "swedish house mafia":    "Electronic",
         "deadmau5":               "Electronic",
-        "skrillex":               "Electronic",
+        "skrillex":               "Dubstep",
         "flume":                  "Electronic",
     }
 
