@@ -1182,60 +1182,6 @@ def clear_genre_cache_endpoint():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/diag', methods=['GET'])
-def diag():
-    """Temporary diagnostic endpoint — checks ffmpeg + cookies on the server."""
-    import shutil, subprocess
-    ffmpeg_path = shutil.which('ffmpeg')
-    ffmpeg_version = None
-    if ffmpeg_path:
-        try:
-            r = subprocess.run([ffmpeg_path, '-version'], capture_output=True, text=True, timeout=5)
-            ffmpeg_version = r.stdout.split('\n')[0] if r.returncode == 0 else r.stderr[:100]
-        except Exception as e:
-            ffmpeg_version = str(e)
-    cookies_path = '/tmp/youtube_cookies.txt'
-    cookies_exists = os.path.isfile(cookies_path)
-    cookies_size = os.path.getsize(cookies_path) if cookies_exists else 0
-    # Test 1: search (extract_flat — known working)
-    yt_search = None
-    try:
-        import yt_dlp as _yt
-        opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True, 'socket_timeout': 10}
-        if cookies_exists:
-            opts['cookiefile'] = cookies_path
-        with _yt.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info('ytsearch1:Shape of You Ed Sheeran', download=False)
-            entries = info.get('entries', [])
-            yt_search = f"OK — {len(entries)} result(s)" if entries else "0 results"
-    except Exception as e:
-        yt_search = f"FAILED: {str(e)[:200]}"
-
-    # Test 2: direct URL format resolution (no actual download — this is where bot check fires)
-    yt_direct = None
-    try:
-        import yt_dlp as _yt
-        # iEXsiv5LznE = "I Want You (2026 Mix)" — used in earlier bot-check logs
-        opts2 = {'quiet': True, 'no_warnings': False, 'extract_flat': False,
-                 'socket_timeout': 15, 'format': 'bestaudio'}
-        if cookies_exists:
-            opts2['cookiefile'] = cookies_path
-        with _yt.YoutubeDL(opts2) as ydl:
-            info2 = ydl.extract_info('https://www.youtube.com/watch?v=iEXsiv5LznE', download=False)
-            yt_direct = f"OK — title: {info2.get('title','?')}, ext: {info2.get('ext','?')}"
-    except Exception as e:
-        yt_direct = f"FAILED: {str(e)[:300]}"
-
-    return jsonify({
-        "ffmpeg_path": ffmpeg_path,
-        "ffmpeg_version": ffmpeg_version,
-        "cookies_exists": cookies_exists,
-        "cookies_size_bytes": cookies_size,
-        "yt_search_test": yt_search,
-        "yt_direct_url_test": yt_direct,
-    })
-
-
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """
