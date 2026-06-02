@@ -32,7 +32,7 @@ RATE_S  = 3.0   # seconds between AI calls — 20 req/min, safely under Groq's 3
 
 
 def _passes_requested() -> set[int]:
-    requested = {i for i in (1, 2, 3, 4, 5, 6) if f"--pass{i}" in sys.argv}
+    requested = {i for i in (1, 2, 3, 4, 5, 6, 7) if f"--pass{i}" in sys.argv}
     return requested or {1, 2, 3, 4}
 
 
@@ -709,6 +709,103 @@ def pass6_backfill_spotify_id():
     print(f"  Artwork embedded:   {art_found}")
 
 
+# ── PASS 7: AcoustID fingerprint → ISRC → Spotify ID (exact match) ────────────
+
+def pass7_acoustid_spotify_id():
+    """
+    For files still missing TXXX:SPOTIFY_ID after pass 6:
+      1. Fingerprint via fpcalc → AcoustID API → MusicBrainz recording
+      2. Extract ISRC from the recording
+      3. Search Spotify by ISRC (exact, no title/artist guessing)
+      4. Write Spotify track ID back to TXXX:SPOTIFY_ID
+    Requires ACOUSTID_API_KEY env var (free at acoustid.org).
+    """
+    print("\n=== PASS 7: AcoustID fingerprint → Spotify ID (ISRC exact match) ===")
+
+    import os as _os
+    if not _os.getenv("ACOUSTID_API_KEY"):
+        print("  ACOUSTID_API_KEY not set — skipping")
+        return
+
+    try:
+        from mutagen.id3 import ID3, TXXX as _TXXX, ID3NoHeaderError
+        from services.spotify_service import get_spotify_service
+        from services.musicbrainz_service import _get as _mb_get, _ACOUSTID_BASE, _ACOUSTID_API_KEY, _MB_BASE
+        import urllib.parse as _up
+        from services.fingerprint_service import _run_fpcalc
+        sp = get_spotify_service().sp
+    except Exception as e:
+        print(f"  Setup failed: {e}")
+        return
+
+    to_process = [f for f in sorted(LIB.rglob("*.mp3")) if not _read_txxx(f, "SPOTIFY_ID")]
+    if LIMIT:
+        to_process = to_process[:LIMIT]
+    print(f"  {len(to_process)} files missing SpotifyID")
+
+    found = 0
+    for i, f in enumerate(to_process, 1):
+        print(f"  [{i}/{len(to_process)}] {f.name}")
+        if DRY:
+            print("    (dry run — skip)")
+            continue
+        try:
+            fp_str, duration = _run_fpcalc(str(f))
+            if not fp_str:
+                print("    fpcalc failed")
+                continue
+
+            # AcoustID lookup with ISRC metadata
+            params = _up.urlencode({
+                "client":      _ACOUSTID_API_KEY,
+                "duration":    int(duration),
+                "fingerprint": fp_str,
+                "meta":        "recordings+recordingids+compress",
+            })
+            data    = _mb_get(f"{_ACOUSTID_BASE}/lookup?{params}")
+            results = data.get("results", [])
+            if not results:
+                print("    no AcoustID match")
+                continue
+
+            best = max(results, key=lambda r: r.get("score", 0))
+            if best.get("score", 0) < 0.85:
+                print(f"    low confidence ({best.get('score',0):.2f}) — skip")
+                continue
+
+            mb_ids = [r.get("id") for r in best.get("recordings", []) if r.get("id")]
+            if not mb_ids:
+                print("    no MusicBrainz recording ID")
+                continue
+
+            # Fetch ISRCs from MusicBrainz
+            rec = _mb_get(f"{_MB_BASE}/recording/{mb_ids[0]}?inc=isrcs&fmt=json")
+            isrcs = rec.get("isrcs", [])
+            if not isrcs:
+                print("    no ISRC in MusicBrainz")
+                continue
+
+            # Search Spotify by ISRC — exact match
+            isrc = isrcs[0]
+            items = sp.search(q=f"isrc:{isrc}", type="track", limit=1).get("tracks", {}).get("items", [])
+            if not items:
+                print(f"    ISRC {isrc} not on Spotify")
+                continue
+
+            spotify_id = items[0]["id"]
+            tags = ID3(str(f))
+            tags.add(_TXXX(encoding=3, desc="SPOTIFY_ID", text=[spotify_id]))
+            tags.save(str(f))
+            print(f"    ✓ ISRC={isrc} → spotify_id={spotify_id[:8]}…")
+            found += 1
+
+        except Exception as e:
+            print(f"    [error] {e}")
+        time.sleep(1.5)  # AcoustID rate limit
+
+    print(f"\n  SpotifyIDs written via AcoustID: {found}/{len(to_process)}")
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -730,6 +827,8 @@ def main():
         pass5_embed_artwork()
     if 6 in passes:
         pass6_backfill_spotify_id()
+    if 7 in passes:
+        pass7_acoustid_spotify_id()
 
     print("\nDone.")
 

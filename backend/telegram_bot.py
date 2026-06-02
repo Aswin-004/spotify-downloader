@@ -1187,7 +1187,14 @@ def _run_bot() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    ptb_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    ptb_app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .connect_timeout(20.0)
+        .read_timeout(30.0)
+        .pool_timeout(10.0)
+        .build()
+    )
 
     # ── Command handlers ──────────────────────────────────────────
     ptb_app.add_handler(CommandHandler("start",         cmd_start))
@@ -1242,9 +1249,27 @@ def start_bot_thread() -> None:
         )
         return
 
-    thread = threading.Thread(target=_run_bot, daemon=True, name="telegram-bot")
+    import time as _time
+
+    def _run_with_retry() -> None:
+        delay = 10
+        attempt = 0
+        while True:
+            try:
+                _run_bot()
+                break  # clean shutdown
+            except Exception as exc:
+                attempt += 1
+                logger.warning(
+                    f"[telegram_bot] Bot crashed (attempt {attempt}): {exc} "
+                    f"— retrying in {delay}s"
+                )
+                _time.sleep(delay)
+                delay = min(delay * 2, 300)  # cap at 5 min
+
+    thread = threading.Thread(target=_run_with_retry, daemon=True, name="telegram-bot")
     thread.start()
     logger.success(
         f"[telegram_bot] Bot started in background thread "
-        f"(chat_id={TELEGRAM_CHAT_ID})"
+        f"(chat_id={TELEGRAM_CHAT_ID}, auto-retry enabled)"
     )
