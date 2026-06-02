@@ -763,6 +763,38 @@ class Config:
         # ── House additions ───────────────────────────────────────────────────
         "hugel":                  "House",
         "diaz":                   "House",
+        "sidepiece":              "House",
+        "fisher":                 "House",
+        "chris lake":             "House",
+        "dom dolla":              "House",
+        # ── Pop / Rock additions ──────────────────────────────────────────────
+        "imagine dragons":        "Pop",
+        "status quo":             "Pop",
+        "taking back sunday":     "Pop",
+        "abba":                   "Pop",
+        "olivia rodrigo":         "Pop",
+        "taylor swift":           "Pop",
+        "ed sheeran":             "Pop",
+        "coldplay":               "Pop",
+        # ── Drum & Bass additions ─────────────────────────────────────────────
+        "sigma":                  "Drum and Bass",
+        "chase & status":         "Drum and Bass",
+        "sub focus":              "Drum and Bass",
+        "netsky":                 "Drum and Bass",
+        "high contrast":          "Drum and Bass",
+        "pendulum":               "Drum and Bass",
+        # ── Hip Hop additions ─────────────────────────────────────────────────
+        "jpegmafia":              "Hip Hop",
+        "kendrick lamar":         "Hip Hop",
+        "drake":                  "Hip Hop",
+        "travis scott":           "Hip Hop",
+        "lil wayne":              "Hip Hop",
+        # ── Electronic (confirmed) ────────────────────────────────────────────
+        "alan walker":            "Electronic",
+        "swedish house mafia":    "Electronic",
+        "deadmau5":               "Electronic",
+        "skrillex":               "Electronic",
+        "flume":                  "Electronic",
     }
 
 
