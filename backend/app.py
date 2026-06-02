@@ -2132,6 +2132,7 @@ def delete_genre_override(artist_key):
 def get_catchall_tracks():
     """Return all tracks currently sitting in Library/Electronic/ (the catch-all bucket)."""
     from mutagen.id3 import ID3
+    from bpm_key_service import tkey_to_camelot as _t2c  # imported once, not per file
     electronic_dir = Path(BASE_DOWNLOAD_DIR) / "Library" / "Electronic"
     items = []
     if electronic_dir.is_dir():
@@ -2146,10 +2147,9 @@ def get_catchall_tracks():
                 conf_tag = tags.get("TXXX:gemini_confidence")
                 confidence = float(str(conf_tag).strip()) if conf_tag else 0.0
                 bpm_tag = tags.get("TBPM")
-                bpm_val = int(str(bpm_tag.text[0]).strip()) if bpm_tag and bpm_tag.text else None
+                bpm_val = int(float(str(bpm_tag.text[0]).strip())) if bpm_tag and bpm_tag.text else None
                 tkey_tag = tags.get("TKEY")
                 tkey_str = str(tkey_tag.text[0]).strip() if tkey_tag and tkey_tag.text else ""
-                from bpm_key_service import tkey_to_camelot as _t2c
                 camelot = _t2c(tkey_str)
             except Exception:
                 title = fp.stem
@@ -2311,7 +2311,6 @@ def export_rekordbox():
     _ET.SubElement(root_el, "PRODUCT", Name="rekordbox", Version="6.8.5", Company="AlphaTheta")
 
     collection = _ET.SubElement(root_el, "COLLECTION", Entries=str(len(mp3_files)))
-    playlist_keys = []
 
     for idx, mp3_path in enumerate(mp3_files, start=1):
         title, artist, bpm_val, key_val, duration_sec = "", "", "", "", 0
@@ -2346,10 +2345,7 @@ def export_rekordbox():
         if bpm_val:
             track_el.set("AverageBpm", bpm_val)
 
-        playlist_keys.append(str(idx))
-
     # Build genre-grouped playlists (one per Library subfolder)
-    # track_idx_by_genre: {genre_folder_name: [TrackID strings]}
     from collections import defaultdict as _dd
     genre_map: dict = _dd(list)
     for idx, mp3_path in enumerate(mp3_files, start=1):

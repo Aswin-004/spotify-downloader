@@ -778,11 +778,8 @@ class Config:
         "coldplay":               "Pop",
         # ── Drum & Bass additions ─────────────────────────────────────────────
         "sigma":                  "Drum and Bass",
-        "chase & status":         "Drum and Bass",
-        "sub focus":              "Drum and Bass",
         "netsky":                 "Drum and Bass",
         "high contrast":          "Drum and Bass",
-        "pendulum":               "Drum and Bass",
         # ── Hip Hop additions ─────────────────────────────────────────────────
         "jpegmafia":              "Hip Hop",
         "kendrick lamar":         "Hip Hop",

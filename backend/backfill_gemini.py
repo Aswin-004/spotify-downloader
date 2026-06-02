@@ -460,7 +460,7 @@ def pass4b_correct_bpm_halving():
             bpm = int(float(bpm_str))
         except ValueError:
             continue
-        genre = _read_tag(mp3, "TCON")
+        genre = _read_tag(mp3, "TCON") or ""
         fixed = _correct_bpm_for_genre(bpm, genre)
         if fixed != bpm:
             print(f"  {mp3.name}: {bpm} → {fixed}  ({genre or 'no genre'})")
@@ -623,32 +623,7 @@ def pass6_backfill_spotify_id():
         except Exception:
             return False
 
-    def _try_musicbrainz_art(title: str, artist: str, path: Path) -> bool:
-        """Look up MusicBrainz recording → release → Cover Art Archive."""
-        try:
-            mb_url = "https://musicbrainz.org/ws/2/recording"
-            params = {"query": f'recording:"{title}" AND artist:"{artist}"',
-                      "limit": 1, "fmt": "json"}
-            r = _req.get(mb_url, params=params, timeout=8,
-                         headers={"User-Agent": "ObsidianDJ/1.0 (aswin.abhinab22@gmail.com)"})
-            recordings = r.json().get("recordings", [])
-            if not recordings:
-                return False
-            releases = recordings[0].get("releases", [])
-            if not releases:
-                return False
-            mbid = releases[0].get("id", "")
-            if not mbid:
-                return False
-            art = _req.get(f"https://coverartarchive.org/release/{mbid}/front",
-                           timeout=8, allow_redirects=True)
-            if art.status_code == 200 and art.content:
-                return _embed_artwork_from_url(None, path) if False else _embed_artwork_from_url.__wrapped__ if hasattr(_embed_artwork_from_url,'__wrapped__') else (lambda: (
-                    ID3(str(path)).__setitem__("APIC", APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=art.content)) or
-                    ID3(str(path)).save(str(path)) or True
-                ))()
-        except Exception:
-            return False
+    import re as _re  # moved outside the per-file loop
 
     for i, f in enumerate(no_sid, 1):
         title  = _read_tag(f, "TIT2") or f.stem
@@ -661,7 +636,6 @@ def pass6_backfill_spotify_id():
         spotify_id = ""
         img_url    = ""
         try:
-            import re as _re
             clean = _re.sub(r'\s*[\(\[]From[^\)\]]*[\)\]]', '', title, flags=_re.IGNORECASE).strip()
             q = f"track:{clean}"
             if artist:
@@ -685,7 +659,8 @@ def pass6_backfill_spotify_id():
                     art_found += 1
                     no_art_set.discard(f)
                 tags.save(str(f))
-                print(f"    ✓ spotify_id={spotify_id[:8]}…" + (" + artwork" if f in no_art_set else ""))
+                got_art = img_url and f not in no_art_set  # discard already removed it
+                print(f"    ✓ spotify_id={spotify_id[:8]}…" + (" + artwork" if got_art else ""))
                 sid_found += 1
             except Exception as e:
                 print(f"    [write-warn] {e}")
@@ -696,6 +671,8 @@ def pass6_backfill_spotify_id():
 
     # MusicBrainz fallback for files still missing artwork after Spotify pass
     remaining_no_art = [f for f in no_art if f in no_art_set]
+    if LIMIT:
+        remaining_no_art = remaining_no_art[:LIMIT]
     if remaining_no_art:
         print(f"\n  MusicBrainz artwork fallback: {len(remaining_no_art)} files")
         for j, f in enumerate(remaining_no_art, 1):

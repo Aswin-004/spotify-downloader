@@ -24,6 +24,7 @@ env/
 .spotify_cache
 .cache
 .cache-*
+**/.spotify_oauth_cache
 
 # ── Runtime data & state files ────────────────────────────────────────────────
 backend/cache/
@@ -42,7 +43,17 @@ ingest_tracks.json
 
 # ── Logs ─────────────────────────────────────────────────────────────────────
 *.log
+*.log.err
 logs/
+
+# ── Backfill runtime state ────────────────────────────────────────────────────
+backend/.lastfm_backfill_checkpoint.json
+backend/artwork_backfill.log*
+backend/pass*.log*
+
+# ── One-shot fix scripts (executed and deleted; pattern guards future) ─────────
+backend/_fix_*.py
+backend/_diagnose_*.py
 
 # ── Validation / debug artifacts ─────────────────────────────────────────────
 backend/validation_output.txt
@@ -90,3 +101,5 @@ backend/migration_excludes.json
 # Source is: .venv/lib/site-packages/pyvis/lib/
 backend/lib/
 lib/
+
+.vercel
