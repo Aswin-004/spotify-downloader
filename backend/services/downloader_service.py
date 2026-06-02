@@ -939,6 +939,17 @@ class DownloaderService:
         if os.path.isfile(_yt_cookies):
             ydl_opts['cookiefile'] = _yt_cookies
 
+        # YouTube PO Token — bypasses datacenter IP bot-check when combined with cookies
+        # Set YOUTUBE_PO_TOKEN env var on Render to activate (see docs for how to extract)
+        _po_token = os.getenv("YOUTUBE_PO_TOKEN", "").strip()
+        if _po_token:
+            ydl_opts['extractor_args'] = {
+                'youtube': {
+                    'po_token': [f'web+{_po_token}'],
+                    'player_client': ['web'],
+                }
+            }
+
         if ffmpeg_dir:
             ydl_opts['ffmpeg_location'] = ffmpeg_dir
 

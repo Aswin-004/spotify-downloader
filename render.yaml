@@ -60,6 +60,8 @@ services:
         value: "10"
       - key: YOUTUBE_COOKIES_B64
         sync: false   # base64-encoded Netscape cookies.txt from a YouTube-logged-in browser session
+      - key: YOUTUBE_PO_TOKEN
+        sync: false   # Proof-of-Origin token — bypasses datacenter IP bot-check (see README for extraction)
 
   # ── Redis (Render-managed) ────────────────────────────────────────────────
   - name: spotify-downloader-redis

@@ -90,7 +90,14 @@ if _yt_cookies_b64:
     except Exception as _e:
         print(f"[startup] WARNING: Failed to decode YOUTUBE_COOKIES_B64: {_e}", file=sys.stderr)
 else:
-    print("[startup] YOUTUBE_COOKIES_B64 not set — downloads will run without auth")
+    print("[startup] YOUTUBE_COOKIES_B64 not set — downloads will run without cookies")
+
+# ── 6. YouTube PO Token status ────────────────────────────────────────────────
+_po_token = os.getenv("YOUTUBE_PO_TOKEN", "").strip()
+if _po_token:
+    print(f"[startup] YouTube PO Token active ({len(_po_token)} chars) — datacenter IP bypass enabled")
+else:
+    print("[startup] YOUTUBE_PO_TOKEN not set — set this env var to bypass YouTube IP block on Render")
 
 print("[startup] All checks passed — starting Gunicorn")
 sys.exit(0)
