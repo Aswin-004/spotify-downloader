@@ -24,4 +24,3 @@ python-telegram-bot==21.11.1
 gunicorn>=21.2.0
 gevent>=24.2.1
 gevent-websocket>=0.10.1
-imageio-ffmpeg>=0.5.1
