@@ -194,6 +194,14 @@ def _find_ffmpeg_binary() -> Optional[str]:
     path = shutil.which('ffmpeg')
     if path:
         return path
+    # imageio-ffmpeg ships a static binary — use it as fallback on cloud servers
+    try:
+        import imageio_ffmpeg
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled:
+            return bundled
+    except Exception:
+        pass
     return None
 
 
@@ -425,7 +433,15 @@ class DownloaderService:
         if spotdl_ffmpeg.exists():
             return str(spotdl_ffmpeg.parent)
         if shutil.which('ffmpeg'):
-            return None
+            return None  # in PATH — yt-dlp finds it automatically
+        # imageio-ffmpeg bundled binary (installed via pip on cloud servers)
+        try:
+            import imageio_ffmpeg
+            bundled = imageio_ffmpeg.get_ffmpeg_exe()
+            if bundled:
+                return str(Path(bundled).parent)
+        except Exception:
+            pass
         logger.warning("ffmpeg not found — MP3 conversion may fail")
         return None
 
