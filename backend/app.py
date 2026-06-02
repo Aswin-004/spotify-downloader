@@ -1182,6 +1182,43 @@ def clear_genre_cache_endpoint():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/diag', methods=['GET'])
+def diag():
+    """Temporary diagnostic endpoint — checks ffmpeg + cookies on the server."""
+    import shutil, subprocess
+    ffmpeg_path = shutil.which('ffmpeg')
+    ffmpeg_version = None
+    if ffmpeg_path:
+        try:
+            r = subprocess.run([ffmpeg_path, '-version'], capture_output=True, text=True, timeout=5)
+            ffmpeg_version = r.stdout.split('\n')[0] if r.returncode == 0 else r.stderr[:100]
+        except Exception as e:
+            ffmpeg_version = str(e)
+    cookies_path = '/tmp/youtube_cookies.txt'
+    cookies_exists = os.path.isfile(cookies_path)
+    cookies_size = os.path.getsize(cookies_path) if cookies_exists else 0
+    # Try a yt-dlp test (metadata only, no download)
+    yt_test = None
+    try:
+        import yt_dlp as _yt
+        opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True, 'socket_timeout': 10}
+        if cookies_exists:
+            opts['cookiefile'] = cookies_path
+        with _yt.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info('ytsearch1:Shape of You Ed Sheeran', download=False)
+            entries = info.get('entries', [])
+            yt_test = f"OK — found {len(entries)} result(s)" if entries else "OK — 0 results"
+    except Exception as e:
+        yt_test = f"FAILED: {str(e)[:200]}"
+    return jsonify({
+        "ffmpeg_path": ffmpeg_path,
+        "ffmpeg_version": ffmpeg_version,
+        "cookies_exists": cookies_exists,
+        "cookies_size_bytes": cookies_size,
+        "yt_search_test": yt_test,
+    })
+
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """
