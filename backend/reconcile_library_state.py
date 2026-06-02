@@ -97,7 +97,7 @@ def _read_id3(filepath: str) -> dict | None:
             "artist":    _frame("TPE1"),
             "camelot":   _txxx("INITIALKEY"),
             "spotify_id":_txxx("SPOTIFY_ID"),
-            "has_apic":  bool(tags.get("APIC:")),
+            "has_apic":  bool(tags.getall("APIC")),
         }
     except Exception:
         return None

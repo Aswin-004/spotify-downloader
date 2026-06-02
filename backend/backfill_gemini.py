@@ -470,32 +470,48 @@ def pass5_embed_artwork():
             print("    (dry run — skip)")
             continue
 
-        title  = _read_tag(f, "TIT2") or f.stem
-        artist = _read_tag(f, "TPE1") or ""
+        title     = _read_tag(f, "TIT2") or f.stem
+        artist    = _read_tag(f, "TPE1") or ""
+        spotify_id = _read_txxx(f, "SPOTIFY_ID")
         if not title:
             print("    no title tag — skip")
             continue
 
         try:
             import re as _re
-            # Strip "(From Movie Name)" suffix common in Bollywood titles
-            clean_title = _re.sub(r'\s*[\(\[]From[^\)\]]*[\)\]]', '', title, flags=_re.IGNORECASE).strip()
-            clean_title = _re.sub(r'\s*-\s*(From|OST|Soundtrack).*$', '', clean_title, flags=_re.IGNORECASE).strip()
 
-            def _search(t, a):
-                q = f"track:{t}"
-                if a:
-                    q += f" artist:{a}"
-                r = sp.search(q=q, type="track", limit=1)
-                return r.get("tracks", {}).get("items", [])
+            img_url = ""
 
-            items = _search(clean_title, artist) or _search(clean_title, "") or _search(title, "")
-            if not items:
-                print("    Spotify: no match")
-                continue
+            # Fast path: use stored Spotify ID to skip search entirely
+            if spotify_id:
+                try:
+                    track_data = sp.track(spotify_id)
+                    img_url = (track_data.get("album", {}).get("images") or [{}])[0].get("url", "")
+                    if img_url:
+                        print(f"    via spotify_id={spotify_id[:8]}…")
+                except Exception:
+                    pass  # fall through to search
 
-            track   = items[0]
-            img_url = (track.get("album", {}).get("images") or [{}])[0].get("url", "")
+            # Slow path: search by title + artist
+            if not img_url:
+                clean_title = _re.sub(r'\s*[\(\[]From[^\)\]]*[\)\]]', '', title, flags=_re.IGNORECASE).strip()
+                clean_title = _re.sub(r'\s*-\s*(From|OST|Soundtrack).*$', '', clean_title, flags=_re.IGNORECASE).strip()
+
+                def _search(t, a):
+                    q = f"track:{t}"
+                    if a:
+                        q += f" artist:{a}"
+                    r = sp.search(q=q, type="track", limit=1)
+                    return r.get("tracks", {}).get("items", [])
+
+                items = _search(clean_title, artist) or _search(clean_title, "") or _search(title, "")
+                if not items:
+                    print("    Spotify: no match")
+                    continue
+                found_track = items[0]
+                img_url = (found_track.get("album", {}).get("images") or [{}])[0].get("url", "")
+                if not spotify_id:
+                    spotify_id = found_track.get("id", "")
             if not img_url:
                 print("    no artwork URL")
                 continue
@@ -506,8 +522,12 @@ def pass5_embed_artwork():
             except ID3NoHeaderError:
                 tags = ID3()
             tags["APIC"] = APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img_data)
+            # Also backfill Spotify ID if we found it and it wasn't already set
+            if spotify_id and not _read_txxx(f, "SPOTIFY_ID"):
+                from mutagen.id3 import TXXX as _TXXX2
+                tags[f"TXXX:SPOTIFY_ID"] = _TXXX2(encoding=3, desc="SPOTIFY_ID", text=[spotify_id])
             tags.save(str(f))
-            print(f"    ✓ embedded ({len(img_data)//1024} KB)")
+            print(f"    ✓ embedded ({len(img_data)//1024} KB){' + spotify_id' if spotify_id and not _read_txxx(f, 'SPOTIFY_ID') else ''}")
             embedded += 1
             time.sleep(1.0)  # 1 req/s Spotify rate limit
         except Exception as e:
