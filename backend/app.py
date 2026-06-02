@@ -2145,17 +2145,27 @@ def get_catchall_tracks():
                 artist = str(tags.get("TPE1", "")).strip()
                 conf_tag = tags.get("TXXX:gemini_confidence")
                 confidence = float(str(conf_tag).strip()) if conf_tag else 0.0
+                bpm_tag = tags.get("TBPM")
+                bpm_val = int(str(bpm_tag.text[0]).strip()) if bpm_tag and bpm_tag.text else None
+                tkey_tag = tags.get("TKEY")
+                tkey_str = str(tkey_tag.text[0]).strip() if tkey_tag and tkey_tag.text else ""
+                from bpm_key_service import tkey_to_camelot as _t2c
+                camelot = _t2c(tkey_str)
             except Exception:
                 title = fp.stem
                 artist = ""
                 confidence = 0.0
+                bpm_val = None
+                camelot = ""
             items.append({
                 "title": title,
                 "artist": artist,
                 "confidence": confidence,
                 "suggested_folder": "Library/Electronic",
                 "filename": fp.name,
-                "id": fp.stem,  # stable unique id based on filename
+                "id": fp.stem,
+                "bpm": bpm_val,
+                "camelot_key": camelot,
             })
     return jsonify(items), 200
 
@@ -2338,17 +2348,31 @@ def export_rekordbox():
 
         playlist_keys.append(str(idx))
 
+    # Build genre-grouped playlists (one per Library subfolder)
+    # track_idx_by_genre: {genre_folder_name: [TrackID strings]}
+    from collections import defaultdict as _dd
+    genre_map: dict = _dd(list)
+    for idx, mp3_path in enumerate(mp3_files, start=1):
+        try:
+            rel = mp3_path.relative_to(base)
+            genre_folder = rel.parts[1] if len(rel.parts) > 1 else "Other"
+        except ValueError:
+            genre_folder = "Other"
+        genre_map[genre_folder].append(str(idx))
+
     playlists_el = _ET.SubElement(root_el, "PLAYLISTS")
-    root_node = _ET.SubElement(playlists_el, "NODE", Name="ROOT", Type="0", Count="1")
-    folder_node = _ET.SubElement(
-        root_node, "NODE",
-        Name=playlist_name,
-        Type="1",
-        Entries=str(len(playlist_keys)),
-        KeyType="0",
-    )
-    for key in playlist_keys:
-        _ET.SubElement(folder_node, "TRACK", Key=key)
+    root_node    = _ET.SubElement(playlists_el, "NODE", Name="ROOT", Type="0",
+                                  Count=str(len(genre_map)))
+    for genre_name, keys in sorted(genre_map.items()):
+        g_node = _ET.SubElement(
+            root_node, "NODE",
+            Name=genre_name,
+            Type="1",
+            Entries=str(len(keys)),
+            KeyType="0",
+        )
+        for key in keys:
+            _ET.SubElement(g_node, "TRACK", Key=key)
 
     xml_bytes = b'<?xml version="1.0" encoding="UTF-8"?>\n' + _ET.tostring(root_el, encoding="unicode").encode("utf-8")
 

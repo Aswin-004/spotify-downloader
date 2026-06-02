@@ -163,17 +163,31 @@ export default function LibraryPage() {
             Manage your downloaded tracks
           </p>
         </div>
-        <div className="text-right">
-          {loading ? (
-            <Loader2 className="w-5 h-5 animate-spin ml-auto" style={{ color: 'var(--accent-violet)' }} />
-          ) : (
-            <>
-              <div className="font-display text-28 font-bold tabular-nums" style={{ color: 'var(--accent-violet)', letterSpacing: '-0.03em' }}>
-                {totalFiles}
-              </div>
-              <div className="text-11" style={{ color: 'var(--text-tertiary)' }}>tracks</div>
-            </>
+        <div className="flex items-center gap-3">
+          {!loading && (
+            <a
+              href={api.rekordboxExportUrl('all', 'ObsidianDJ Library')}
+              download="rekordbox_library.xml"
+              title="Export full library as Rekordbox XML"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-12 font-medium transition-colors"
+              style={{ background: 'var(--surface-1)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}
+            >
+              <Download className="w-3.5 h-3.5" />
+              Rekordbox
+            </a>
           )}
+          <div className="text-right">
+            {loading ? (
+              <Loader2 className="w-5 h-5 animate-spin ml-auto" style={{ color: 'var(--accent-violet)' }} />
+            ) : (
+              <>
+                <div className="font-display text-28 font-bold tabular-nums" style={{ color: 'var(--accent-violet)', letterSpacing: '-0.03em' }}>
+                  {totalFiles}
+                </div>
+                <div className="text-11" style={{ color: 'var(--text-tertiary)' }}>tracks</div>
+              </>
+            )}
+          </div>
         </div>
       </motion.div>
 

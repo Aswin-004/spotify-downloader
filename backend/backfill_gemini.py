@@ -380,6 +380,28 @@ def pass3_enrich_library():
 
 # ── PASS 4: librosa BPM + key for files missing TBPM / TKEY ──────────────────
 
+# Genre keywords that indicate fast tempos (librosa often halves these)
+_FAST_GENRES = {"electronic", "house", "trance", "techno", "hardstyle",
+                "drum", "bass", "garage", "grime", "dubstep"}
+# Genre keywords that indicate slow tempos (librosa sometimes doubles these)
+_SLOW_GENRES = {"hip hop", "r&b", "rnb", "soul", "jazz", "blues",
+                "reggae", "bollywood", "punjabi", "latin", "afrobeats"}
+
+
+def _correct_bpm_for_genre(bpm: int, genre: str) -> int:
+    """Apply genre-aware BPM halving/doubling correction without re-running librosa."""
+    g = genre.lower()
+    is_fast = any(kw in g for kw in _FAST_GENRES)
+    is_slow = any(kw in g for kw in _SLOW_GENRES)
+    if bpm < 90 and is_fast:
+        return bpm * 2   # librosa locked on sub-harmonic
+    if bpm > 160 and is_slow:
+        return bpm // 2  # librosa locked on double-time
+    if bpm < 70:
+        return bpm * 2   # unrealistically slow for any common genre
+    return bpm
+
+
 def pass4_bpm_key():
     print("\n=== PASS 4: librosa BPM + key for files missing TBPM/TKEY ===")
 
@@ -395,10 +417,9 @@ def pass4_bpm_key():
     print(f"  {len(to_process)} files missing BPM or key")
 
     try:
-        import librosa
-        import numpy as np
+        from bpm_key_service import detect_bpm_and_key
     except ImportError:
-        print("  librosa not installed — run: pip install librosa")
+        print("  bpm_key_service not available — librosa may not be installed")
         return
 
     for i, f in enumerate(to_process, 1):
@@ -407,28 +428,47 @@ def pass4_bpm_key():
             print("    (dry run — skip librosa)")
             continue
         try:
-            y, sr = librosa.load(str(f), sr=None, mono=True, duration=60)
-            bpm_float, _ = librosa.beat.beat_track(y=y, sr=sr)
-            bpm_val = round(float(np.squeeze(bpm_float).item() if hasattr(np.squeeze(bpm_float), 'item') else bpm_float))
-
-            chroma     = librosa.feature.chroma_cqt(y=y, sr=sr)
-            chroma_avg = chroma.mean(axis=1)
-            key_idx    = int(np.argmax(chroma_avg).item() if hasattr(np.argmax(chroma_avg), 'item') else np.argmax(chroma_avg))
-            KEY_NAMES  = ["C", "C#", "D", "D#", "E", "F",
-                          "F#", "G", "G#", "A", "A#", "B"]
-            key_str   = KEY_NAMES[key_idx % 12]
-
-            print(f"    BPM={bpm_val}  key={key_str}")
+            genre_hint = _read_tag(f, "TCON")
+            result = detect_bpm_and_key(str(f), genre_hint=genre_hint)
+            if not result.get("analyzed"):
+                print(f"    [skip] {result.get('error', 'no result')}")
+                continue
+            bpm_val = result["bpm"]
+            key_str = result.get("key", "")
+            print(f"    BPM={bpm_val}  key={key_str}  conf={result.get('confidence', 0):.2f}")
             tags_to_write: dict = {}
-            if not _read_tag(f, "TBPM"):
+            if bpm_val and not _read_tag(f, "TBPM"):
                 tags_to_write["TBPM"] = bpm_val
-            if not _read_tag(f, "TKEY"):
+            if key_str and not _read_tag(f, "TKEY"):
                 tags_to_write["TKEY"] = key_str
             if tags_to_write:
                 _write_tags(f, tags_to_write)
                 _update_mongo_tags(f, {k.lower(): v for k, v in tags_to_write.items()})
         except Exception as e:
             print(f"    [librosa-warn] {e}")
+
+
+def pass4b_correct_bpm_halving():
+    """Fast mathematical correction for existing TBPM tags that look genre-mismatched."""
+    print("\n=== PASS 4b: correct genre-mismatched BPM tags ===")
+    corrected = 0
+    for mp3 in sorted(LIB.rglob("*.mp3")):
+        bpm_str = _read_tag(mp3, "TBPM")
+        if not bpm_str:
+            continue
+        try:
+            bpm = int(float(bpm_str))
+        except ValueError:
+            continue
+        genre = _read_tag(mp3, "TCON")
+        fixed = _correct_bpm_for_genre(bpm, genre)
+        if fixed != bpm:
+            print(f"  {mp3.name}: {bpm} → {fixed}  ({genre or 'no genre'})")
+            if not DRY:
+                _write_tags(mp3, {"TBPM": fixed})
+                _update_mongo_tags(mp3, {"tbpm": fixed})
+            corrected += 1
+    print(f"  Corrected {corrected} BPM tags")
 
 
 # ── PASS 5: Embed album artwork from Spotify ──────────────────────────────────
@@ -552,6 +592,7 @@ def main():
         pass3_enrich_library()
     if 4 in passes:
         pass4_bpm_key()
+        pass4b_correct_bpm_halving()
     if 5 in passes:
         pass5_embed_artwork()
 

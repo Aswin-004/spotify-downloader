@@ -32,6 +32,29 @@ _CAMELOT_MAP = {
     (11, "maj"): "1B",  (11, "min"): "10A",
 }
 
+def tkey_to_camelot(tkey: str) -> str:
+    """Convert a TKEY string (e.g. 'F# min', 'C maj', 'A') to Camelot notation."""
+    if not tkey:
+        return ""
+    t = tkey.strip()
+    # Determine mode
+    if "min" in t.lower() or t.lower().endswith("m"):
+        mode = "min"
+    else:
+        mode = "maj"
+    # Extract root — strip mode suffixes
+    root = t.replace(" min", "").replace(" maj", "").replace(" major", "")
+    root = root.replace(" minor", "").rstrip("m").strip()
+    # Normalise flats → sharps
+    _FLAT_TO_SHARP = {"Db": "C#", "Eb": "D#", "Fb": "E", "Gb": "F#",
+                      "Ab": "G#", "Bb": "A#", "Cb": "B"}
+    root = _FLAT_TO_SHARP.get(root, root)
+    idx = _PITCH_TO_IDX.get(root)
+    if idx is None:
+        return ""
+    return _CAMELOT_MAP.get((idx, mode), "")
+
+
 # Krumhansl-Schmuckler key profiles
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
                  2.52, 5.19, 2.39, 3.66, 2.29, 2.88]

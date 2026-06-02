@@ -79,6 +79,15 @@ export default function ReviewPage() {
       setSelectedIdx(needsReviewItems.length - 1);
   }, [needsReviewItems.length]);
 
+  // Auto-stop audio when selected track changes
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio && !audio.paused) {
+      audio.pause();
+      setPlaying(false);
+    }
+  }, [selectedIdx]);
+
   async function handleResetSkipped(trackId = null) {
     setResettingSkipped(true);
     try {
@@ -360,6 +369,23 @@ export default function ReviewPage() {
                     <p className="text-11 mt-1" style={{ color: 'var(--text-tertiary)' }}>
                       {selectedItem.suggested_folder}
                     </p>
+                    {/* BPM + Camelot badges */}
+                    {(selectedItem.bpm || selectedItem.camelot_key) && (
+                      <div className="flex items-center gap-1.5 mt-2">
+                        {selectedItem.bpm && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-11 font-mono font-semibold"
+                                style={{ background: 'var(--accent-amber-dim)', color: 'var(--accent-amber)' }}>
+                            {selectedItem.bpm} BPM
+                          </span>
+                        )}
+                        {selectedItem.camelot_key && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-11 font-mono font-semibold"
+                                style={{ background: 'var(--accent-teal-dim, rgba(20,184,166,0.15))', color: 'var(--accent-teal, #14b8a6)' }}>
+                            {selectedItem.camelot_key}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
