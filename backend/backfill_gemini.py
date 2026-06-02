@@ -32,7 +32,7 @@ RATE_S  = 3.0   # seconds between AI calls — 20 req/min, safely under Groq's 3
 
 
 def _passes_requested() -> set[int]:
-    requested = {i for i in (1, 2, 3, 4, 5) if f"--pass{i}" in sys.argv}
+    requested = {i for i in (1, 2, 3, 4, 5, 6) if f"--pass{i}" in sys.argv}
     return requested or {1, 2, 3, 4}
 
 
@@ -576,6 +576,162 @@ def pass5_embed_artwork():
     print(f"  Embedded artwork for {embedded}/{len(to_process)} files")
 
 
+# ── PASS 6: Backfill TXXX:SPOTIFY_ID + artwork via MusicBrainz fallback ───────
+
+def pass6_backfill_spotify_id():
+    """Search Spotify for files missing TXXX:SPOTIFY_ID; also embed artwork
+    for remaining gaps using MusicBrainz Cover Art Archive as fallback."""
+    print("\n=== PASS 6: Backfill SpotifyID + MusicBrainz artwork ===")
+
+    try:
+        import requests as _req
+        from mutagen.id3 import ID3, APIC, TXXX as _TXXX, ID3NoHeaderError
+        from services.spotify_service import get_spotify_service
+        sp = get_spotify_service().sp
+    except Exception as e:
+        print(f"  Setup failed: {e}")
+        return
+
+    # Build lists: files missing SpotifyID, files missing artwork
+    no_sid: list[Path] = []
+    no_art: list[Path] = []
+    for mp3 in sorted(LIB.rglob("*.mp3")):
+        try:
+            tags = ID3(str(mp3))
+            sid  = _read_txxx(mp3, "SPOTIFY_ID")
+            if not sid:
+                no_sid.append(mp3)
+            if not tags.getall("APIC"):
+                no_art.append(mp3)
+        except Exception:
+            no_sid.append(mp3)
+
+    if LIMIT:
+        no_sid = no_sid[:LIMIT]
+    print(f"  Missing SpotifyID: {len(no_sid)}  |  Missing artwork: {len(no_art)}")
+
+    sid_found = art_found = 0
+    no_art_set = set(no_art)
+
+    def _embed_artwork_from_url(url: str, path: Path) -> bool:
+        try:
+            data = _req.get(url, timeout=10).content
+            tags = ID3(str(path))
+            tags["APIC"] = APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=data)
+            tags.save(str(path))
+            return True
+        except Exception:
+            return False
+
+    def _try_musicbrainz_art(title: str, artist: str, path: Path) -> bool:
+        """Look up MusicBrainz recording → release → Cover Art Archive."""
+        try:
+            mb_url = "https://musicbrainz.org/ws/2/recording"
+            params = {"query": f'recording:"{title}" AND artist:"{artist}"',
+                      "limit": 1, "fmt": "json"}
+            r = _req.get(mb_url, params=params, timeout=8,
+                         headers={"User-Agent": "ObsidianDJ/1.0 (aswin.abhinab22@gmail.com)"})
+            recordings = r.json().get("recordings", [])
+            if not recordings:
+                return False
+            releases = recordings[0].get("releases", [])
+            if not releases:
+                return False
+            mbid = releases[0].get("id", "")
+            if not mbid:
+                return False
+            art = _req.get(f"https://coverartarchive.org/release/{mbid}/front",
+                           timeout=8, allow_redirects=True)
+            if art.status_code == 200 and art.content:
+                return _embed_artwork_from_url(None, path) if False else _embed_artwork_from_url.__wrapped__ if hasattr(_embed_artwork_from_url,'__wrapped__') else (lambda: (
+                    ID3(str(path)).__setitem__("APIC", APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=art.content)) or
+                    ID3(str(path)).save(str(path)) or True
+                ))()
+        except Exception:
+            return False
+
+    for i, f in enumerate(no_sid, 1):
+        title  = _read_tag(f, "TIT2") or f.stem
+        artist = _read_tag(f, "TPE1") or ""
+        print(f"  [{i}/{len(no_sid)}] {f.name}")
+        if DRY:
+            print("    (dry run — skip)")
+            continue
+
+        spotify_id = ""
+        img_url    = ""
+        try:
+            import re as _re
+            clean = _re.sub(r'\s*[\(\[]From[^\)\]]*[\)\]]', '', title, flags=_re.IGNORECASE).strip()
+            q = f"track:{clean}"
+            if artist:
+                q += f" artist:{artist}"
+            items = sp.search(q=q, type="track", limit=1).get("tracks", {}).get("items", [])
+            if items:
+                track      = items[0]
+                spotify_id = track.get("id", "")
+                img_url    = (track.get("album", {}).get("images") or [{}])[0].get("url", "")
+        except Exception as e:
+            print(f"    [spotify-warn] {e}")
+
+        if spotify_id:
+            try:
+                tags = ID3(str(f))
+                tags.add(_TXXX(encoding=3, desc="SPOTIFY_ID", text=[spotify_id]))
+                # Embed artwork if missing and Spotify has it
+                if f in no_art_set and img_url:
+                    data = _req.get(img_url, timeout=10).content
+                    tags["APIC"] = APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=data)
+                    art_found += 1
+                    no_art_set.discard(f)
+                tags.save(str(f))
+                print(f"    ✓ spotify_id={spotify_id[:8]}…" + (" + artwork" if f in no_art_set else ""))
+                sid_found += 1
+            except Exception as e:
+                print(f"    [write-warn] {e}")
+        else:
+            print("    no Spotify match")
+
+        time.sleep(1.0)
+
+    # MusicBrainz fallback for files still missing artwork after Spotify pass
+    remaining_no_art = [f for f in no_art if f in no_art_set]
+    if remaining_no_art:
+        print(f"\n  MusicBrainz artwork fallback: {len(remaining_no_art)} files")
+        for j, f in enumerate(remaining_no_art, 1):
+            title  = _read_tag(f, "TIT2") or f.stem
+            artist = _read_tag(f, "TPE1") or ""
+            print(f"  [{j}/{len(remaining_no_art)}] {f.name}")
+            if DRY:
+                continue
+            try:
+                mb_url  = "https://musicbrainz.org/ws/2/recording"
+                params  = {"query": f'recording:"{title}" AND artist:"{artist}"', "limit": 1, "fmt": "json"}
+                r       = _req.get(mb_url, params=params, timeout=8,
+                                   headers={"User-Agent": "ObsidianDJ/1.0 (aswin.abhinab22@gmail.com)"})
+                recs    = r.json().get("recordings", [])
+                mbid    = (recs[0].get("releases") or [{}])[0].get("id", "") if recs else ""
+                if mbid:
+                    art = _req.get(f"https://coverartarchive.org/release/{mbid}/front",
+                                   timeout=10, allow_redirects=True)
+                    if art.status_code == 200 and art.content:
+                        tags = ID3(str(f))
+                        tags["APIC"] = APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=art.content)
+                        tags.save(str(f))
+                        print(f"    ✓ MusicBrainz artwork embedded")
+                        art_found += 1
+                    else:
+                        print(f"    no cover art found")
+                else:
+                    print(f"    no MusicBrainz match")
+            except Exception as e:
+                print(f"    [mb-warn] {e}")
+            time.sleep(1.0)
+
+    print(f"\n  SpotifyIDs written: {sid_found}/{len(no_sid)}")
+    print(f"  Artwork embedded:   {art_found}")
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -595,6 +751,8 @@ def main():
         pass4b_correct_bpm_halving()
     if 5 in passes:
         pass5_embed_artwork()
+    if 6 in passes:
+        pass6_backfill_spotify_id()
 
     print("\nDone.")
 
