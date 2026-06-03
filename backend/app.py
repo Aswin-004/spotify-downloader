@@ -736,14 +736,9 @@ def download_stream_to_browser():
     if not video_id:
         return jsonify({"error": "Could not extract video ID"}), 502
 
-    # 3. Get Invidious URL (bypasses Render IP block — audio routed via proxy)
-    invidious_url = get_invidious_url(video_id)
-    if not invidious_url:
-        return jsonify({
-            "error": "All Invidious proxy servers are currently unavailable. Try again in a few minutes."
-        }), 503
-
-    # 4. Download to temp file via yt-dlp + FFmpeg conversion
+    # 3. Download using YouTube tv_embedded client — far less bot-checked than web client
+    #    Works from datacenter IPs without cookies or proxies.
+    youtube_url = f"https://www.youtube.com/watch?v={video_id}"
     tmp_base = tempfile.mktemp()
     tmp_mp3 = tmp_base + '.mp3'
     try:
@@ -758,6 +753,12 @@ def download_stream_to_browser():
                 'preferredquality': '192',
             }],
             'socket_timeout': 60,
+            # tv_embedded player: YouTube's TV/embed API — not subject to same IP blocks as web
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['tv_embedded'],
+                }
+            },
         }
         if ffmpeg:
             ydl_opts['ffmpeg_location'] = str(Path(ffmpeg).parent)
@@ -765,7 +766,7 @@ def download_stream_to_browser():
             ydl_opts['cookiefile'] = _cookies
 
         with _yt.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([invidious_url])
+            ydl.download([youtube_url])
 
         if not os.path.isfile(tmp_mp3):
             # yt-dlp may have named it differently — find it

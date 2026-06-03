@@ -167,7 +167,7 @@ export default function LibraryPage() {
         if (!folderTags[name]) {
           api.getFolderTags(name).then(data => {
             setFolderTags(prev => ({ ...prev, [name]: data }));
-          }).catch(() => {});
+          }).catch(err => console.warn('[folder-tags]', err));
         }
       }
       return next;
@@ -185,7 +185,7 @@ export default function LibraryPage() {
       if (!folderTags[name]) {
         api.getFolderTags(name).then(data => {
           setFolderTags(prev => ({ ...prev, [name]: data }));
-        }).catch(() => {});
+        }).catch(err => console.warn('[folder-tags]', err));
       }
     });
   }, [expandedFolders]);
