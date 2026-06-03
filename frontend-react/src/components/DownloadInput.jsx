@@ -43,17 +43,30 @@ export default function DownloadInput() {
     setError('');
 
     try {
-      const res = await api.startDownload(url.trim());
+      // Streaming download — file saves directly to user's ~/Downloads folder
+      const res = await api.downloadStream(url.trim());
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Download request failed (${res.status})`);
+        throw new Error(body.error || `Download failed (${res.status})`);
       }
-      // Request accepted — progress arrives via WebSocket
+      // Trigger browser file save
+      const cd = res.headers.get('Content-Disposition') || '';
+      const match = cd.match(/filename[^;=\n]*=['"]?(.*?)['"]?(?:;|$)/);
+      const filename = match ? match[1] : `${metadata?.title || 'track'}.mp3`;
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objUrl);
       setUrl('');
       setMetadata(null);
-      setDownloading(false);
     } catch (err) {
       setError(err.message || 'Download failed');
+    } finally {
       setDownloading(false);
     }
   }
@@ -240,7 +253,7 @@ export default function DownloadInput() {
                     {downloading ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        Downloading...
+                        Downloading... (30–60s)
                       </>
                     ) : (
                       <>

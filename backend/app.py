@@ -15,7 +15,7 @@ if _os.getenv("SOCKETIO_ASYNC_MODE", "threading") == "gevent":
     except ImportError:
         pass
 
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 import json
@@ -79,6 +79,9 @@ from queue_manager import (
     start_stuck_task_cleanup_thread,
     start_socketio_bridge,
 )
+
+# INVIDIOUS — streaming download service (YouTube proxy for cloud users)
+from services.invidious_service import get_invidious_url
 
 # CELERY UPGRADE — conditional Celery imports (graceful if Redis unavailable)
 _celery_available = False
@@ -677,6 +680,127 @@ def download_track():
         with status_lock:
             active_download = False
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/download-stream', methods=['POST'])
+@limiter.limit(LIMIT_DOWNLOAD)
+def download_stream_to_browser():
+    """
+    Synchronous streaming download — file goes directly to the user's browser.
+    Uses Invidious (YouTube proxy) to bypass datacenter IP bot-blocking.
+    Completely separate from the existing background pipeline — nothing shared.
+    """
+    import tempfile, shutil
+    import yt_dlp as _yt
+
+    data = request.get_json() or {}
+    url = data.get('url', '').strip()
+    if not url:
+        return jsonify({"error": "URL required"}), 400
+
+    url_info = extract_spotify_id(url)
+    if url_info.get('type') != 'track':
+        return jsonify({"error": "Only single tracks supported for browser download"}), 400
+
+    # 1. Spotify metadata
+    try:
+        metadata = spotify_service.get_track_metadata(url)
+        title = metadata.get('title', '')
+        artist = metadata.get('artist', '')
+        duration_ms = metadata.get('duration_ms')
+        if not title:
+            return jsonify({"error": "Could not fetch Spotify metadata"}), 502
+    except Exception as e:
+        return jsonify({"error": f"Spotify error: {str(e)[:80]}"}), 502
+
+    # 2. YouTube search (extract_flat=True — works from any IP, no bot check)
+    search_query = f"ytsearch1:{artist} - {title} Official Audio"
+    search_opts = {
+        'quiet': True, 'no_warnings': True,
+        'extract_flat': True, 'socket_timeout': 10,
+    }
+    _cookies = '/tmp/youtube_cookies.txt'
+    if os.path.isfile(_cookies):
+        search_opts['cookiefile'] = _cookies
+
+    try:
+        with _yt.YoutubeDL(search_opts) as ydl:
+            info = ydl.extract_info(search_query, download=False)
+            entries = (info or {}).get('entries', [])
+            if not entries:
+                return jsonify({"error": "No YouTube match found for this track"}), 404
+            video_id = entries[0].get('id', '')
+    except Exception as e:
+        return jsonify({"error": f"YouTube search failed: {str(e)[:80]}"}), 502
+
+    if not video_id:
+        return jsonify({"error": "Could not extract video ID"}), 502
+
+    # 3. Get Invidious URL (bypasses Render IP block — audio routed via proxy)
+    invidious_url = get_invidious_url(video_id)
+    if not invidious_url:
+        return jsonify({
+            "error": "All Invidious proxy servers are currently unavailable. Try again in a few minutes."
+        }), 503
+
+    # 4. Download to temp file via yt-dlp + FFmpeg conversion
+    tmp_base = tempfile.mktemp()
+    tmp_mp3 = tmp_base + '.mp3'
+    try:
+        ffmpeg = shutil.which('ffmpeg')
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'quiet': True, 'no_warnings': True,
+            'outtmpl': tmp_base + '.%(ext)s',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'socket_timeout': 60,
+        }
+        if ffmpeg:
+            ydl_opts['ffmpeg_location'] = str(Path(ffmpeg).parent)
+        if os.path.isfile(_cookies):
+            ydl_opts['cookiefile'] = _cookies
+
+        with _yt.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([invidious_url])
+
+        if not os.path.isfile(tmp_mp3):
+            # yt-dlp may have named it differently — find it
+            import glob
+            candidates = glob.glob(tmp_base + '*.mp3')
+            if candidates:
+                tmp_mp3 = candidates[0]
+            else:
+                return jsonify({"error": "Download completed but MP3 file not found"}), 502
+
+        safe_artist = sanitize_filename(artist)[:40]
+        safe_title  = sanitize_filename(title)[:60]
+        download_name = f"{safe_artist} - {safe_title}.mp3"
+
+        logger.info(f"[download-stream] Streaming '{title}' by {artist} → {download_name}")
+
+        return send_file(
+            tmp_mp3,
+            as_attachment=True,
+            download_name=download_name,
+            mimetype='audio/mpeg',
+        )
+
+    except Exception as e:
+        logger.error(f"[download-stream] Failed for '{title}': {e}")
+        return jsonify({"error": f"Download failed: {str(e)[:120]}"}), 502
+    finally:
+        # Clean up temp files regardless of outcome
+        for pat in [tmp_mp3, tmp_base + '.*']:
+            import glob
+            for f in glob.glob(pat):
+                try:
+                    os.unlink(f)
+                except Exception:
+                    pass
 
 
 def _download_background(url):

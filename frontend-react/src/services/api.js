@@ -35,6 +35,15 @@ export const api = {
     });
   },
 
+  // Cloud streaming download — file goes directly to user's ~/Downloads folder
+  downloadStream(url) {
+    return apiFetch('/api/download-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+  },
+
   getFiles() {
     return apiFetch('/api/files').then(handleResponse);
   },
