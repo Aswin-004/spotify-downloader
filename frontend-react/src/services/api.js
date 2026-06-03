@@ -316,6 +316,10 @@ export const api = {
     return `${_BASE}/api/preview-track?path=${encodeURIComponent(relativePath)}`;
   },
 
+  getFolderTags(folder) {
+    return apiFetch(`/api/files/folder-tags?folder=${encodeURIComponent(folder)}`).then(handleResponse);
+  },
+
   getDuplicates() {
     return apiFetch('/api/duplicates').then(handleResponse);
   },

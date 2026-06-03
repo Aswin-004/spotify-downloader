@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ToastProvider } from '@/components/ui/toast';
 import { SocketProvider } from '@/hooks/useSocket';
 import Layout from '@/components/Layout';
@@ -20,6 +20,7 @@ export default function App() {
             <Route element={<Layout />}>
               <Route index element={<Dashboard />} />
               <Route path="/history" element={<History />} />
+              <Route path="/files"   element={<Navigate to="/library" replace />} />
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/review" element={<ReviewPage />} />

@@ -79,6 +79,7 @@ export default function LibraryPage() {
   const [playingPath, setPlayingPath] = useState(null);
   const audioRef = useRef(null);
   const [retagging, setRetagging] = useState(false);
+  const [folderTags, setFolderTags] = useState({});   // { "Library/House": { "Song.mp3": {bpm,camelot_key,...} } }
   const { retagProgress } = useSocket();
 
   function handleTogglePlay(path) {
@@ -153,7 +154,15 @@ export default function LibraryPage() {
     setExpandedFolders(prev => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
-      else next.add(name);
+      else {
+        next.add(name);
+        // Lazy-load BPM/Camelot tags for this folder on first expand
+        if (!folderTags[name]) {
+          api.getFolderTags(name).then(data => {
+            setFolderTags(prev => ({ ...prev, [name]: data }));
+          }).catch(() => {});
+        }
+      }
       return next;
     });
   }
@@ -407,20 +416,45 @@ export default function LibraryPage() {
                               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                             >
                               {/* Track info */}
-                              <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                                <TrackArt path={file.path} />
-                                <div className="min-w-0">
-                                  <p className="text-12 font-medium truncate"
-                                     style={{ color: 'var(--text-primary)' }}>
-                                    {file.name}
-                                  </p>
-                                  <p className="text-10 mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                                    {file.mtime
-                                      ? new Date(file.mtime * 1000).toLocaleDateString()
-                                      : 'Unknown date'}
-                                  </p>
-                                </div>
-                              </div>
+                              {(() => {
+                                const meta = folderTags[folder]?.[file.name];
+                                return (
+                                  <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                                    <TrackArt path={file.path} />
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-12 font-medium truncate"
+                                         style={{ color: 'var(--text-primary)' }}>
+                                        {meta?.title || file.name}
+                                      </p>
+                                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                        {meta?.artist && (
+                                          <span className="text-10 truncate max-w-[120px]"
+                                                style={{ color: 'var(--text-tertiary)' }}>
+                                            {meta.artist}
+                                          </span>
+                                        )}
+                                        {meta?.bpm && (
+                                          <span className="text-10 font-mono font-semibold px-1.5 py-0.5 rounded"
+                                                style={{ background: 'var(--accent-amber-dim)', color: 'var(--accent-amber)' }}>
+                                            {meta.bpm}
+                                          </span>
+                                        )}
+                                        {meta?.camelot_key && (
+                                          <span className="text-10 font-mono font-semibold px-1.5 py-0.5 rounded"
+                                                style={{ background: 'rgba(20,184,166,0.15)', color: '#14b8a6' }}>
+                                            {meta.camelot_key}
+                                          </span>
+                                        )}
+                                        {!meta && (
+                                          <span className="text-10" style={{ color: 'var(--text-muted)' }}>
+                                            {file.mtime ? new Date(file.mtime * 1000).toLocaleDateString() : ''}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
 
                               {/* Inline genre picker or action button */}
                               <AnimatePresence mode="wait">

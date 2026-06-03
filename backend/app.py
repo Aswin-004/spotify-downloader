@@ -1131,6 +1131,57 @@ def get_all_files():
     return jsonify({"success": True, "files": load_existing_files()}), 200
 
 
+@app.route('/api/files/folder-tags', methods=['GET'])
+def folder_tags():
+    """Return BPM, Camelot key, artist, title for every MP3 in one folder.
+
+    Query param: folder — relative path, e.g. 'Library/House'
+    Returns:     { "Song.mp3": { bpm, camelot_key, artist, title }, ... }
+    """
+    from mutagen.id3 import ID3, ID3NoHeaderError
+    from bpm_key_service import tkey_to_camelot as _t2c
+
+    folder = request.args.get("folder", "").strip()
+    if not folder:
+        return jsonify({"error": "folder param required"}), 400
+
+    target = Path(BASE_DOWNLOAD_DIR) / folder
+    try:
+        resolved = target.resolve()
+        if not str(resolved).startswith(str(Path(BASE_DOWNLOAD_DIR).resolve())):
+            return jsonify({"error": "Access denied"}), 403
+    except Exception:
+        return jsonify({"error": "Invalid path"}), 400
+
+    if not resolved.is_dir():
+        return jsonify({}), 200
+
+    result = {}
+    for mp3 in sorted(resolved.glob("*.mp3")):
+        try:
+            tags    = ID3(str(mp3))
+            bpm_f   = tags.get("TBPM")
+            key_f   = tags.get("TKEY")
+            tpe_f   = tags.get("TPE1")
+            tit_f   = tags.get("TIT2")
+            bpm_raw = str(bpm_f.text[0]).strip() if bpm_f and bpm_f.text else ""
+            tkey    = str(key_f.text[0]).strip() if key_f and key_f.text else ""
+            try:
+                bpm_val = int(float(bpm_raw)) if bpm_raw else None
+            except ValueError:
+                bpm_val = None
+            result[mp3.name] = {
+                "bpm":         bpm_val,
+                "camelot_key": _t2c(tkey),
+                "artist":      str(tpe_f.text[0]).strip() if tpe_f and tpe_f.text else "",
+                "title":       str(tit_f.text[0]).strip() if tit_f and tit_f.text else mp3.stem,
+            }
+        except (ID3NoHeaderError, Exception):
+            result[mp3.name] = {"bpm": None, "camelot_key": "", "artist": "", "title": mp3.stem}
+
+    return jsonify(result), 200
+
+
 @app.route('/api/auto-status', methods=['GET'])
 def auto_status():
     """Get auto-downloader status"""
