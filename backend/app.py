@@ -2451,6 +2451,70 @@ def update_track_bpm():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/track/tags', methods=['POST'])
+def update_track_tags():
+    """Edit artist and/or title ID3 tags for any Library file.
+
+    Body JSON:
+      path    — relative path from BASE_DOWNLOAD_DIR (e.g. 'Library/Bollywood/Song.mp3')
+      artist  — new artist string (optional)
+      title   — new title string (optional)
+    """
+    data     = request.get_json(force=True) or {}
+    rel_path = str(data.get("path", "")).strip()
+    new_artist = str(data.get("artist", "")).strip() if data.get("artist") is not None else None
+    new_title  = str(data.get("title",  "")).strip() if data.get("title")  is not None else None
+
+    if not rel_path:
+        return jsonify({"error": "path required"}), 400
+    if new_artist is None and new_title is None:
+        return jsonify({"error": "artist or title required"}), 400
+
+    target = Path(BASE_DOWNLOAD_DIR) / rel_path
+    try:
+        resolved = target.resolve()
+        if not str(resolved).startswith(str(Path(BASE_DOWNLOAD_DIR).resolve())):
+            return jsonify({"error": "Access denied"}), 403
+    except Exception:
+        return jsonify({"error": "Invalid path"}), 400
+
+    if not resolved.is_file():
+        return jsonify({"error": "File not found"}), 404
+
+    try:
+        from mutagen.id3 import ID3, TPE1, TIT2, ID3NoHeaderError
+        try:
+            tags = ID3(str(resolved))
+        except ID3NoHeaderError:
+            from mutagen.id3 import ID3 as _ID3
+            tags = _ID3()
+
+        if new_artist is not None:
+            tags["TPE1"] = TPE1(encoding=3, text=[new_artist])
+        if new_title is not None:
+            tags["TIT2"] = TIT2(encoding=3, text=[new_title])
+        tags.save(str(resolved))
+
+        # Sync to MongoDB library_index
+        try:
+            from database import get_library_index_collection
+            col = get_library_index_collection()
+            update = {"last_seen": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)}
+            if new_artist is not None:
+                update["artist"] = new_artist
+            if new_title is not None:
+                update["title"] = new_title
+            col.update_one({"filename": resolved.name}, {"$set": update})
+        except Exception:
+            pass
+
+        logger.info(f"[tag-edit] {resolved.name} — artist={new_artist!r} title={new_title!r}")
+        return jsonify({"ok": True, "artist": new_artist, "title": new_title, "filename": resolved.name}), 200
+    except Exception as e:
+        logger.error(f"[tag-edit] {rel_path}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/export/rekordbox', methods=['GET'])
 def export_rekordbox():
     """

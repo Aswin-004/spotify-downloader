@@ -320,6 +320,14 @@ export const api = {
     return apiFetch(`/api/files/folder-tags?folder=${encodeURIComponent(folder)}`).then(handleResponse);
   },
 
+  updateTrackTags(path, { artist, title }) {
+    return apiFetch('/api/track/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, artist, title }),
+    }).then(handleResponse);
+  },
+
   getDuplicates() {
     return apiFetch('/api/duplicates').then(handleResponse);
   },

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Music, Search, ChevronRight, ChevronDown,
   AlertTriangle, RotateCw, Loader2, MoreHorizontal, FolderInput, X, Download,
-  Play, Pause, Tags,
+  Play, Pause, Tags, Pencil, Check,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -76,6 +76,9 @@ export default function LibraryPage() {
   const [openMenu, setOpenMenu] = useState(null);
   const [selectedGenres, setSelectedGenres] = useState({});
   const [moving, setMoving] = useState({});
+  const [editingTags, setEditingTags] = useState(null);   // { path, artist, title, folder, filename }
+  const [tagDraft, setTagDraft] = useState({ artist: '', title: '' });
+  const [savingTags, setSavingTags] = useState(false);
   const [playingPath, setPlayingPath] = useState(null);
   const audioRef = useRef(null);
   const [retagging, setRetagging] = useState(false);
@@ -189,6 +192,36 @@ export default function LibraryPage() {
       }
     });
   }, [expandedFolders]);
+
+  async function handleSaveTags() {
+    if (!editingTags) return;
+    setSavingTags(true);
+    try {
+      await api.updateTrackTags(editingTags.path, tagDraft);
+      // Update folderTags cache so UI refreshes immediately
+      setFolderTags(prev => {
+        const folder = editingTags.folder;
+        const existing = prev[folder] || {};
+        return {
+          ...prev,
+          [folder]: {
+            ...existing,
+            [editingTags.filename]: {
+              ...(existing[editingTags.filename] || {}),
+              artist: tagDraft.artist,
+              title: tagDraft.title,
+            }
+          }
+        };
+      });
+      addToast({ type: 'success', title: 'Tags saved', description: `${editingTags.filename}`, duration: 3000 });
+      setEditingTags(null);
+    } catch (err) {
+      addToast({ type: 'error', title: 'Save failed', description: err.message, duration: 4000 });
+    } finally {
+      setSavingTags(false);
+    }
+  }
 
   const totalFiles = files.length;
   const isKnownGenre = (name) => KNOWN_GENRES.has(name.toLowerCase());
@@ -543,6 +576,22 @@ export default function LibraryPage() {
                                         ? <Pause className="w-4 h-4" />
                                         : <Play  className="w-4 h-4" />}
                                     </button>
+                                    {/* Edit tags */}
+                                    <button
+                                      aria-label="Edit tags"
+                                      onClick={() => {
+                                        const m = folderTags[folder]?.[file.name];
+                                        setEditingTags({ path: file.folder + '\\' + file.name, folder, filename: file.name });
+                                        setTagDraft({ artist: m?.artist || '', title: m?.title || file.name.replace(/\.mp3$/i,'') });
+                                        setOpenMenu(null);
+                                      }}
+                                      className="w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer sm:opacity-0 sm:group-hover/track:opacity-100 focus:opacity-100 active:scale-95 transition-all duration-150 flex-shrink-0 focus-ring"
+                                      style={{ color: 'var(--text-muted)' }}
+                                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--accent-cyan)'; }}
+                                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}
+                                    >
+                                      <Pencil className="w-3.5 h-3.5" />
+                                    </button>
                                     {/* Move to genre */}
                                     <motion.button
                                       key="dots"
@@ -573,6 +622,77 @@ export default function LibraryPage() {
           )}
         </div>
       </ScrollArea>
+
+      {/* Tag edit modal */}
+      <AnimatePresence>
+        {editingTags && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+            onClick={e => { if (e.target === e.currentTarget) setEditingTags(null); }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+              className="w-full max-w-md rounded-xl p-5 space-y-4"
+              style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Pencil className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />
+                  <h3 className="font-display text-15 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    Edit Tags
+                  </h3>
+                </div>
+                <button onClick={() => setEditingTags(null)} className="w-6 h-6 flex items-center justify-center rounded focus-ring"
+                        style={{ color: 'var(--text-muted)' }}>
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <p className="text-11 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                {editingTags.filename}
+              </p>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="text-11 font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>Title</label>
+                  <input
+                    type="text"
+                    value={tagDraft.title}
+                    onChange={e => setTagDraft(d => ({ ...d, title: e.target.value }))}
+                    className="w-full text-13 px-3 py-2 rounded-lg focus-ring outline-none"
+                    style={{ background: 'var(--surface-1)', border: '1px solid var(--border-default)', color: 'var(--text-primary)' }}
+                    placeholder="Track title"
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label className="text-11 font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>Artist</label>
+                  <input
+                    type="text"
+                    value={tagDraft.artist}
+                    onChange={e => setTagDraft(d => ({ ...d, artist: e.target.value }))}
+                    className="w-full text-13 px-3 py-2 rounded-lg focus-ring outline-none"
+                    style={{ background: 'var(--surface-1)', border: '1px solid var(--border-default)', color: 'var(--text-primary)' }}
+                    placeholder="Artist name"
+                    onKeyDown={e => { if (e.key === 'Enter') handleSaveTags(); if (e.key === 'Escape') setEditingTags(null); }}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="ghost" size="sm" onClick={() => setEditingTags(null)}>Cancel</Button>
+                <Button size="sm" onClick={handleSaveTags} disabled={savingTags}>
+                  {savingTags
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+                    : <><Check className="w-3.5 h-3.5" /> Save Tags</>}
+                </Button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
