@@ -138,7 +138,14 @@ export default function LibraryPage() {
 
   const grouped = useMemo(() => {
     const q = search.toLowerCase();
-    const filtered = search ? files.filter(f => f.name.toLowerCase().includes(q)) : files;
+    // Only show Library/ folders — exclude Ingest, Staging, NeedsReview, Manual, etc.
+    const libOnly = files.filter(f => {
+      const folder = (f.folder || '').replace(/\\/g, '/');
+      return folder.startsWith('Library/') || folder === 'Library';
+    });
+    const filtered = search
+      ? libOnly.filter(f => f.name.toLowerCase().includes(q))
+      : libOnly;
     const groups = {};
     filtered.forEach(f => {
       const folder = f.folder || 'Root';
@@ -171,6 +178,17 @@ export default function LibraryPage() {
     if (folderNames.length > 0 && expandedFolders.size === 0)
       setExpandedFolders(new Set(folderNames.slice(0, 5)));
   }, [folderNames]);
+
+  // Fetch tags for any newly expanded folder that hasn't been loaded yet
+  useEffect(() => {
+    expandedFolders.forEach(name => {
+      if (!folderTags[name]) {
+        api.getFolderTags(name).then(data => {
+          setFolderTags(prev => ({ ...prev, [name]: data }));
+        }).catch(() => {});
+      }
+    });
+  }, [expandedFolders]);
 
   const totalFiles = files.length;
   const isKnownGenre = (name) => KNOWN_GENRES.has(name.toLowerCase());
@@ -362,10 +380,10 @@ export default function LibraryPage() {
                         </motion.div>
                         <span className="text-13 font-semibold truncate"
                               style={{ color: isExpanded ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                          {folder}
+                          {folder.replace(/^Library[/\\]/, '')}
                         </span>
-                        {isKnownGenre(folder) && (
-                          <GenreBadge genre={folder} className="flex-shrink-0" />
+                        {isKnownGenre(folder.replace(/^Library[/\\]/, '')) && (
+                          <GenreBadge genre={folder.replace(/^Library[/\\]/, '')} className="flex-shrink-0" />
                         )}
                       </div>
                       <span
