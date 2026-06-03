@@ -27,15 +27,14 @@ const steps = [
   {
     num: '4',
     title: 'Manage your library',
-    desc: 'Use the Analytics, Review, and Files pages to track your downloads, fix genre routing, and manage your DJ collection.',
+    desc: 'Use the Analytics, Review, and Library pages to track your downloads, fix genre routing, and manage your DJ collection.',
   },
 ];
 
 const pages = [
   { icon: Download,      label: 'Download',    to: '/',            accent: 'var(--accent-violet)', desc: 'Paste any Spotify track, album, or playlist URL. Metadata is fetched first so you can confirm before downloading.' },
   { icon: History,       label: 'History',     to: '/history',     accent: 'var(--accent-cyan)',   desc: 'Full log of every download with status, source quality, and error details. Retry failed tracks from here.' },
-  { icon: FolderOpen,    label: 'Files',       to: '/files',       accent: 'var(--accent-emerald)', desc: 'Browse all downloaded MP3 files grouped by genre folder. Delete individual files.' },
-  { icon: Music,         label: 'Library',     to: '/library',     accent: 'var(--accent-emerald)', desc: 'Search your music library. See album art thumbnails. Tracks are grouped by genre folder.' },
+  { icon: Music,         label: 'Library',     to: '/library',     accent: 'var(--accent-emerald)', desc: 'Browse all downloaded MP3 files grouped by genre folder. Preview tracks, move to different genres, export to Rekordbox.' },
   { icon: BarChart3,     label: 'Analytics',   to: '/analytics',   accent: 'var(--accent-amber)',  desc: 'Download stats, top artists, tagging success rates, and genre distribution over time.' },
   { icon: AlertTriangle, label: 'Review',      to: '/review',      accent: 'var(--accent-amber)',  desc: 'Unclassified tracks — downloaded but genre could not be detected. Retry to sort them into the right folder.' },
   { icon: Wrench,        label: 'Maintenance', to: '/maintenance', accent: 'var(--accent-rose)',   desc: 'Re-sort music into folders, fix library scan, re-classify undetected genres, embed album artwork.' },

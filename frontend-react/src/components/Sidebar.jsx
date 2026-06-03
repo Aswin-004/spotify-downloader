@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Download, History, FolderOpen, ListMusic, BarChart3,
+  Download, History, ListMusic, BarChart3,
   AlertTriangle, Wrench, Settings, BookOpen, Disc3,
   ChevronLeft, ChevronRight, Radio, Zap, Loader2,
   CheckCircle2, SkipForward, XCircle,
@@ -13,7 +13,6 @@ import { ease, springGentle } from '@/lib/motion';
 const navItems = [
   { to: '/',                icon: Download,      label: 'Download',    end: true  },
   { to: '/history',         icon: History,       label: 'History'               },
-  { to: '/files',           icon: FolderOpen,    label: 'Files'                 },
   { to: '/library',         icon: ListMusic,     label: 'Library'               },
   { to: '/analytics',       icon: BarChart3,     label: 'Analytics'             },
   { to: '/review',          icon: AlertTriangle, label: 'Review',  badge: true  },

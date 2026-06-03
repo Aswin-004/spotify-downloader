@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Music, Search, ChevronRight, ChevronDown,
   AlertTriangle, RotateCw, Loader2, MoreHorizontal, FolderInput, X, Download,
-  Play, Pause,
+  Play, Pause, Tags,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -78,6 +78,8 @@ export default function LibraryPage() {
   const [moving, setMoving] = useState({});
   const [playingPath, setPlayingPath] = useState(null);
   const audioRef = useRef(null);
+  const [retagging, setRetagging] = useState(false);
+  const { retagProgress } = useSocket();
 
   function handleTogglePlay(path) {
     const audio = audioRef.current;
@@ -164,6 +166,16 @@ export default function LibraryPage() {
   const totalFiles = files.length;
   const isKnownGenre = (name) => KNOWN_GENRES.has(name.toLowerCase());
 
+  async function handleRetag() {
+    setRetagging(true);
+    try { await api.retagLibrary(); } catch { setRetagging(false); }
+  }
+  useEffect(() => {
+    if (retagProgress?.status === 'complete' || retagProgress?.status === 'error')
+      setRetagging(false);
+  }, [retagProgress]);
+  const retagPct = retagProgress?.percentage ?? 0;
+
   return (
     <div className="max-w-5xl mx-auto space-y-5 pb-10">
       <audio
@@ -189,16 +201,24 @@ export default function LibraryPage() {
         </div>
         <div className="flex items-center gap-3">
           {!loading && (
-            <a
-              href={api.rekordboxExportUrl('all', 'ObsidianDJ Library')}
-              download="rekordbox_library.xml"
-              title="Export full library as Rekordbox XML"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-12 font-medium transition-colors"
-              style={{ background: 'var(--surface-1)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}
-            >
-              <Download className="w-3.5 h-3.5" />
-              Rekordbox
-            </a>
+            <>
+              <Button variant="secondary" size="sm" onClick={handleRetag} disabled={retagging}>
+                {retagging
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Tags className="w-3.5 h-3.5" />}
+                {retagging ? 'Retagging…' : 'Retag'}
+              </Button>
+              <a
+                href={api.rekordboxExportUrl('all', 'ObsidianDJ Library')}
+                download="rekordbox_library.xml"
+                title="Export full library as Rekordbox XML"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-12 font-medium transition-colors"
+                style={{ background: 'var(--surface-1)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}
+              >
+                <Download className="w-3.5 h-3.5" />
+                Rekordbox
+              </a>
+            </>
           )}
           <div className="text-right">
             {loading ? (
@@ -230,6 +250,34 @@ export default function LibraryPage() {
             <Button size="sm" variant="ghost" onClick={loadFiles} style={{ color: 'var(--accent-rose)', flexShrink: 0 }}>
               <RotateCw className="w-3.5 h-3.5 mr-1" /> Retry
             </Button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Retag progress bar */}
+      <AnimatePresence>
+        {retagProgress?.status === 'processing' && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+            className="rounded-xl p-3 space-y-2"
+            style={{ background: 'var(--accent-violet-dim)', border: '1px solid rgba(139,92,246,0.2)' }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--accent-violet)' }} />
+                <span className="text-13 font-medium" style={{ color: 'var(--accent-violet)' }}>Retagging Library</span>
+              </div>
+              <span className="text-11 font-mono tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+                {retagProgress.current}/{retagProgress.total}
+              </span>
+            </div>
+            <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+              <motion.div className="h-full rounded-full" style={{ background: 'var(--accent-violet)' }}
+                animate={{ width: `${retagPct}%` }} transition={{ duration: 0.5, ease: 'easeOut' }} />
+            </div>
+            {retagProgress.current_file && (
+              <p className="text-10 truncate" style={{ color: 'var(--text-tertiary)' }}>{retagProgress.current_file}</p>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

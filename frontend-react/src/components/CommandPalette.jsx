@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Command } from 'cmdk';
 import {
-  Download, History, FolderOpen, ListMusic, BarChart3,
+  Download, History, ListMusic, BarChart3,
   AlertTriangle, Wrench, Settings, BookOpen, Search,
   Zap, Layers,
 } from 'lucide-react';
@@ -12,7 +12,6 @@ import { fadeBackdrop, scaleModal } from '@/lib/motion';
 const PAGES = [
   { label: 'Download',    to: '/',                icon: Download,      group: 'Navigate' },
   { label: 'History',     to: '/history',         icon: History,       group: 'Navigate' },
-  { label: 'Files',       to: '/files',           icon: FolderOpen,    group: 'Navigate' },
   { label: 'Library',     to: '/library',         icon: ListMusic,     group: 'Navigate' },
   { label: 'Analytics',   to: '/analytics',       icon: BarChart3,     group: 'Navigate' },
   { label: 'Review',      to: '/review',          icon: AlertTriangle, group: 'Navigate' },
