@@ -7,9 +7,10 @@ export function usePlayer() {
 }
 
 export function PlayerProvider({ children }) {
-  const audioRef  = useRef(null);
-  const queueRef  = useRef([]);
-  const idxRef    = useRef(-1);
+  const audioRef      = useRef(null);
+  const queueRef      = useRef([]);
+  const idxRef        = useRef(-1);
+  const playPromiseRef = useRef(null); // guards against AbortError on rapid switching
 
   const [nowPlaying,  setNowPlaying]  = useState(null);
   const [playing,     setPlaying]     = useState(false);
@@ -19,18 +20,30 @@ export function PlayerProvider({ children }) {
   const [queue,       setQueue]       = useState([]);
   const [queueIndex,  setQueueIndex]  = useState(-1);
 
-  // Core: load a track and start playing
+  // Core: load a track and start playing.
+  // Awaits any in-flight play() promise before switching src — prevents
+  // AbortError on mobile browsers when tracks are changed rapidly.
   const _load = useCallback((track, index) => {
     const audio = audioRef.current;
     if (!audio || !track?.audioUrl) return;
-    audio.src = track.audioUrl;
-    audio.load();
-    audio.play().catch(() => {});
-    setNowPlaying(track);
-    setCurrentTime(0);
-    setDuration(0);
-    setQueueIndex(index);
-    idxRef.current = index;
+
+    const doLoad = () => {
+      audio.src = track.audioUrl;
+      audio.load();
+      playPromiseRef.current = audio.play().catch(() => {});
+      setNowPlaying(track);
+      setCurrentTime(0);
+      setDuration(0);
+      setQueueIndex(index);
+      idxRef.current = index;
+    };
+
+    // If a play() is in flight, let it settle first (ignore outcome)
+    if (playPromiseRef.current) {
+      playPromiseRef.current.then(doLoad, doLoad);
+    } else {
+      doLoad();
+    }
   }, []);
 
   // Create audio element once, wire all events

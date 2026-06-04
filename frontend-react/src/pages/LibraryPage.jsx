@@ -248,7 +248,7 @@ export default function LibraryPage() {
   const retagPct = retagProgress?.percentage ?? 0;
 
   return (
-    <div className="max-w-5xl mx-auto space-y-5 pb-10">
+    <div className="max-w-5xl mx-auto flex flex-col pb-10" style={{ gap: 20, minHeight: 0 }}>
 
       {/* Header */}
       <motion.div
@@ -395,7 +395,7 @@ export default function LibraryPage() {
       </motion.div>
 
       {/* Track List */}
-      <ScrollArea className="h-[calc(100vh-280px)]">
+      <ScrollArea className="flex-1 min-h-0" style={{ height: 'calc(100vh - 240px)' }}>
         <div className="space-y-0">
           {loading ? (
             [...Array(6)].map((_, i) => <FolderSkeleton key={i} />)

@@ -36,19 +36,30 @@ except ImportError:
 _REDIS_URL = os.getenv("REDIS_URL", "")
 
 def _storage_uri() -> str:
-    """Return Redis URI if reachable, else fall back to memory (dev/offline)."""
+    """Return Redis URI if reachable, else fall back to memory.
+
+    In production (Render) the Redis URL is an internal network address that
+    is always reachable — skip the probe to avoid blocking cold starts.
+    In development the Render-internal Redis URL is NOT accessible from
+    localhost, so we probe with a short timeout and fall back to memory.
+    """
     if not _REDIS_URL:
-        logger.warning("[rate_limiter] REDIS_URL not set — using in-memory storage (dev only)")
+        logger.warning("[rate_limiter] REDIS_URL not set — using in-memory storage")
         return "memory://"
-    # Quick reachability probe — avoids every request failing when Redis is
-    # a Render internal URL that is only accessible from Render's network.
+
+    if not _IS_DEV:
+        # Production: trust the URL — no blocking probe on cold start
+        return _REDIS_URL
+
+    # Development only: probe since Render-internal URLs are unreachable locally
     try:
         import redis as _redis
-        c = _redis.from_url(_REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        c = _redis.from_url(_REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
         c.ping()
+        logger.info("[rate_limiter] Redis reachable in dev mode")
         return _REDIS_URL
     except Exception:
-        logger.warning("[rate_limiter] Redis unreachable — falling back to in-memory storage")
+        logger.warning("[rate_limiter] Redis unreachable in dev — using memory storage")
         return "memory://"
 
 

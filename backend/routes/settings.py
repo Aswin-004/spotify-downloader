@@ -33,14 +33,20 @@ def settings_save_app_config():
         updated = _settings_store.save(data)
         _settings_store.apply_to_config()
 
+        hot_reload_ok = True
         if "ingest_playlist_id" in data:
             try:
                 import services.auto_downloader as _ad
                 _ad.INGEST_PLAYLIST_ID = updated.get("ingest_playlist_id", "")
-            except Exception:
-                pass
+            except Exception as e:
+                hot_reload_ok = False
+                logger.warning(f"[settings] ingest_playlist_id saved but live reload failed: {e}")
 
-        return jsonify({"success": True, "config": _settings_store.for_frontend()}), 200
+        return jsonify({
+            "success": True,
+            "config": _settings_store.for_frontend(),
+            "hot_reload_applied": hot_reload_ok,
+        }), 200
     except Exception as e:
         logger.error(f"[settings] Failed to save config: {e}")
         return jsonify({"error": str(e)}), 500

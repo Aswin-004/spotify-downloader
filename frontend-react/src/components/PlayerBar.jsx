@@ -11,11 +11,14 @@ function fmt(sec) {
 }
 
 export default function PlayerBar() {
+  const player = usePlayer();
+  if (!player) return null; // must be inside PlayerProvider — should never happen
+
   const {
     nowPlaying, playing, currentTime, duration, volume,
     queue, queueIndex,
     toggle, playNext, playPrev, seek, changeVolume,
-  } = usePlayer() || {};
+  } = player;
 
   const [seeking,  setSeeking]  = useState(false);
   const [seekVal,  setSeekVal]  = useState(0);
