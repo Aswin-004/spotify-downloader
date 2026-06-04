@@ -18,14 +18,15 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-# Public Invidious instances — tried in order, first healthy one wins
+# Public Invidious instances — tried in order, first healthy one wins.
+# Updated 2026-06-04: removed known-dead vid.puffyan.us and invidious.lunar.icu
 _INSTANCES = [
-    "https://inv.nadeko.net",
     "https://yewtu.be",
+    "https://inv.nadeko.net",
     "https://invidious.nerdvpn.de",
+    "https://iv.ggtyler.dev",
     "https://invidious.privacydev.net",
-    "https://vid.puffyan.us",
-    "https://invidious.lunar.icu",
+    "https://invidious.incogniweb.net",
 ]
 
 _cached_instance: str | None = None
@@ -45,7 +46,7 @@ def get_working_instance() -> str | None:
             # Lightweight ping — just check the stats endpoint
             resp = requests.get(
                 f"{instance}/api/v1/stats",
-                timeout=5,
+                timeout=3,
                 headers={"User-Agent": "spotify-downloader/1.0"},
             )
             if resp.status_code == 200:

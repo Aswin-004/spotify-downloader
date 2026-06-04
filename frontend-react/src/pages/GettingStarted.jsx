@@ -21,7 +21,7 @@ const steps = [
   {
     num: '3',
     title: 'Download to your computer',
-    desc: 'Click Download. The MP3 file will save directly to your Downloads folder. Takes 30–60 seconds.',
+    desc: 'Click Download. The MP3 saves directly to your Downloads folder in 30–60 seconds. This requires running the app locally — cloud deployments cannot download due to YouTube\'s server IP restrictions.',
     code: '~/Downloads/Artist - Title.mp3',
   },
   {
@@ -52,7 +52,11 @@ const workflow = [
 
 const faqs = [
   {
-    q: "What are \"Unclassified\" tracks?",
+    q: 'Does downloading work on the cloud version?',
+    a: 'No — downloads only work when you run the app locally on your own machine. YouTube blocks audio downloads from cloud server IPs (a permanent restriction, not a bug). The cloud version is read-only: you can browse your library, view analytics, manage genres, and preview tracks — but new downloads require local setup.',
+  },
+  {
+    q: 'What are "Unclassified" tracks?',
     a: "Tracks land in the Unclassified folder when the app can't figure out their genre automatically (usually because today's AI detection limit was reached). The Review page lets you retry them — or just wait until tomorrow when the limit resets.",
   },
   {
@@ -62,10 +66,6 @@ const faqs = [
   {
     q: 'What quality are the downloads?',
     a: 'MP3 at 192kbps. The app finds the best available audio match on YouTube for each Spotify track.',
-  },
-  {
-    q: "What are \"Unclassified\" tracks?",
-    a: "Tracks that the app couldn't automatically classify into a genre. The Review page lets you manually assign a genre or retry the AI detection.",
   },
   {
     q: 'Can I download a full playlist?',

@@ -37,17 +37,11 @@ from services.downloader_service import set_socketio as set_downloader_socketio
 from services.auto_downloader import AUTO_STATUS, BASE_DOWNLOAD_DIR, INGEST_PLAYLIST_ID, set_socketio
 from services.auto_downloader import manual_refresh as _manual_refresh
 from services.spotify_service import get_api_usage
-from services.analytics_service import (  # ANALYTICS
-    get_overview_stats, get_downloads_per_day,  # ANALYTICS
-    get_top_artists, get_source_breakdown,  # ANALYTICS
-    get_tagging_breakdown, get_recent_downloads,  # ANALYTICS
-    get_failed_downloads, get_cache_analytics,  # ANALYTICS
-    get_tagging_failure_summary, get_weekly_download_stats,  # ANALYTICS
-)  # ANALYTICS
+# analytics_service imports moved to routes/analytics.py
 from utils import setup_logging, extract_spotify_id
 
-# FILE ORGANIZER — Import library blueprint
-from routes import library_bp
+# Route blueprints
+from routes import library_bp, analytics_bp, settings_bp, system_bp
 
 # MUSICBRAINZ — import tagger service
 try:  # MUSICBRAINZ
@@ -274,8 +268,11 @@ CORS(app, resources={
     }
 })
 
-# FILE ORGANIZER — Register library blueprint
+# Register blueprints
 app.register_blueprint(library_bp)
+app.register_blueprint(analytics_bp)
+app.register_blueprint(settings_bp)
+app.register_blueprint(system_bp)
 
 # Get services
 spotify_service = get_spotify_service()
@@ -402,102 +399,8 @@ def maintenance_run():
     return jsonify({"started": True, "task": task}), 202
 
 
-# ─── Settings: App Configuration (all user-configurable settings) ────────────
-
-@app.route('/api/settings/app-config', methods=['GET'])
-def settings_get_app_config():
-    """Return current app configuration (secrets masked)."""
-    try:
-        return jsonify(_settings_store.for_frontend()), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/settings/app-config', methods=['POST'])
-def settings_save_app_config():
-    """Save app configuration and apply immediately (no restart needed)."""
-    data = request.get_json(silent=True) or {}
-    try:
-        updated = _settings_store.save(data)
-        _settings_store.apply_to_config()
-
-        # Hot-reload ingest playlist in auto_downloader if it changed
-        if "ingest_playlist_id" in data:
-            try:
-                import services.auto_downloader as _ad
-                _ad.INGEST_PLAYLIST_ID = updated.get("ingest_playlist_id", "")
-            except Exception:
-                pass
-
-        return jsonify({"success": True, "config": _settings_store.for_frontend()}), 200
-    except Exception as e:
-        logger.error(f"[settings] Failed to save config: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# ─── Settings: Custom Folder Mappings ────────────────────────────────────────
-
-@app.route('/api/settings/scan-folders', methods=['GET'])
-def settings_scan_folders():
-    """Return subdirectory names inside BASE_DOWNLOAD_DIR."""
-    try:
-        if not BASE_DOWNLOAD_DIR or not os.path.isdir(BASE_DOWNLOAD_DIR):
-            return jsonify({"folders": [], "warning": "Music folder not configured or does not exist"}), 200
-        entries = [
-            e for e in os.listdir(BASE_DOWNLOAD_DIR)
-            if os.path.isdir(os.path.join(BASE_DOWNLOAD_DIR, e))
-               and not e.startswith('.')
-        ]
-        return jsonify({"folders": sorted(entries)}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/settings/custom-folders', methods=['GET'])
-def settings_get_custom_folders():
-    """Return all custom folder→genre mappings."""
-    try:
-        from database import get_custom_folder_mappings_collection
-        col = get_custom_folder_mappings_collection()
-        docs = list(col.find({}, {"_id": 0}))
-        return jsonify({"mappings": docs}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/settings/custom-folders', methods=['POST'])
-def settings_save_custom_folder():
-    """Upsert a folder→genre mapping."""
-    data = request.get_json(silent=True) or {}
-    folder_name = (data.get("folder_name") or "").strip()
-    genre_label = (data.get("genre_label") or "").strip()
-    if not folder_name or not genre_label:
-        return jsonify({"error": "folder_name and genre_label are required"}), 400
-    try:
-        from datetime import datetime
-        from database import get_custom_folder_mappings_collection
-        col = get_custom_folder_mappings_collection()
-        col.update_one(
-            {"folder_name": folder_name},
-            {"$set": {"folder_name": folder_name, "genre_label": genre_label, "updated_at": datetime.utcnow().isoformat()}},
-            upsert=True,
-        )
-        return jsonify({"success": True}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/settings/custom-folders/<path:folder_name>', methods=['DELETE'])
-def settings_delete_custom_folder(folder_name):
-    """Delete a custom folder mapping by folder_name."""
-    try:
-        from database import get_custom_folder_mappings_collection
-        col = get_custom_folder_mappings_collection()
-        col.delete_one({"folder_name": folder_name})
-        return jsonify({"success": True}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+# Settings routes → routes/settings.py (settings_bp)
+# Auto-status / queue-status / api-usage → routes/system.py (system_bp)
 
 @app.route('/<path:filename>', methods=['GET'])
 def serve_frontend(filename):
@@ -1183,22 +1086,7 @@ def folder_tags():
     return jsonify(result), 200
 
 
-@app.route('/api/auto-status', methods=['GET'])
-def auto_status():
-    """Get auto-downloader status"""
-    return jsonify(AUTO_STATUS), 200
-
-
-@app.route('/api/queue-status', methods=['GET'])
-def queue_status():
-    """Get global download queue status"""
-    return jsonify(download_queue_status), 200
-
-
-@app.route('/api/api-usage', methods=['GET'])
-def api_usage():
-    """Get Spotify API usage stats"""
-    return jsonify(get_api_usage()), 200
+# auto-status / queue-status / api-usage → routes/system.py (system_bp)
 
 
 def _extract_playlist_id(raw: str) -> str:
@@ -1706,75 +1594,7 @@ def retag_status():  # MUSICBRAINZ
 # ═══════════════════════════════════════════════════════════════════  # ANALYTICS
 
 
-@app.route('/api/analytics/overview')  # ANALYTICS
-def analytics_overview():  # ANALYTICS
-    """Return high-level analytics stats."""  # ANALYTICS
-    return jsonify(get_overview_stats())  # ANALYTICS
-
-
-@app.route('/api/analytics/downloads-per-day')  # ANALYTICS
-def analytics_downloads_per_day():  # ANALYTICS
-    """Return download counts grouped by day."""  # ANALYTICS
-    days = request.args.get('days', 30, type=int)  # ANALYTICS
-    return jsonify(get_downloads_per_day(days))  # ANALYTICS
-
-
-@app.route('/api/analytics/top-artists')  # ANALYTICS
-def analytics_top_artists():  # ANALYTICS
-    """Return top artists by download count."""  # ANALYTICS
-    limit = request.args.get('limit', 10, type=int)  # ANALYTICS
-    return jsonify(get_top_artists(limit))  # ANALYTICS
-
-
-@app.route('/api/analytics/source-breakdown')  # ANALYTICS
-def analytics_source_breakdown():  # ANALYTICS
-    """Return download counts by source platform."""  # ANALYTICS
-    return jsonify(get_source_breakdown())  # ANALYTICS
-
-
-@app.route('/api/analytics/tagging-breakdown')  # ANALYTICS
-def analytics_tagging_breakdown():  # ANALYTICS
-    """Return tagging source breakdown."""  # ANALYTICS
-    return jsonify(get_tagging_breakdown())  # ANALYTICS
-
-
-@app.route('/api/analytics/recent')  # ANALYTICS
-def analytics_recent():  # ANALYTICS
-    """Return recent downloads."""  # ANALYTICS
-    return jsonify(get_recent_downloads())  # ANALYTICS
-
-
-@app.route('/api/analytics/failed')  # ANALYTICS
-def analytics_failed():  # ANALYTICS
-    """Return recent tagging failures."""  # ANALYTICS
-    return jsonify(get_failed_downloads())  # ANALYTICS
-
-
-@app.route('/api/cache-analytics')  # ANALYTICS
-def cache_analytics():  # ANALYTICS
-    """Return MusicBrainz cache statistics."""  # ANALYTICS
-    try:  # ANALYTICS
-        return jsonify(get_cache_analytics())  # ANALYTICS
-    except Exception as e:  # ANALYTICS
-        return jsonify({"error": str(e)}), 500  # ANALYTICS
-
-
-@app.route('/api/tagging-failures/summary')  # ANALYTICS
-def tagging_failures_summary():  # ANALYTICS
-    """Return tagging failure breakdown by error_type + retry trend."""  # ANALYTICS
-    try:  # ANALYTICS
-        return jsonify(get_tagging_failure_summary())  # ANALYTICS
-    except Exception as e:  # ANALYTICS
-        return jsonify({"error": str(e)}), 500  # ANALYTICS
-
-
-@app.route('/api/download-history/stats')  # ANALYTICS
-def download_history_stats():  # ANALYTICS
-    """Return weekly download stats and top-3 artists."""  # ANALYTICS
-    try:  # ANALYTICS
-        return jsonify(get_weekly_download_stats())  # ANALYTICS
-    except Exception as e:  # ANALYTICS
-        return jsonify({"error": str(e)}), 500  # ANALYTICS
+# Analytics routes → routes/analytics.py (analytics_bp)
 
 
 # ═══════════════════════════════════════════════════════════════════  # NOTIFICATION
@@ -2418,11 +2238,27 @@ def update_track_bpm():
     if rel_path:
         target = Path(BASE_DOWNLOAD_DIR) / rel_path
     elif filename:
-        # Search Library/Electronic first, then scan all library folders
-        candidate = Path(BASE_DOWNLOAD_DIR) / "Library" / "Electronic" / filename
-        if not candidate.is_file():
-            found = list(Path(BASE_DOWNLOAD_DIR).rglob(filename))
-            candidate = found[0] if found else candidate
+        # Fast path: look up folder from MongoDB (O(1)) before touching disk
+        candidate = None
+        try:
+            from database import get_library_index_collection
+            doc = get_library_index_collection().find_one(
+                {"filename": filename}, {"folder": 1}
+            )
+            if doc and doc.get("folder"):
+                p = Path(BASE_DOWNLOAD_DIR) / doc["folder"] / filename
+                if p.is_file():
+                    candidate = p
+        except Exception:
+            pass
+        if not candidate:
+            # Fallback: check the most common location, then full scan
+            p = Path(BASE_DOWNLOAD_DIR) / "Library" / "Electronic" / filename
+            if p.is_file():
+                candidate = p
+            else:
+                found = list(Path(BASE_DOWNLOAD_DIR).rglob(filename))
+                candidate = found[0] if found else p
         target = candidate
 
     # Security: must stay inside BASE_DOWNLOAD_DIR

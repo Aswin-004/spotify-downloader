@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { usePlayer } from '@/context/PlayerContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -15,6 +15,7 @@ import { api } from '@/services/api';
 import { useToast } from '@/components/ui/toast';
 import GenreBadge from '@/components/GenreBadge';
 import { ease } from '@/lib/motion';
+import { getGenreColor, getCamelotColor } from '@/lib/tokens';
 
 const GENRE_OPTIONS = [
   'House', 'Trance', 'UK Garage', 'Drum & Bass', 'Dubstep',
@@ -81,6 +82,7 @@ export default function LibraryPage() {
   const [tagDraft, setTagDraft] = useState({ artist: '', title: '' });
   const [savingTags, setSavingTags] = useState(false);
   const { nowPlaying, playing, toggle, setQueueAndPlay } = usePlayer();
+  const retagTimerRef = useRef(null);
   const [retagging, setRetagging] = useState(false);
   const [folderTags, setFolderTags] = useState({});   // { "Library/House": { "Song.mp3": {bpm,camelot_key,...} } }
   const { retagProgress } = useSocket();
@@ -167,17 +169,10 @@ export default function LibraryPage() {
     setExpandedFolders(prev => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
-      else {
-        next.add(name);
-        // Lazy-load BPM/Camelot tags for this folder on first expand
-        if (!folderTags[name]) {
-          api.getFolderTags(name).then(data => {
-            setFolderTags(prev => ({ ...prev, [name]: data }));
-          }).catch(err => console.warn('[folder-tags]', err));
-        }
-      }
+      else next.add(name);
       return next;
     });
+    // Tag loading is handled by the useEffect below — no duplicate fetch here
   }
 
   useEffect(() => {
@@ -233,16 +228,22 @@ export default function LibraryPage() {
     setRetagging(true);
     try {
       await api.retagLibrary();
-      // Fallback: if WebSocket never delivers completion, unlock after 5 min
-      setTimeout(() => setRetagging(false), 5 * 60 * 1000);
+      // Fallback: unlock after 5 min if WebSocket never delivers completion
+      retagTimerRef.current = setTimeout(() => setRetagging(false), 5 * 60 * 1000);
     } catch (err) {
       setRetagging(false);
       addToast({ type: 'error', title: 'Retag failed', description: err.message, duration: 5000 });
     }
   }
   useEffect(() => {
-    if (retagProgress?.status === 'complete' || retagProgress?.status === 'error')
+    if (retagProgress?.status === 'complete' || retagProgress?.status === 'error') {
       setRetagging(false);
+      // WebSocket delivered — cancel the fallback timer
+      if (retagTimerRef.current) {
+        clearTimeout(retagTimerRef.current);
+        retagTimerRef.current = null;
+      }
+    }
   }, [retagProgress]);
   const retagPct = retagProgress?.percentage ?? 0;
 
@@ -347,24 +348,55 @@ export default function LibraryPage() {
         )}
       </AnimatePresence>
 
-      {/* Search */}
+      {/* Search — terminal filter */}
       <motion.div
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ ...ease, delay: 0.08 }}
-        className="relative"
+        style={{
+          display: 'flex', alignItems: 'center',
+          border: '1px solid var(--border-default)',
+          borderRadius: 4, background: 'var(--surface-0)',
+          transition: 'border-color 0.15s, box-shadow 0.15s',
+        }}
+        onFocusCapture={e => {
+          e.currentTarget.style.borderColor = 'var(--accent-cyan)';
+          e.currentTarget.style.boxShadow = '0 0 0 1px var(--accent-cyan)';
+        }}
+        onBlurCapture={e => {
+          e.currentTarget.style.borderColor = 'var(--border-default)';
+          e.currentTarget.style.boxShadow = 'none';
+        }}
       >
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
-                style={{ color: 'var(--text-muted)' }} />
-        <Input
-          placeholder="Search tracks..."
+        <span style={{
+          paddingLeft: 12, paddingRight: 6, flexShrink: 0,
+          color: 'var(--accent-cyan)', fontSize: 11, fontWeight: 700,
+          letterSpacing: '0.04em', userSelect: 'none',
+          fontFamily: 'ui-monospace, monospace',
+        }}>
+          filter:
+        </span>
+        <input
+          placeholder="artist, title, or genre…"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="pl-9"
+          style={{
+            flex: 1, height: 40, background: 'transparent', border: 'none',
+            outline: 'none', color: 'var(--text-primary)',
+            fontSize: 13, fontFamily: 'ui-monospace, monospace',
+          }}
         />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            style={{ padding: '0 10px', color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+          >
+            <X style={{ width: 12, height: 12 }} />
+          </button>
+        )}
       </motion.div>
 
       {/* Track List */}
-      <ScrollArea className="h-[600px]">
-        <div className="pr-3 space-y-2.5">
+      <ScrollArea className="h-[calc(100vh-280px)]">
+        <div className="space-y-0">
           {loading ? (
             [...Array(6)].map((_, i) => <FolderSkeleton key={i} />)
           ) : folderNames.length === 0 ? (
@@ -389,64 +421,69 @@ export default function LibraryPage() {
               {folderNames.map((folder, idx) => {
                 const isExpanded = expandedFolders.has(folder);
                 const tracks = grouped[folder];
+                const genreName = folder.replace(/^Library[/\\]/, '');
+                const accentColor = getGenreColor(genreName);
                 return (
                   <motion.div
                     key={folder}
-                    initial={{ opacity: 0, y: 10 }}
+                    initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ ...ease, delay: Math.min(idx * 0.04, 0.2) }}
-                    className="rounded-xl overflow-hidden"
-                    style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+                    exit={{ opacity: 0 }}
+                    transition={{ ...ease, delay: Math.min(idx * 0.03, 0.18) }}
+                    style={{ borderBottom: '1px solid var(--border-subtle)', overflow: 'hidden' }}
                   >
-                    {/* Folder header */}
+                    {/* Folder header — crate divider with genre color bar */}
                     <button
                       onClick={() => toggleFolder(folder)}
                       aria-expanded={isExpanded}
-                      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${folder}`}
-                      className="w-full px-4 py-3 flex items-center justify-between transition-colors duration-150 cursor-pointer focus-ring group/folder"
-                      onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${genreName}`}
+                      className="w-full focus-ring group/folder"
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '9px 12px',
+                        background: 'transparent', border: 'none', cursor: 'pointer',
+                        borderLeft: `3px solid ${accentColor}`,
+                        transition: 'background 0.1s',
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-0)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
-                      <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                        <motion.div
-                          animate={{ rotate: isExpanded ? 90 : 0 }}
-                          transition={{ duration: 0.15 }}
-                        >
-                          <ChevronRight className="w-4 h-4 flex-shrink-0"
-                            style={{ color: isExpanded ? 'var(--accent-violet)' : 'var(--text-muted)' }} />
-                        </motion.div>
-                        <span className="text-13 font-semibold truncate"
-                              style={{ color: isExpanded ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                          {folder.replace(/^Library[/\\]/, '')}
-                        </span>
-                        {isKnownGenre(folder.replace(/^Library[/\\]/, '')) && (
-                          <GenreBadge genre={folder.replace(/^Library[/\\]/, '')} className="flex-shrink-0" />
-                        )}
-                      </div>
-                      <span
-                        className="text-11 font-mono tabular-nums px-2 py-0.5 rounded-full ml-2 flex-shrink-0"
-                        style={{ background: 'var(--surface-2)', color: 'var(--text-tertiary)' }}
+                      <motion.div
+                        animate={{ rotate: isExpanded ? 90 : 0 }}
+                        transition={{ duration: 0.15 }}
+                        style={{ flexShrink: 0 }}
                       >
+                        <ChevronRight style={{ width: 12, height: 12, color: accentColor }} />
+                      </motion.div>
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, letterSpacing: '0.09em',
+                        textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
+                        color: isExpanded ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        flex: 1, textAlign: 'left',
+                      }}>
+                        {genreName}
+                      </span>
+                      <span style={{
+                        fontSize: 10, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums',
+                        color: 'var(--text-muted)', flexShrink: 0,
+                      }}>
                         {tracks.length}
                       </span>
                       <a
                         href={api.rekordboxExportUrl(folder, folder.split('/').pop())}
                         download
-                        title={`Export "${folder}" as Rekordbox XML`}
+                        title={`Export "${genreName}" as Rekordbox XML`}
                         onClick={e => e.stopPropagation()}
-                        className="ml-2 w-6 h-6 flex items-center justify-center rounded-lg opacity-0 group-hover/folder:opacity-100 focus:opacity-100 transition-opacity duration-150 flex-shrink-0 focus-ring cursor-pointer"
-                        style={{ color: 'var(--text-muted)' }}
-                        onMouseEnter={e => {
-                          e.currentTarget.style.background = 'var(--surface-2)';
-                          e.currentTarget.style.color = 'var(--accent-violet)';
+                        style={{
+                          width: 22, height: 22, display: 'flex', alignItems: 'center',
+                          justifyContent: 'center', borderRadius: 4, flexShrink: 0,
+                          color: 'var(--text-muted)', opacity: 0, transition: 'opacity 0.15s',
                         }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.background = 'transparent';
-                          e.currentTarget.style.color = 'var(--text-muted)';
-                        }}
+                        className="group-hover/folder:opacity-100 focus:opacity-100"
+                        onMouseEnter={e => { e.currentTarget.style.color = accentColor; e.currentTarget.style.background = 'var(--surface-1)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.background = 'transparent'; }}
                       >
-                        <Download className="w-3.5 h-3.5" />
+                        <Download style={{ width: 12, height: 12 }} />
                       </a>
                     </button>
 
@@ -463,52 +500,75 @@ export default function LibraryPage() {
                           {tracks.map((file, fileIdx) => (
                             <motion.div
                               key={file.path}
-                              initial={{ opacity: 0, x: -12 }}
+                              initial={{ opacity: 0, x: -8 }}
                               animate={{ opacity: 1, x: 0 }}
-                              transition={{ delay: Math.min(fileIdx * 0.02, 0.15), duration: 0.18 }}
-                              className="px-4 py-2.5 flex items-center group/track transition-colors duration-150"
-                              style={{ borderTop: fileIdx > 0 ? '1px solid var(--border-subtle)' : 'none' }}
-                              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                              transition={{ delay: Math.min(fileIdx * 0.015, 0.12), duration: 0.15 }}
+                              className="group/track"
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: 8,
+                                padding: '5px 12px',
+                                borderTop: '1px solid var(--border-subtle)',
+                                minHeight: 38, transition: 'background 0.1s',
+                              }}
+                              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-0)'}
                               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                             >
+                              {/* Row index */}
+                              <span style={{
+                                fontSize: 9, fontFamily: 'monospace', color: 'var(--text-muted)',
+                                width: 20, textAlign: 'right', flexShrink: 0,
+                                fontVariantNumeric: 'tabular-nums',
+                              }}>
+                                {fileIdx + 1}
+                              </span>
+
                               {/* Track info */}
                               {(() => {
                                 const meta = folderTags[folder]?.[file.name];
                                 return (
-                                  <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                                  <>
                                     <TrackArt path={file.path} />
                                     <div className="min-w-0 flex-1">
-                                      <p className="text-12 font-medium truncate"
-                                         style={{ color: 'var(--text-primary)' }}>
+                                      <p style={{
+                                        fontSize: 12, fontWeight: 500, color: 'var(--text-primary)',
+                                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                      }}>
                                         {meta?.title || file.name}
                                       </p>
-                                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                        {meta?.artist && (
-                                          <span className="text-10 truncate max-w-[120px]"
-                                                style={{ color: 'var(--text-tertiary)' }}>
-                                            {meta.artist}
-                                          </span>
-                                        )}
-                                        {meta?.bpm && (
-                                          <span className="text-10 font-mono font-semibold px-1.5 py-0.5 rounded"
-                                                style={{ background: 'var(--accent-amber-dim)', color: 'var(--accent-amber)' }}>
-                                            {meta.bpm}
-                                          </span>
-                                        )}
-                                        {meta?.camelot_key && (
-                                          <span className="text-10 font-mono font-semibold px-1.5 py-0.5 rounded"
-                                                style={{ background: 'rgba(20,184,166,0.15)', color: '#14b8a6' }}>
-                                            {meta.camelot_key}
-                                          </span>
-                                        )}
-                                        {!meta && (
-                                          <span className="text-10" style={{ color: 'var(--text-muted)' }}>
-                                            {file.mtime ? new Date(file.mtime * 1000).toLocaleDateString() : ''}
-                                          </span>
-                                        )}
-                                      </div>
+                                      {meta?.artist && (
+                                        <p style={{
+                                          fontSize: 10, color: 'var(--text-tertiary)',
+                                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                        }}>
+                                          {meta.artist}
+                                        </p>
+                                      )}
                                     </div>
-                                  </div>
+                                    {/* Fixed metadata column */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                                      {meta?.bpm && (
+                                        <span style={{
+                                          fontSize: 10, fontFamily: 'monospace', fontWeight: 700,
+                                          padding: '1px 5px', borderRadius: 3,
+                                          background: 'var(--accent-violet-dim)', color: 'var(--accent-violet)',
+                                          letterSpacing: '0.02em',
+                                        }}>
+                                          {meta.bpm}
+                                        </span>
+                                      )}
+                                      {meta?.camelot_key && (
+                                        <span style={{
+                                          fontSize: 10, fontFamily: 'monospace', fontWeight: 700,
+                                          padding: '1px 5px', borderRadius: 3,
+                                          background: `${getCamelotColor(meta.camelot_key)}22`,
+                                          color: getCamelotColor(meta.camelot_key),
+                                          letterSpacing: '0.02em',
+                                        }}>
+                                          {meta.camelot_key}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </>
                                 );
                               })()}
 

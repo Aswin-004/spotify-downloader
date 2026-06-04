@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Music2, Disc3, AlertTriangle, ArrowRight } from 'lucide-react';
-import { api } from '@/services/api';
+import { api, IS_CLOUD } from '@/services/api';
 import { formatDuration } from '@/lib/utils';
 
 const SPOTIFY_URL_RE = /open\.spotify\.com\/(track|album|playlist)\/[A-Za-z0-9]+/;
@@ -314,24 +314,43 @@ export default function DownloadInput() {
                 </div>
               )}
 
-              {/* Download CTA */}
-              <button
-                onClick={handleDownload}
-                disabled={downloading}
-                style={cmdBtn(!downloading)}
-                className="w-full"
-              >
-                {downloading
-                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> DOWNLOADING…</>
-                  : <>
-                      {metadata.type === 'album'
-                        ? 'DOWNLOAD ALL'
-                        : metadata.already_in_library
-                          ? 'DOWNLOAD AGAIN'
-                          : 'DOWNLOAD'}
-                      <ArrowRight style={{ width: 13, height: 13 }} />
-                    </>}
-              </button>
+              {/* Download CTA — local only */}
+              {IS_CLOUD ? (
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 10,
+                  padding: '10px 12px', borderRadius: 3,
+                  background: 'var(--surface-1)',
+                  border: '1px solid var(--border-default)',
+                }}>
+                  <span style={{ fontSize: 13, flexShrink: 0, marginTop: 1 }}>⊙</span>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', letterSpacing: '0.02em' }}>
+                      Downloads require running locally
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.5 }}>
+                      This cloud instance is read-only. Run the app on your own machine to download MP3s — YouTube blocks audio downloads from cloud servers.
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={handleDownload}
+                  disabled={downloading}
+                  style={cmdBtn(!downloading)}
+                  className="w-full"
+                >
+                  {downloading
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> DOWNLOADING…</>
+                    : <>
+                        {metadata.type === 'album'
+                          ? 'DOWNLOAD ALL'
+                          : metadata.already_in_library
+                            ? 'DOWNLOAD AGAIN'
+                            : 'DOWNLOAD'}
+                        <ArrowRight style={{ width: 13, height: 13 }} />
+                      </>}
+                </button>
+              )}
             </div>
           </motion.div>
         )}

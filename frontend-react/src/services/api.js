@@ -3,6 +3,10 @@
 // In production (Vercel + Render): set VITE_API_BASE_URL=https://your-app.onrender.com
 const _BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
+// True on Vercel+Render. Downloads are blocked there by YouTube's datacenter
+// IP ban — no bypass works. Treat this as a local-only feature permanently.
+export const IS_CLOUD = !!import.meta.env.VITE_API_BASE_URL;
+
 function apiFetch(path, opts) {
   return globalThis.fetch(`${_BASE}${path}`, opts);
 }
