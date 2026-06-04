@@ -106,48 +106,50 @@ export default function StatsCards() {
   const values = { downloading: active, total, rate, failed };
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      {KPI_CONFIG.map(({ key, label, icon: Icon, spin, suffix, accent, dim, border }, i) => (
-        <motion.div
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: [0.22,1,0.36,1] }}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, 1fr)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 4,
+        background: 'var(--surface-0)',
+        overflow: 'hidden',
+      }}
+    >
+      {KPI_CONFIG.map(({ key, label, icon: Icon, spin, suffix, accent, border }, i) => (
+        <div
           key={key}
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0   }}
-          whileHover={{ y: -4, transition: { duration: 0.15, ease: [0.22,1,0.36,1] } }}
-          transition={{ ...ease, delay: i * 0.06 }}
+          style={{
+            padding: '14px 16px',
+            borderLeft: i > 0 ? '1px solid var(--border-subtle)' : 'none',
+          }}
         >
-          <div
-            className="rounded-xl p-4 transition-all duration-200 group cursor-default"
-            style={{
-              background: 'var(--surface-0)',
-              border:     `1px solid ${border}`,
-            }}
-            onMouseEnter={e => { e.currentTarget.style.boxShadow = `0 12px 32px rgba(0,0,0,0.35), 0 0 0 1px ${border}`; }}
-            onMouseLeave={e => { e.currentTarget.style.boxShadow = ''; }}
-          >
-            {/* Icon */}
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center mb-3"
-                 style={{ background: dim }}>
-              <Icon
-                className={spin && values[key] > 0 ? 'w-4 h-4 animate-spin' : 'w-4 h-4'}
-                style={{ color: accent }}
-              />
-            </div>
-
-            {/* Value */}
-            <div
-              className="font-display text-36 font-bold tabular-nums leading-none mb-1"
-              style={{ color: accent, letterSpacing: '-0.03em' }}
-            >
-              <AnimatedNumber value={values[key] ?? 0} suffix={suffix} />
-            </div>
-
-            {/* Label */}
-            <p className="text-11 font-medium" style={{ color: 'var(--text-tertiary)' }}>
-              {label}
-            </p>
+          <div style={{
+            fontSize: 26, fontWeight: 800, letterSpacing: '-0.04em',
+            fontVariantNumeric: 'tabular-nums', lineHeight: 1, color: accent,
+            marginBottom: 5,
+          }}>
+            <AnimatedNumber value={values[key] ?? 0} suffix={suffix} />
           </div>
-        </motion.div>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+          }}>
+            <Icon
+              className={spin && values[key] > 0 ? 'animate-spin' : ''}
+              style={{ width: 10, height: 10, color: accent, opacity: 0.7, flexShrink: 0 }}
+            />
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
+              color: 'var(--text-muted)', textTransform: 'uppercase',
+            }}>
+              {label}
+            </span>
+          </div>
+        </div>
       ))}
-    </div>
+    </motion.div>
   );
 }
