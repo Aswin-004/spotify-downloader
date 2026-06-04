@@ -115,7 +115,7 @@ export default function Layout() {
 
           {/* Main page */}
           <main className="flex-1 overflow-y-auto scrollbar-thin">
-            <div className="px-6 py-5 min-h-full" style={{ paddingBottom: nowPlaying ? '84px' : undefined }}>
+            <div className="px-6 py-5 min-h-full" style={{ paddingBottom: nowPlaying ? '100px' : undefined }}>
               <Outlet />
             </div>
           </main>
