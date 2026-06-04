@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { usePlayer } from '@/context/PlayerContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Music, Search, ChevronRight, ChevronDown,
@@ -79,26 +80,28 @@ export default function LibraryPage() {
   const [editingTags, setEditingTags] = useState(null);   // { path, artist, title, folder, filename }
   const [tagDraft, setTagDraft] = useState({ artist: '', title: '' });
   const [savingTags, setSavingTags] = useState(false);
-  const [playingPath, setPlayingPath] = useState(null);
-  const audioRef = useRef(null);
+  const { nowPlaying, playing, toggle, setQueueAndPlay } = usePlayer();
   const [retagging, setRetagging] = useState(false);
   const [folderTags, setFolderTags] = useState({});   // { "Library/House": { "Song.mp3": {bpm,camelot_key,...} } }
   const { retagProgress } = useSocket();
 
-  function handleTogglePlay(path) {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const url = api.previewTrackByPath(path);
-    if (audio.src !== window.location.origin + url) {
-      audio.src = url;
-      audio.load();
-      audio.play().then(() => setPlayingPath(path)).catch(() => {});
-    } else if (audio.paused) {
-      audio.play().then(() => setPlayingPath(path)).catch(() => {});
-    } else {
-      audio.pause();
-      setPlayingPath(null);
-    }
+  function handleTogglePlay(file, folderFiles) {
+    if (nowPlaying?.path === file.path) { toggle(); return; }
+    const tags   = folderTags[file.folder] || {};
+    const tracks = folderFiles.map(f => {
+      const t = tags[f.name] || {};
+      return {
+        title:    t.title  || f.name.replace(/\.mp3$/i, ''),
+        artist:   t.artist || extractArtist(f.name),
+        bpm:      t.bpm    ?? null,
+        camelot:  t.camelot_key || null,
+        audioUrl: api.previewTrackByPath(f.path),
+        filename: f.name,
+        path:     f.path,
+      };
+    });
+    const idx = folderFiles.findIndex(f => f.path === file.path);
+    setQueueAndPlay(tracks, idx >= 0 ? idx : 0);
   }
 
   async function handleMoveFromLibrary(file) {
@@ -238,11 +241,6 @@ export default function LibraryPage() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-5 pb-10">
-      <audio
-        ref={audioRef}
-        onEnded={() => setPlayingPath(null)}
-        onPause={() => setPlayingPath(null)}
-      />
 
       {/* Header */}
       <motion.div
@@ -563,16 +561,16 @@ export default function LibraryPage() {
                                     {/* Play preview */}
                                     <button
                                       aria-label="Preview"
-                                      onClick={() => handleTogglePlay(file.path)}
+                                      onClick={() => handleTogglePlay(file, grouped[folder])}
                                       className="w-7 h-7 flex items-center justify-center rounded-lg cursor-pointer sm:opacity-0 sm:group-hover/track:opacity-100 focus:opacity-100 active:scale-95 transition-all duration-150 focus-ring"
                                       style={{
-                                        color: playingPath === file.path ? 'var(--accent-violet)' : 'var(--text-muted)',
-                                        background: playingPath === file.path ? 'var(--accent-violet-dim)' : 'transparent',
+                                        color: nowPlaying?.path === file.path ? 'var(--accent-violet)' : 'var(--text-muted)',
+                                        background: nowPlaying?.path === file.path ? 'var(--accent-violet-dim)' : 'transparent',
                                       }}
-                                      onMouseEnter={e => { if (playingPath !== file.path) { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--accent-violet)'; }}}
-                                      onMouseLeave={e => { if (playingPath !== file.path) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}}
+                                      onMouseEnter={e => { if (nowPlaying?.path !== file.path) { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--accent-violet)'; }}}
+                                      onMouseLeave={e => { if (nowPlaying?.path !== file.path) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}}
                                     >
-                                      {playingPath === file.path
+                                      {nowPlaying?.path === file.path && playing
                                         ? <Pause className="w-4 h-4" />
                                         : <Play  className="w-4 h-4" />}
                                     </button>

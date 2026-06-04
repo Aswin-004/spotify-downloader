@@ -6,14 +6,17 @@ import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import ActivityFeed from '@/components/ActivityFeed';
 import FooterDock from '@/components/FooterDock';
+import PlayerBar from '@/components/PlayerBar';
 import CommandPalette from '@/components/CommandPalette';
 import { fadeBackdrop, springGentle } from '@/lib/motion';
+import { usePlayer } from '@/context/PlayerContext';
 
 const NAV_WIDTH_EXPANDED  = 220;
 const NAV_WIDTH_COLLAPSED = 64;
 const ACTIVITY_WIDTH      = 280;
 
 export default function Layout() {
+  const { nowPlaying } = usePlayer() || {};
   const [sidebarCollapsed,  setSidebarCollapsed]  = useState(false);
   const [activityOpen,      setActivityOpen]      = useState(true);
   const [mobileMenuOpen,    setMobileMenuOpen]    = useState(false);
@@ -112,7 +115,7 @@ export default function Layout() {
 
           {/* Main page */}
           <main className="flex-1 overflow-y-auto scrollbar-thin">
-            <div className="px-6 py-5 min-h-full">
+            <div className="px-6 py-5 min-h-full" style={{ paddingBottom: nowPlaying ? '84px' : undefined }}>
               <Outlet />
             </div>
           </main>
@@ -141,6 +144,9 @@ export default function Layout() {
         {/* Footer Dock — appears during active downloads */}
         <FooterDock />
       </div>
+
+      {/* Persistent music player */}
+      <PlayerBar />
 
       {/* Command Palette */}
       <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} />

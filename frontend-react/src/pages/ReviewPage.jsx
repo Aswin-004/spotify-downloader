@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
+import { usePlayer } from '@/context/PlayerContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CheckCircle2, RotateCw, Loader2, Music, PlayCircle,
@@ -32,14 +33,13 @@ export default function ReviewPage() {
   const [resettingSkipped,setResettingSkipped]= useState(false);
   const [selectedGenres,  setSelectedGenres]  = useState({});
   const [moving,          setMoving]          = useState({});
-  const [playing,         setPlaying]         = useState(false);
   const [bpmInputs,       setBpmInputs]       = useState({});
   const [bpmSaving,       setBpmSaving]       = useState({});
   const [duplicates,      setDuplicates]      = useState([]);
   const [dupGenres,       setDupGenres]       = useState({});
   const [dupDeleting,     setDupDeleting]     = useState({});
   const [dupKeeping,      setDupKeeping]      = useState({});
-  const audioRef = useRef(null);
+  const { nowPlaying, playing, toggle, playTrack } = usePlayer();
 
   useEffect(() => {
     api.getGeminiQuota().then(setGeminiQuota).catch(() => {});
@@ -79,14 +79,6 @@ export default function ReviewPage() {
       setSelectedIdx(needsReviewItems.length - 1);
   }, [needsReviewItems.length]);
 
-  // Auto-stop audio when selected track changes
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (audio && !audio.paused) {
-      audio.pause();
-      setPlaying(false);
-    }
-  }, [selectedIdx]);
 
   async function handleResetSkipped(trackId = null) {
     setResettingSkipped(true);
@@ -166,19 +158,16 @@ export default function ReviewPage() {
 
   function handleTogglePlay(item) {
     if (!item?.filename) return;
-    const audio = audioRef.current;
-    if (!audio) return;
-    const url = api.previewTrackUrl(item.filename);
-    if (audio.src !== window.location.origin + url) {
-      audio.src = url;
-      audio.load();
-      audio.play().then(() => setPlaying(true)).catch(() => {});
-    } else if (audio.paused) {
-      audio.play().then(() => setPlaying(true)).catch(() => {});
-    } else {
-      audio.pause();
-      setPlaying(false);
-    }
+    if (nowPlaying?.filename === item.filename) { toggle(); return; }
+    playTrack({
+      title:    item.title    || item.filename,
+      artist:   item.artist   || '',
+      bpm:      item.bpm      ?? null,
+      camelot:  item.camelot_key || null,
+      audioUrl: api.previewTrackUrl(item.filename),
+      filename: item.filename,
+      path:     item.filename,
+    });
   }
 
   async function handleSaveBpm(item) {
@@ -200,8 +189,6 @@ export default function ReviewPage() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
-      {/* Hidden audio element for preview */}
-      <audio ref={audioRef} onEnded={() => setPlaying(false)} onPause={() => setPlaying(false)} />
 
       {/* Page header */}
       <div className="flex items-center justify-between gap-4">
@@ -352,9 +339,9 @@ export default function ReviewPage() {
                     disabled={!selectedItem.filename}
                     className="w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0 cursor-pointer transition-all"
                     style={{ background: 'var(--accent-amber-dim)' }}
-                    title={playing ? 'Pause preview' : 'Play preview'}
+                    title={nowPlaying?.filename === selectedItem?.filename && playing ? 'Pause preview' : 'Play preview'}
                   >
-                    {playing
+                    {nowPlaying?.filename === selectedItem?.filename && playing
                       ? <Pause className="w-8 h-8" style={{ color: 'var(--accent-amber)' }} />
                       : <Play  className="w-8 h-8" style={{ color: 'var(--accent-amber)' }} />}
                   </button>
