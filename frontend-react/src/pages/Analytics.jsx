@@ -51,69 +51,84 @@ function Skeleton({ className = '' }) {
 function CustomTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-xl p-3 shadow-xl"
-         style={{ background: 'var(--surface-2)', border: '1px solid var(--border-default)' }}>
-      <p className="text-11 font-medium mb-1" style={{ color: 'var(--text-tertiary)' }}>{label}</p>
+    <div style={{
+      background: 'var(--surface-2)', border: '1px solid var(--border-default)',
+      borderRadius: 3, padding: '8px 10px',
+    }}>
+      <p style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 4, fontFamily: 'monospace' }}>{label}</p>
       {payload.map((entry, i) => (
-        <p key={i} className="text-11" style={{ color: entry.color }}>
-          {entry.name}: <span className="font-mono font-bold">{entry.value}</span>
+        <p key={i} style={{ fontSize: 11, color: entry.color }}>
+          {entry.name}: <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{entry.value}</span>
         </p>
       ))}
     </div>
   );
 }
 
-function StatCard({ icon: Icon, label, value, accent, dim, loading }) {
+function StatCard({ icon: Icon, label, value, accent, loading }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={ease}
-      className="rounded-xl p-4"
-      style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+      style={{
+        background: 'var(--surface-0)', border: '1px solid var(--border-subtle)',
+        borderRadius: 4, padding: '14px 16px',
+        borderLeft: `3px solid ${accent}`,
+      }}
     >
-      <div className="w-8 h-8 rounded-lg flex items-center justify-center mb-3"
-           style={{ background: dim }}>
-        <Icon className="w-4 h-4" style={{ color: accent }} />
-      </div>
       {loading ? (
-        <Skeleton className="h-9 w-20 mb-1" />
+        <Skeleton className="h-8 w-16 mb-1" />
       ) : (
-        <p className="font-display text-36 font-bold tabular-nums leading-none mb-1"
-           style={{ color: accent, letterSpacing: '-0.03em' }}>
+        <p style={{
+          fontSize: 28, fontWeight: 800, fontVariantNumeric: 'tabular-nums',
+          lineHeight: 1, color: accent, letterSpacing: '-0.04em', marginBottom: 5,
+        }}>
           {value}
         </p>
       )}
-      <p className="text-11 font-medium" style={{ color: 'var(--text-tertiary)' }}>{label}</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <Icon style={{ width: 10, height: 10, color: accent, opacity: 0.7 }} />
+        <p style={{
+          fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
+          textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
+          color: 'var(--text-muted)',
+        }}>{label}</p>
+      </div>
     </motion.div>
   );
 }
 
 function ChartCard({ title, icon: Icon, accent, children, action }) {
   return (
-    <div className="rounded-xl overflow-hidden"
-         style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
-      <div className="flex items-center justify-between px-5 py-4"
-           style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-        <div className="flex items-center gap-2">
-          {Icon && <Icon className="w-4 h-4" style={{ color: accent || 'var(--accent-violet)' }} />}
-          <h3 className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</h3>
+    <div style={{
+      background: 'var(--surface-0)', border: '1px solid var(--border-subtle)',
+      borderRadius: 4, overflow: 'hidden',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          {Icon && <Icon style={{ width: 12, height: 12, color: accent || 'var(--accent-violet)' }} />}
+          <h3 style={{
+            fontSize: 11, fontWeight: 700, letterSpacing: '0.07em',
+            textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
+            color: 'var(--text-secondary)',
+          }}>{title}</h3>
         </div>
         {action}
       </div>
-      <div className="p-5">{children}</div>
+      <div style={{ padding: '16px 16px' }}>{children}</div>
     </div>
   );
 }
 
 function EmptyChart({ icon: Icon = BarChart3, message }) {
   return (
-    <div className="flex flex-col items-center justify-center h-56">
-      <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3"
-           style={{ background: 'var(--surface-1)' }}>
-        <Icon className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
-      </div>
-      <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>{message}</p>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 200 }}>
+      <Icon style={{ width: 18, height: 18, color: 'var(--text-muted)', marginBottom: 8 }} />
+      <p style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'ui-monospace, monospace', letterSpacing: '0.04em' }}>{message}</p>
     </div>
   );
 }
@@ -256,11 +271,11 @@ export default function Analytics() {
       )}
 
       {/* KPI strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard icon={Download}   label="Total Downloads" value={overview?.total_downloads ?? '—'} accent="var(--accent-emerald)" dim="var(--accent-emerald-dim)" loading={loading} />
-        <StatCard icon={TrendingUp} label="Success Rate"    value={overview ? `${overview?.success_rate ?? '—'}%` : '—'} accent="var(--accent-cyan)" dim="var(--accent-cyan-dim)" loading={loading} />
-        <StatCard icon={HardDrive}  label="MB Cached"       value={overview?.musicbrainz_cached ?? '—'} accent="var(--accent-amber)" dim="var(--accent-amber-dim)" loading={loading} />
-        <StatCard icon={Users}      label="Total Artists"   value={overview?.total_artists ?? '—'} accent="var(--accent-violet)" dim="var(--accent-violet-dim)" loading={loading} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 0, border: '1px solid var(--border-subtle)', borderRadius: 4, overflow: 'hidden', background: 'var(--surface-0)' }}>
+        <StatCard icon={Download}   label="Total Downloads" value={overview?.total_downloads ?? '—'} accent="var(--accent-emerald)" loading={loading} />
+        <div style={{ borderLeft: '1px solid var(--border-subtle)' }}><StatCard icon={TrendingUp} label="Success Rate"  value={overview ? `${overview?.success_rate ?? '—'}%` : '—'} accent="var(--accent-cyan)"    loading={loading} /></div>
+        <div style={{ borderLeft: '1px solid var(--border-subtle)' }}><StatCard icon={HardDrive}  label="MB Cached"    value={overview?.musicbrainz_cached ?? '—'}                  accent="var(--accent-amber)"   loading={loading} /></div>
+        <div style={{ borderLeft: '1px solid var(--border-subtle)' }}><StatCard icon={Users}      label="Total Artists" value={overview?.total_artists ?? '—'}                      accent="var(--accent-violet)"  loading={loading} /></div>
       </div>
 
       {/* Downloads per day */}
@@ -269,20 +284,27 @@ export default function Analytics() {
         icon={Download}
         accent={CHART.emerald}
         action={
-          <div className="flex gap-1 p-0.5 rounded-lg" style={{ background: 'var(--surface-1)' }}>
-            {[7, 30, 90].map(d => (
-              <button
-                key={d}
-                onClick={() => setDayRange(d)}
-                className="px-2.5 py-1 rounded-md text-11 font-medium transition-all duration-150 cursor-pointer focus-ring"
-                style={dayRange === d
-                  ? { background: 'var(--accent-violet-dim)', color: 'var(--accent-violet)' }
-                  : { color: 'var(--text-muted)' }
-                }
-              >
-                {d}d
-              </button>
-            ))}
+          <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border-subtle)' }}>
+            {[7, 30, 90].map(d => {
+              const active = dayRange === d;
+              return (
+                <button
+                  key={d}
+                  onClick={() => setDayRange(d)}
+                  style={{
+                    padding: '4px 10px', border: 'none', cursor: 'pointer',
+                    background: 'transparent',
+                    fontSize: 10, fontWeight: 700, letterSpacing: '0.06em',
+                    fontFamily: 'ui-monospace, monospace',
+                    color: active ? 'var(--accent-emerald)' : 'var(--text-muted)',
+                    borderBottom: active ? '2px solid var(--accent-emerald)' : '2px solid transparent',
+                    marginBottom: -1, transition: 'color 0.15s, border-color 0.15s',
+                  }}
+                >
+                  {d}D
+                </button>
+              );
+            })}
           </div>
         }
       >
