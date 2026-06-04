@@ -2,10 +2,9 @@ import { useEffect, useState, useMemo } from 'react';
 import { usePlayer } from '@/context/PlayerContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Search, Trash2, CheckCircle2, XCircle, SkipForward,
+  Trash2, CheckCircle2, XCircle, SkipForward, X,
   RotateCw, History as HistoryIcon, Play, Pause,
 } from 'lucide-react';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useSocket } from '@/hooks/useSocket';
@@ -172,64 +171,93 @@ export default function History() {
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ ...ease, delay: 0.08 }}
-        className="flex flex-col sm:flex-row gap-3"
+        style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
       >
-        {/* Search */}
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
-                  style={{ color: 'var(--text-muted)' }} />
-          <Input
+        {/* Terminal search */}
+        <div
+          style={{
+            display: 'flex', alignItems: 'center',
+            border: '1px solid var(--border-default)',
+            borderRadius: 4, background: 'var(--surface-0)',
+            transition: 'border-color 0.15s, box-shadow 0.15s',
+          }}
+          onFocusCapture={e => {
+            e.currentTarget.style.borderColor = 'var(--accent-cyan)';
+            e.currentTarget.style.boxShadow = '0 0 0 1px var(--accent-cyan)';
+          }}
+          onBlurCapture={e => {
+            e.currentTarget.style.borderColor = 'var(--border-default)';
+            e.currentTarget.style.boxShadow = 'none';
+          }}
+        >
+          <span style={{
+            paddingLeft: 12, paddingRight: 6, flexShrink: 0,
+            color: 'var(--accent-cyan)', fontSize: 11, fontWeight: 700,
+            letterSpacing: '0.04em', userSelect: 'none',
+            fontFamily: 'ui-monospace, monospace',
+          }}>filter:</span>
+          <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search by title or artist..."
-            className="pl-9"
+            placeholder="title or artist…"
+            style={{
+              flex: 1, height: 38, background: 'transparent', border: 'none',
+              outline: 'none', color: 'var(--text-primary)',
+              fontSize: 13, fontFamily: 'ui-monospace, monospace',
+            }}
           />
+          {search && (
+            <button onClick={() => setSearch('')}
+              style={{ padding: '0 10px', color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+              <X style={{ width: 12, height: 12 }} />
+            </button>
+          )}
         </div>
 
-        {/* Status filter pills */}
-        <div className="flex gap-1 p-1 rounded-xl flex-shrink-0"
-             style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
-          {FILTERS.map(f => (
-            <button
-              key={f.value}
-              onClick={() => setFilter(f.value)}
-              className="px-3 py-1.5 rounded-lg text-12 font-medium transition-all duration-150 cursor-pointer focus-ring"
-              style={filter === f.value
-                ? { background: 'var(--accent-violet-dim)', color: 'var(--accent-violet)' }
-                : { color: 'var(--text-muted)' }
-              }
-              onMouseEnter={e => {
-                if (filter !== f.value) e.currentTarget.style.color = 'var(--text-tertiary)';
-              }}
-              onMouseLeave={e => {
-                if (filter !== f.value) e.currentTarget.style.color = 'var(--text-muted)';
-              }}
-            >
-              {f.label}
-            </button>
-          ))}
+        {/* Flat underline status tabs */}
+        <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border-subtle)' }}>
+          {FILTERS.map(f => {
+            const isActive = filter === f.value;
+            const accent = f.value === 'all' ? 'var(--accent-violet)'
+              : f.value === 'success' ? 'var(--accent-emerald)'
+              : f.value === 'failed'  ? 'var(--accent-rose)'
+              : 'var(--accent-slate)';
+            return (
+              <button
+                key={f.value}
+                onClick={() => setFilter(f.value)}
+                style={{
+                  padding: '6px 14px', border: 'none', cursor: 'pointer',
+                  background: 'transparent',
+                  fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
+                  textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
+                  color: isActive ? accent : 'var(--text-muted)',
+                  borderBottom: isActive ? `2px solid ${accent}` : '2px solid transparent',
+                  marginBottom: -1, transition: 'color 0.15s, border-color 0.15s',
+                }}
+                onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-muted)'; }}
+              >
+                {f.label}
+              </button>
+            );
+          })}
         </div>
       </motion.div>
 
-      {/* History list */}
+      {/* History log */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ ...ease, delay: 0.12 }}
-        className="rounded-xl overflow-hidden"
-        style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+        style={{ border: '1px solid var(--border-subtle)', borderRadius: 4, overflow: 'hidden' }}
       >
-        <ScrollArea className="max-h-[calc(100vh-280px)]">
+        <ScrollArea className="max-h-[calc(100vh-300px)]">
           {filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3"
-                   style={{ background: 'var(--surface-1)' }}>
-                <HistoryIcon className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
-              </div>
-              <p className="text-13 font-medium" style={{ color: 'var(--text-tertiary)' }}>
-                No history entries found
-              </p>
-              <p className="text-11 mt-1" style={{ color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '56px 0' }}>
+              <HistoryIcon style={{ width: 20, height: 20, color: 'var(--text-muted)', marginBottom: 10 }} />
+              <p style={{ fontSize: 13, color: 'var(--text-tertiary)', fontWeight: 500 }}>No entries found</p>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
                 {search || filter !== 'all' ? 'Try adjusting your filters' : 'Downloads appear here once complete'}
               </p>
             </div>
@@ -238,69 +266,77 @@ export default function History() {
               {filtered.map((item, i) => {
                 const cfg = STATUS_CONFIG[item.status] ?? STATUS_CONFIG.failed;
                 const StatusIcon = cfg.icon;
+                const isPlaying = nowPlaying?.filename === item.filename && playing;
 
                 return (
                   <motion.div
                     key={`${item.title}-${item.timestamp}-${i}`}
-                    initial={{ opacity: 0, x: -8 }}
+                    initial={{ opacity: 0, x: -6 }}
                     animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: Math.min(i * 0.015, 0.3), duration: 0.18 }}
-                    className="flex items-start gap-3 px-5 py-3 transition-colors duration-150"
-                    style={{ borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none' }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                    transition={{ delay: Math.min(i * 0.012, 0.25), duration: 0.15 }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '7px 12px 7px 0',
+                      borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none',
+                      borderLeft: `3px solid ${cfg.accent}`,
+                      paddingLeft: 12, transition: 'background 0.1s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-0)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
-                    {/* Status icon */}
-                    <div className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5"
-                         style={{ background: `${cfg.accent}18` }}>
-                      <StatusIcon className="w-3 h-3" style={{ color: cfg.accent }} />
-                    </div>
+                    {/* Timestamp */}
+                    <span style={{
+                      fontSize: 9, fontFamily: 'monospace', color: 'var(--text-muted)',
+                      fontVariantNumeric: 'tabular-nums', flexShrink: 0,
+                      minWidth: 52, letterSpacing: '0.02em',
+                    }}>
+                      {item.timestamp}
+                    </span>
 
                     {/* Content */}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-13 font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{
+                        fontSize: 12, fontWeight: 500, color: 'var(--text-primary)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
                         {item.title}
                       </p>
-                      <p className="text-11 truncate" style={{ color: 'var(--text-tertiary)' }}>
-                        {item.artist}
-                      </p>
-                      {item.status === 'failed' && item.error && (
-                        <p className="text-10 truncate mt-0.5" style={{ color: 'var(--accent-rose)' }}>
-                          {friendlyError(item.error)}
+                      {(item.artist || (item.status === 'failed' && item.error)) && (
+                        <p style={{
+                          fontSize: 10, marginTop: 1,
+                          color: item.status === 'failed' && item.error ? 'var(--accent-rose)' : 'var(--text-tertiary)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {item.status === 'failed' && item.error ? friendlyError(item.error) : item.artist}
                         </p>
                       )}
                     </div>
 
-                    {/* Play button — only for successful downloads with a filename */}
+                    {/* Play button */}
                     {item.status === 'success' && item.filename && (
                       <button
                         onClick={() => handleTogglePlay(item)}
-                        title={nowPlaying?.filename === item.filename && playing ? 'Pause' : 'Preview'}
-                        className="w-6 h-6 flex items-center justify-center rounded-lg flex-shrink-0 transition-colors"
+                        title={isPlaying ? 'Pause' : 'Preview'}
                         style={{
-                          background: nowPlaying?.filename === item.filename && playing
-                            ? 'var(--accent-violet-dim)' : 'transparent',
-                          color: 'var(--accent-violet)',
+                          width: 22, height: 22, border: 'none', borderRadius: 4,
+                          background: isPlaying ? 'var(--accent-violet-dim)' : 'transparent',
+                          color: 'var(--accent-violet)', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          flexShrink: 0,
                         }}
                       >
-                        {nowPlaying?.filename === item.filename && playing
-                          ? <Pause className="w-3 h-3" />
-                          : <Play  className="w-3 h-3" />}
+                        {isPlaying ? <Pause style={{ width: 10, height: 10 }} /> : <Play style={{ width: 10, height: 10 }} />}
                       </button>
                     )}
 
-                    {/* Status badge */}
-                    <span
-                      className="text-10 font-semibold px-2 py-0.5 rounded-full flex-shrink-0"
-                      style={{ background: cfg.dim, color: cfg.accent, letterSpacing: '0.04em' }}
-                    >
-                      {cfg.label.toUpperCase()}
-                    </span>
-
-                    {/* Timestamp */}
-                    <span className="text-10 font-mono flex-shrink-0 mt-0.5 min-w-[56px] text-right"
-                          style={{ color: 'var(--text-muted)' }}>
-                      {item.timestamp}
+                    {/* Status chip */}
+                    <span style={{
+                      fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
+                      textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
+                      padding: '2px 6px', borderRadius: 2, flexShrink: 0,
+                      background: `${cfg.accent}18`, color: cfg.accent,
+                    }}>
+                      {cfg.label}
                     </span>
                   </motion.div>
                 );

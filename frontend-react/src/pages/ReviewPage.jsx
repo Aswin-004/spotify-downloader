@@ -279,43 +279,55 @@ export default function ReviewPage() {
         <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
 
           {/* Left: track list */}
-          <div className="rounded-xl overflow-hidden" style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
-            <div className="px-4 py-3 text-label" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              Pending · {needsReviewItems.length}
+          <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 4, overflow: 'hidden' }}>
+            {/* Header */}
+            <div style={{
+              padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            }}>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace', color: 'var(--text-secondary)' }}>
+                PENDING
+              </span>
+              <span style={{ fontSize: 11, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: 'var(--accent-amber)' }}>
+                {needsReviewItems.length}
+              </span>
             </div>
             <div className="overflow-y-auto scrollbar-thin" style={{ maxHeight: 480 }}>
               <AnimatePresence>
-                {needsReviewItems.map((item, i) => (
-                  <motion.button
-                    key={item.id || item.title + '__' + item.artist}
-                    initial={{ opacity: 0, x: -8 }}
-                    animate={{ opacity: 1, x: 0  }}
-                    exit={{ opacity: 0, x: 8     }}
-                    transition={{ ...ease, delay: i * 0.02 }}
-                    onClick={() => setSelectedIdx(i)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left cursor-pointer transition-all"
-                    style={{
-                      background: i === selectedIdx ? 'var(--accent-amber-dim)' : 'transparent',
-                      borderBottom: '1px solid var(--border-subtle)',
-                      borderLeft: i === selectedIdx ? '2px solid var(--accent-amber)' : '2px solid transparent',
-                    }}
-                  >
-                    <div className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0"
-                         style={{ background: 'var(--accent-amber-dim)' }}>
-                      <Music className="w-3.5 h-3.5" style={{ color: 'var(--accent-amber)' }} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-12 font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-                        {item.title}
-                      </p>
-                      <p className="text-11 truncate" style={{ color: 'var(--text-tertiary)' }}>
-                        {item.artist || 'Unknown Artist'}
-                      </p>
-                    </div>
-                    <ChevronRight className="w-3.5 h-3.5 flex-shrink-0"
-                                  style={{ color: i === selectedIdx ? 'var(--accent-amber)' : 'var(--text-muted)' }} />
-                  </motion.button>
-                ))}
+                {needsReviewItems.map((item, i) => {
+                  const isSelected = i === selectedIdx;
+                  return (
+                    <motion.button
+                      key={item.id || item.title + '__' + item.artist}
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0  }}
+                      exit={{ opacity: 0, x: 8     }}
+                      transition={{ ...ease, delay: i * 0.02 }}
+                      onClick={() => setSelectedIdx(i)}
+                      style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '8px 12px 8px 0', paddingLeft: 12,
+                        background: isSelected ? 'rgba(245,158,11,0.06)' : 'transparent',
+                        borderBottom: '1px solid var(--border-subtle)',
+                        borderLeft: `3px solid ${isSelected ? 'var(--accent-amber)' : 'transparent'}`,
+                        border: 'none', cursor: 'pointer', textAlign: 'left',
+                        transition: 'background 0.1s, border-color 0.1s',
+                      }}
+                      onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--surface-0)'; }}
+                      onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {item.title}
+                        </p>
+                        <p style={{ fontSize: 10, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {item.artist || 'Unknown Artist'}
+                        </p>
+                      </div>
+                      <ChevronRight style={{ width: 12, height: 12, flexShrink: 0, color: isSelected ? 'var(--accent-amber)' : 'var(--text-muted)' }} />
+                    </motion.button>
+                  );
+                })}
               </AnimatePresence>
             </div>
           </div>
@@ -329,8 +341,7 @@ export default function ReviewPage() {
                 animate={{ opacity: 1, x: 0  }}
                 exit={{ opacity: 0, x: -16   }}
                 transition={ease}
-                className="rounded-xl p-5 space-y-5"
-                style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+                style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}
               >
                 {/* Track info */}
                 <div className="flex items-start gap-4">
