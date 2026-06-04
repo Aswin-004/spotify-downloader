@@ -38,23 +38,23 @@ function SecretInput({ value, onChange, placeholder }) {
   );
 }
 
-function SectionCard({ icon: Icon, accent, dim, title, desc, children, delay = 0 }) {
+function SectionCard({ icon: Icon, accent, title, desc, children, delay = 0 }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 14 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ ...ease, delay }}
-      className="rounded-xl p-6 space-y-5"
-      style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+      style={{
+        background: 'var(--surface-0)', border: '1px solid var(--border-subtle)',
+        borderLeft: `3px solid ${accent}`, borderRadius: 4, padding: '16px 18px',
+        display: 'flex', flexDirection: 'column', gap: 16,
+      }}
     >
-      <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-             style={{ background: dim }}>
-          <Icon className="w-5 h-5" style={{ color: accent }} />
-        </div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <Icon style={{ width: 14, height: 14, color: accent, flexShrink: 0, marginTop: 2 }} />
         <div>
-          <h2 className="text-14 font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</h2>
-          <p className="text-11 mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{desc}</p>
+          <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace', color: 'var(--text-secondary)' }}>{title}</h2>
+          <p style={{ fontSize: 11, marginTop: 2, color: 'var(--text-tertiary)' }}>{desc}</p>
         </div>
       </div>
       {children}
@@ -87,15 +87,11 @@ function DenseModeCard() {
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ ...ease, delay: 0.22 }}
-      className="rounded-xl p-6"
-      style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+      style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '16px 18px' }}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-               style={{ background: 'var(--accent-slate-dim)' }}>
-            <Layers className="w-5 h-5" style={{ color: 'var(--accent-slate)' }} />
-          </div>
+          <Layers style={{ width: 14, height: 14, color: 'var(--accent-slate)', flexShrink: 0, marginTop: 2 }} />
           <div>
             <h2 className="text-14 font-semibold" style={{ color: 'var(--text-primary)' }}>Dense Mode</h2>
             <p className="text-11 mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
@@ -333,7 +329,8 @@ export default function Settings() {
       {cfg && !cfg._setup_complete && (
         <motion.div
           initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-          className="flex items-start gap-3 px-4 py-3 rounded-xl"
+          className="flex items-start gap-3 px-4 py-3"
+            style={{ borderRadius: 4 }}
           style={{ background: 'var(--accent-amber-dim)', border: '1px solid rgba(245,158,11,0.25)' }}
         >
           <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--accent-amber)' }} />
@@ -503,7 +500,8 @@ export default function Settings() {
               exit={{ opacity: 0, height: 0 }}
               className="overflow-hidden mt-3"
             >
-              <div className="rounded-xl p-5 space-y-4"
+              <div style={{ borderRadius: 4, padding: '14px 16px' }}
+                   className="space-y-4"
                    style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
                 <div>
                   <Label>AcoustID Key <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>— Audio fingerprint matching. Free at acoustid.org/api-key</span></Label>

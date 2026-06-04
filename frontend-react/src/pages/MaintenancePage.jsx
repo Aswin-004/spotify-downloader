@@ -113,46 +113,53 @@ function TaskCard({ task, activeTask, onRun, running, logs, devMode }) {
 
   return (
     <motion.div
-      className="rounded-xl overflow-hidden"
       style={{
         background: 'var(--surface-0)',
         border: `1px solid ${isRunningMe ? task.border : 'var(--border-subtle)'}`,
-        boxShadow: isRunningMe ? `0 0 0 1px ${task.border}` : 'none',
+        borderLeft: `3px solid ${isRunningMe ? task.accent : task.border}`,
+        borderRadius: 4, overflow: 'hidden',
+        boxShadow: isRunningMe ? `0 0 12px ${task.accent}22` : 'none',
         transition: 'border-color 0.3s, box-shadow 0.3s',
       }}
     >
-      <div className="p-5 space-y-4">
+      <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         {/* Header */}
-        <div className="flex items-start gap-4">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-               style={{ background: task.dim }}>
-            <Icon
-              className={cn('w-5 h-5', isRunningMe && 'animate-spin')}
-              style={{ color: task.accent }}
-            />
-          </div>
+        <div className="flex items-start gap-3">
+          <Icon
+            className={cn('w-4 h-4 flex-shrink-0 mt-0.5', isRunningMe && 'animate-spin')}
+            style={{ color: task.accent }}
+          />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
-              <h3 className="text-14 font-semibold" style={{ color: 'var(--text-primary)' }}>
+              <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
                 {task.title}
               </h3>
               {isRunningMe && (
-                <span className="flex items-center gap-1 text-10 px-2 py-0.5 rounded-full"
-                      style={{ background: 'var(--accent-cyan-dim)', color: 'var(--accent-cyan)' }}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
+                  padding: '2px 6px', borderRadius: 2,
+                  background: 'var(--accent-cyan-dim)', color: 'var(--accent-cyan)',
+                  fontFamily: 'ui-monospace, monospace', textTransform: 'uppercase',
+                }}>
                   <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                  Running
+                  RUNNING
                 </span>
               )}
               {isDone && (
-                <span className="flex items-center gap-1 text-10 px-2 py-0.5 rounded-full"
-                      style={exitOk
-                        ? { background: 'var(--accent-emerald-dim)', color: 'var(--accent-emerald)' }
-                        : { background: 'var(--accent-rose-dim)', color: 'var(--accent-rose)' }}>
-                  {exitOk ? <><CheckCircle2 className="w-2.5 h-2.5" /> Done</> : <><AlertTriangle className="w-2.5 h-2.5" /> Failed</>}
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
+                  padding: '2px 6px', borderRadius: 2,
+                  fontFamily: 'ui-monospace, monospace', textTransform: 'uppercase',
+                  background: exitOk ? 'var(--accent-emerald-dim)' : 'var(--accent-rose-dim)',
+                  color: exitOk ? 'var(--accent-emerald)' : 'var(--accent-rose)',
+                }}>
+                  {exitOk ? <><CheckCircle2 className="w-2.5 h-2.5" /> DONE</> : <><AlertTriangle className="w-2.5 h-2.5" /> FAILED</>}
                 </span>
               )}
             </div>
-            <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>{task.description}</p>
+            <p style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{task.description}</p>
           </div>
         </div>
 
@@ -402,7 +409,8 @@ export default function MaintenancePage() {
         <button
           onClick={toggleDevMode}
           title={devMode ? 'Disable developer mode' : 'Enable developer mode (shows raw logs and advanced options)'}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-xl flex-shrink-0 transition-all duration-200 cursor-pointer focus-ring"
+          className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0 transition-all duration-200 cursor-pointer focus-ring"
+          style={{ borderRadius: 4 }}
           style={devMode
             ? { background: 'var(--accent-violet-dim)', border: '1px solid rgba(139,92,246,0.35)', color: 'var(--accent-violet)' }
             : { background: 'var(--surface-1)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }
@@ -418,7 +426,8 @@ export default function MaintenancePage() {
         {maintenanceRunning && (
           <motion.div
             initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-            className="flex items-center gap-3 px-4 py-3 rounded-xl"
+            className="flex items-center gap-3 px-4 py-3"
+            style={{ borderRadius: 4 }}
             style={{ background: 'var(--accent-cyan-dim)', border: '1px solid rgba(6,182,212,0.2)' }}
           >
             <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: 'var(--accent-cyan)' }} />
@@ -434,7 +443,8 @@ export default function MaintenancePage() {
         {error && (
           <motion.div
             initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-            className="flex items-center gap-3 px-4 py-3 rounded-xl"
+            className="flex items-center gap-3 px-4 py-3"
+            style={{ borderRadius: 4 }}
             style={{ background: 'var(--accent-rose-dim)', border: '1px solid rgba(244,63,94,0.2)' }}
           >
             <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-rose)' }} />
@@ -469,8 +479,7 @@ export default function MaintenancePage() {
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ ...ease, delay: 0.28 }}
-        className="rounded-xl p-5"
-        style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+        style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: 18 }}
       >
         <h3 className="text-14 font-semibold mb-0.5" style={{ color: 'var(--text-primary)' }}>Quick Actions</h3>
         <p className="text-11 mb-4" style={{ color: 'var(--text-muted)' }}>One-click utilities that take effect immediately.</p>
