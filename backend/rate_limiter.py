@@ -36,21 +36,40 @@ except ImportError:
 _REDIS_URL = os.getenv("REDIS_URL", "")
 
 def _storage_uri() -> str:
-    if _REDIS_URL:
+    """Return Redis URI if reachable, else fall back to memory (dev/offline)."""
+    if not _REDIS_URL:
+        logger.warning("[rate_limiter] REDIS_URL not set — using in-memory storage (dev only)")
+        return "memory://"
+    # Quick reachability probe — avoids every request failing when Redis is
+    # a Render internal URL that is only accessible from Render's network.
+    try:
+        import redis as _redis
+        c = _redis.from_url(_REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        c.ping()
         return _REDIS_URL
-    logger.warning("[rate_limiter] REDIS_URL not set — using in-memory storage (dev only)")
-    return "memory://"
+    except Exception:
+        logger.warning("[rate_limiter] Redis unreachable — falling back to in-memory storage")
+        return "memory://"
 
 
 # ── Limiter instance ─────────────────────────────────────────────────────────
+# In development (FLASK_ENV=development or Redis unreachable locally) use very
+# high limits so artwork/folder-tags/preview requests don't get blocked.
+_IS_DEV = os.getenv("FLASK_ENV", "production") == "development"
+_STORAGE = _storage_uri()
+_IS_MEMORY = _STORAGE == "memory://"
+
+_DEFAULT_LIMIT = "100000 per hour" if (_IS_DEV or _IS_MEMORY) else "500 per hour"
 
 limiter = Limiter(
     key_func=get_remote_address,
-    storage_uri=_storage_uri(),
-    default_limits=["500 per hour"],
+    storage_uri=_STORAGE,
+    default_limits=[_DEFAULT_LIMIT],
     headers_enabled=True,       # adds X-RateLimit-Limit / Remaining / Reset headers
     strategy="fixed-window",    # simpler than moving-window, predictable for users
 )
+
+LIMIT_READS = "100000 per hour" if (_IS_DEV or _IS_MEMORY) else "300 per hour"
 
 
 # ── Per-route limit decorators (import these in app.py) ─────────────────────
