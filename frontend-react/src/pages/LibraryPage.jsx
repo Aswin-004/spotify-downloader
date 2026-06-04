@@ -231,7 +231,14 @@ export default function LibraryPage() {
 
   async function handleRetag() {
     setRetagging(true);
-    try { await api.retagLibrary(); } catch { setRetagging(false); }
+    try {
+      await api.retagLibrary();
+      // Fallback: if WebSocket never delivers completion, unlock after 5 min
+      setTimeout(() => setRetagging(false), 5 * 60 * 1000);
+    } catch (err) {
+      setRetagging(false);
+      addToast({ type: 'error', title: 'Retag failed', description: err.message, duration: 5000 });
+    }
   }
   useEffect(() => {
     if (retagProgress?.status === 'complete' || retagProgress?.status === 'error')
@@ -579,7 +586,7 @@ export default function LibraryPage() {
                                       aria-label="Edit tags"
                                       onClick={() => {
                                         const m = folderTags[folder]?.[file.name];
-                                        setEditingTags({ path: file.folder + '\\' + file.name, folder, filename: file.name });
+                                        setEditingTags({ path: (file.folder + '/' + file.name).replace(/\\/g, '/'), folder, filename: file.name });
                                         setTagDraft({ artist: m?.artist || '', title: m?.title || file.name.replace(/\.mp3$/i,'') });
                                         setOpenMenu(null);
                                       }}

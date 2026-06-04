@@ -739,8 +739,9 @@ def download_stream_to_browser():
     # 3. Download using YouTube tv_embedded client — far less bot-checked than web client
     #    Works from datacenter IPs without cookies or proxies.
     youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-    tmp_base = tempfile.mktemp()
-    tmp_mp3 = tmp_base + '.mp3'
+    tmp_dir  = tempfile.mkdtemp()
+    tmp_base = os.path.join(tmp_dir, 'track')
+    tmp_mp3  = tmp_base + '.mp3'
     try:
         ffmpeg = shutil.which('ffmpeg')
         ydl_opts = {
@@ -783,8 +784,14 @@ def download_stream_to_browser():
 
         logger.info(f"[download-stream] Streaming '{title}' by {artist} → {download_name}")
 
+        # Read into memory so the temp dir can be deleted before the response
+        # is streamed — avoids a race on gevent where finally runs mid-stream.
+        from io import BytesIO
+        with open(tmp_mp3, 'rb') as fh:
+            audio_bytes = fh.read()
+
         return send_file(
-            tmp_mp3,
+            BytesIO(audio_bytes),
             as_attachment=True,
             download_name=download_name,
             mimetype='audio/mpeg',
@@ -794,14 +801,7 @@ def download_stream_to_browser():
         logger.error(f"[download-stream] Failed for '{title}': {e}")
         return jsonify({"error": f"Download failed: {str(e)[:120]}"}), 502
     finally:
-        # Clean up temp files regardless of outcome
-        for pat in [tmp_mp3, tmp_base + '.*']:
-            import glob
-            for f in glob.glob(pat):
-                try:
-                    os.unlink(f)
-                except Exception:
-                    pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _download_background(url):
@@ -2504,7 +2504,13 @@ def update_track_tags():
                 update["artist"] = new_artist
             if new_title is not None:
                 update["title"] = new_title
-            col.update_one({"filename": resolved.name}, {"$set": update})
+            # Match by both filename AND folder to avoid updating the wrong
+            # document when two tracks in different folders share a filename.
+            rel_folder = str(resolved.parent.relative_to(Path(BASE_DOWNLOAD_DIR))).replace('\\', '/')
+            col.update_one(
+                {"filename": resolved.name, "folder": rel_folder},
+                {"$set": update},
+            )
         except Exception:
             pass
 
