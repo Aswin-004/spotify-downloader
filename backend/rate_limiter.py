@@ -34,6 +34,7 @@ except ImportError:
 # across all processes. Fall back to in-memory for local dev without Redis.
 
 _REDIS_URL = os.getenv("REDIS_URL", "")
+_IS_DEV = os.getenv("FLASK_ENV", "production") == "development"
 
 def _storage_uri() -> str:
     """Return Redis URI if reachable, else fall back to memory.
@@ -66,7 +67,6 @@ def _storage_uri() -> str:
 # ── Limiter instance ─────────────────────────────────────────────────────────
 # In development (FLASK_ENV=development or Redis unreachable locally) use very
 # high limits so artwork/folder-tags/preview requests don't get blocked.
-_IS_DEV = os.getenv("FLASK_ENV", "production") == "development"
 _STORAGE = _storage_uri()
 _IS_MEMORY = _STORAGE == "memory://"
 
@@ -89,7 +89,6 @@ LIMIT_DOWNLOAD   = "20 per hour"
 LIMIT_PLAYLIST   = "5 per hour"
 LIMIT_MAINTENANCE= "3 per hour"
 LIMIT_METADATA   = "60 per hour"
-LIMIT_READS      = "300 per hour"
 
 
 # ── Custom 429 error handler ─────────────────────────────────────────────────

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, production]
   pull_request:
     branches: [main, production]
 
@@ -30,15 +30,13 @@ jobs:
       - name: Build
         run: npx vite build
 
-      - name: Check bundle size (warn if JS > 1.5 MB gzipped)
+      - name: Check bundle size (warn if JS > 5 MB uncompressed)
         run: |
-          TOTAL=$(find dist/assets -name "*.js.gz" -exec wc -c {} + 2>/dev/null | tail -1 | awk '{print $1}')
-          if [ -z "$TOTAL" ]; then
-            # fallback: estimate from uncompressed
-            TOTAL=$(find dist/assets -name "*.js" -exec wc -c {} + | tail -1 | awk '{print $1}')
-            echo "Estimated JS bundle: ${TOTAL} bytes (uncompressed)"
-          else
-            echo "Total gzipped JS: ${TOTAL} bytes"
+          TOTAL=$(find dist/assets -name "*.js" -exec wc -c {} + 2>/dev/null | tail -1 | awk '{print $1}')
+          LIMIT=$((5 * 1024 * 1024))
+          echo "Total uncompressed JS: ${TOTAL} bytes"
+          if [ "${TOTAL:-0}" -gt "$LIMIT" ]; then
+            echo "::warning::JS bundle exceeds 5 MB uncompressed (${TOTAL} bytes) — consider code splitting"
           fi
 
   # ── Backend syntax ──────────────────────────────────────────────
