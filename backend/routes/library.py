@@ -548,3 +548,78 @@ def export_rekordbox():
     resp.headers["Content-Type"]        = "application/xml; charset=utf-8"
     resp.headers["Content-Disposition"] = f'attachment; filename="{safe_name}.xml"'
     return resp
+
+
+# ── Library Gap Analysis ──────────────────────────────────────────────────────
+
+@library_bp.route("/api/library/gaps", methods=["GET"])
+def library_gaps():
+    """
+    Analyse the Library folder and return a gap report:
+      • genre_counts   — {genre: track_count} for all Library/ sub-folders
+      • thin_genres    — genres with < 8 tracks (need more music)
+      • artist_counts  — {artist: track_count} across entire library (from ID3 tags)
+      • solo_artists   — artists with exactly 1 track in library (worth exploring)
+      • total_tracks   — total MP3 count in Library/
+    """
+    from mutagen.id3 import ID3 as _ID3, ID3NoHeaderError as _NoHeader
+    from collections import defaultdict
+
+    library_root = Path(BASE_DOWNLOAD_DIR) / "Library"
+    if not library_root.is_dir():
+        return jsonify({
+            "genre_counts": {}, "thin_genres": [],
+            "artist_counts": {}, "solo_artists": [],
+            "total_tracks": 0,
+        })
+
+    genre_counts: dict[str, int]  = defaultdict(int)
+    artist_counts: dict[str, int] = defaultdict(int)
+    total = 0
+
+    for mp3 in library_root.rglob("*.mp3"):
+        # Determine genre from direct parent folder name
+        try:
+            genre_rel = mp3.parent.relative_to(library_root)
+            genre = str(genre_rel).split(os.sep)[0] if str(genre_rel) != "." else "Uncategorized"
+        except ValueError:
+            genre = "Uncategorized"
+
+        genre_counts[genre] += 1
+        total += 1
+
+        # Extract artist from ID3 tags (fall back to filename heuristic)
+        try:
+            tags   = _ID3(str(mp3))
+            artist = str(tags.get("TPE1", "")).strip()
+        except (_NoHeader, Exception):
+            artist = ""
+
+        if not artist:
+            # "Song Title - Artist Name.mp3" convention
+            parts = mp3.stem.rsplit(" - ", 1)
+            artist = parts[-1].strip() if len(parts) == 2 else ""
+
+        if artist:
+            artist_counts[artist] += 1
+
+    THIN_THRESHOLD  = 8
+    SOLO_MAX_TRACKS = 1
+
+    thin_genres = sorted(
+        [{"genre": g, "count": c} for g, c in genre_counts.items() if c <= THIN_THRESHOLD],
+        key=lambda x: x["count"],
+    )
+    solo_artists = sorted(
+        [{"artist": a, "count": c} for a, c in artist_counts.items()
+         if c <= SOLO_MAX_TRACKS and a],
+        key=lambda x: x["artist"].lower(),
+    )[:50]  # cap at 50
+
+    return jsonify({
+        "genre_counts":  dict(sorted(genre_counts.items(), key=lambda x: -x[1])),
+        "thin_genres":   thin_genres,
+        "artist_counts": dict(sorted(artist_counts.items(), key=lambda x: -x[1])[:30]),
+        "solo_artists":  solo_artists,
+        "total_tracks":  total,
+    })

@@ -690,6 +690,156 @@ def download_stream_to_browser():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+# ── SoundCloud / Bandcamp direct URL download ─────────────────────────────────
+
+@app.route('/api/fetch-direct-metadata', methods=['POST'])
+@limiter.limit(LIMIT_READS)
+def fetch_direct_metadata():
+    """Extract title/artist/duration from a SoundCloud or Bandcamp URL via yt-dlp."""
+    import yt_dlp as _ytdlp
+    data = request.get_json() or {}
+    url = data.get('url', '').strip()
+    if not url:
+        return jsonify({"error": "URL required"}), 400
+    ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
+    try:
+        with _ytdlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if not info:
+            return jsonify({"error": "Could not extract metadata from URL"}), 400
+        return jsonify({
+            "title":     (info.get('title') or info.get('track') or '').strip(),
+            "artist":    (info.get('uploader') or info.get('artist') or '').strip(),
+            "duration":  int(info.get('duration', 0) or 0),
+            "thumbnail": info.get('thumbnail', ''),
+            "platform":  info.get('extractor_key', '').lower(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)[:120]}), 400
+
+
+@app.route('/api/download-direct', methods=['POST'])
+@limiter.limit(LIMIT_DOWNLOAD)
+def download_direct_url():
+    """Queue a SoundCloud/Bandcamp URL for direct download and library routing."""
+    overloaded, err = check_queue_overload()
+    if overloaded:
+        return jsonify(err), 503
+    data   = request.get_json() or {}
+    url    = data.get('url', '').strip()
+    title  = data.get('title', 'Unknown Track').strip()
+    artist = data.get('artist', 'Unknown Artist').strip()
+    if not url:
+        return jsonify({"error": "URL required"}), 400
+    with _active_downloads_lock:
+        if url in _active_downloads:
+            return jsonify({"status": "busy", "message": "Already downloading"}), 429
+        _active_downloads[url] = True
+    socketio.start_background_task(
+        target=_download_direct_background,
+        url=url, title=title, artist=artist,
+    )
+    return jsonify({"status": "started"}), 202
+
+
+def _download_direct_background(url, title, artist):
+    """Background worker: download SoundCloud/Bandcamp URL → route to Library."""
+    import tempfile, shutil as _shutil
+    import yt_dlp as _ytdlp
+    from services.genre_router import map_genre_string
+
+    socketio.emit('download_start', {'title': title, 'artist': artist, 'source': 'ingest'})
+    tmp_dir = tempfile.mkdtemp(prefix='directdl_')
+    try:
+        ffmpeg_bin = downloader_service._find_ffmpeg() or 'ffmpeg'
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': os.path.join(tmp_dir, '%(title)s.%(ext)s'),
+            'postprocessors': [{'key': 'FFmpegExtractAudio',
+                                'preferredcodec': 'mp3', 'preferredquality': '320'}],
+            'quiet': True, 'no_warnings': True,
+            'ffmpeg_location': ffmpeg_bin,
+        }
+        with _ytdlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+
+        mp3_files = list(Path(tmp_dir).glob('*.mp3'))
+        if not mp3_files:
+            raise RuntimeError("yt-dlp produced no MP3 file")
+
+        src_path  = mp3_files[0]
+        dl_title  = (info.get('title') or info.get('track') or title).strip()
+        dl_artist = (info.get('uploader') or info.get('artist') or artist).strip()
+
+        # ── Genre routing: artist_memory → MusicBrainz tag → Electronic ────
+        genre_folder = None
+        try:
+            from services.artist_memory_service import lookup_artist as _mem_lookup
+            from services.genre_router import normalize_genre, _library_path as _lib_p
+            rec = _mem_lookup(dl_artist)
+            if rec and rec.get('confidence', 0) >= 0.5:
+                mapped = _lib_p(normalize_genre(rec.get('genre', '')))
+                if mapped:
+                    genre_folder = mapped
+        except Exception:
+            pass
+
+        if not genre_folder and _tagger_available:
+            try:
+                report = tagger_tag_file(str(src_path), dl_title, dl_artist)
+                mb_genre = (report or {}).get('genre', '')
+                if mb_genre:
+                    genre_folder = map_genre_string(mb_genre)
+            except Exception:
+                pass
+
+        is_catchall = not bool(genre_folder)
+        if not genre_folder:
+            genre_folder = 'Library/Electronic'
+
+        dest_dir  = os.path.join(BASE_DOWNLOAD_DIR, genre_folder)
+        os.makedirs(dest_dir, exist_ok=True)
+        clean_name = sanitize_filename(f"{dl_title} - {dl_artist}.mp3")
+        dest_path  = os.path.join(dest_dir, clean_name)
+        if os.path.exists(dest_path):
+            stem, ext = os.path.splitext(clean_name)
+            dest_path  = os.path.join(dest_dir, f"{stem}_1{ext}")
+            clean_name = os.path.basename(dest_path)
+        _shutil.move(str(src_path), dest_path)
+
+        if is_catchall:
+            socketio.emit('download_needs_review', {
+                'title': dl_title, 'artist': dl_artist,
+                'confidence': 0, 'source': 'direct',
+            })
+        else:
+            socketio.emit('download_auto_classified', {
+                'title': dl_title, 'artist': dl_artist,
+                'folder': genre_folder, 'method': 'artist_memory',
+                'source': 'ingest',
+            })
+
+        socketio.emit('download_complete', {
+            'title': dl_title, 'artist': dl_artist,
+            'filename': clean_name, 'folder': genre_folder,
+            'source': 'ingest',
+        })
+        add_history_entry(dl_title, dl_artist, 'success', clean_name)
+        logger.info(f"[direct-dl] Done: {dl_title} → {genre_folder}/{clean_name}")
+
+    except Exception as e:
+        logger.error(f"[direct-dl] Failed for {url}: {e}")
+        socketio.emit('download_error', {
+            'title': title, 'artist': artist,
+            'error': str(e)[:100], 'source': 'ingest',
+        })
+        add_history_entry(title, artist, 'failed', '', str(e)[:100])
+    finally:
+        _shutil.rmtree(tmp_dir, ignore_errors=True)
+        with _active_downloads_lock:
+            _active_downloads.pop(url, None)
+
+
 def _download_background(url):
     """
     Background worker for downloading a single track, album, or playlist.

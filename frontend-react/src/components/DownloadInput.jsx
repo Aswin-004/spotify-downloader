@@ -1,10 +1,19 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, Music2, Disc3, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Loader2, Music2, Disc3, AlertTriangle, ArrowRight, Radio } from 'lucide-react';
 import { api, IS_CLOUD } from '@/services/api';
 import { formatDuration } from '@/lib/utils';
 
-const SPOTIFY_URL_RE = /open\.spotify\.com\/(track|album|playlist)\/[A-Za-z0-9]+/;
+const SPOTIFY_URL_RE    = /open\.spotify\.com\/(track|album|playlist)\/[A-Za-z0-9]+/;
+const SOUNDCLOUD_URL_RE = /soundcloud\.com\//i;
+const BANDCAMP_URL_RE   = /\.bandcamp\.com\//i;
+
+function detectUrlType(url) {
+  if (SPOTIFY_URL_RE.test(url))    return 'spotify';
+  if (SOUNDCLOUD_URL_RE.test(url)) return 'soundcloud';
+  if (BANDCAMP_URL_RE.test(url))   return 'bandcamp';
+  return null;
+}
 
 // Shared sharp-corner button style
 function cmdBtn(active, accent = '#8B5CF6') {
@@ -28,17 +37,27 @@ export default function DownloadInput() {
   const [downloading, setDownloading] = useState(false);
   const [error,       setError]       = useState('');
 
+  const urlType = detectUrlType(url.trim());
+  const isDirect = urlType === 'soundcloud' || urlType === 'bandcamp';
+
   async function handleFetch() {
-    if (!url.trim()) return;
-    if (!SPOTIFY_URL_RE.test(url.trim())) {
-      setError('Enter a valid Spotify track, album, or playlist URL');
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    const type = detectUrlType(trimmed);
+    if (!type) {
+      setError('Enter a Spotify, SoundCloud, or Bandcamp URL');
       return;
     }
     setLoading(true);
     setError('');
     setMetadata(null);
     try {
-      setMetadata(await api.fetchMetadata(url.trim()));
+      if (type === 'spotify') {
+        setMetadata({ ...(await api.fetchMetadata(trimmed)), _urlType: 'spotify' });
+      } else {
+        const m = await api.fetchDirectMetadata(trimmed);
+        setMetadata({ ...m, type: 'track', _urlType: type });
+      }
     } catch (err) {
       setError(err.message || 'Failed to fetch metadata');
     } finally {
@@ -51,23 +70,29 @@ export default function DownloadInput() {
     setDownloading(true);
     setError('');
     try {
-      const res = await api.downloadStream(url.trim());
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Download failed (${res.status})`);
+      if (metadata?._urlType === 'spotify') {
+        // Existing Spotify stream-to-browser flow
+        const res = await api.downloadStream(url.trim());
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `Download failed (${res.status})`);
+        }
+        const cd       = res.headers.get('Content-Disposition') || '';
+        const match    = cd.match(/filename[^;=\n]*=['"]?(.*?)['"]?(?:;|$)/);
+        const filename = match ? match[1] : `${metadata?.title || 'track'}.mp3`;
+        const blob     = await res.blob();
+        const objUrl   = URL.createObjectURL(blob);
+        const link     = document.createElement('a');
+        link.href      = objUrl;
+        link.download  = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(objUrl);
+      } else {
+        // SoundCloud / Bandcamp direct-to-library download
+        await api.downloadDirect(url.trim(), metadata?.title || '', metadata?.artist || '');
       }
-      const cd       = res.headers.get('Content-Disposition') || '';
-      const match    = cd.match(/filename[^;=\n]*=['"]?(.*?)['"]?(?:;|$)/);
-      const filename = match ? match[1] : `${metadata?.title || 'track'}.mp3`;
-      const blob     = await res.blob();
-      const objUrl   = URL.createObjectURL(blob);
-      const link     = document.createElement('a');
-      link.href      = objUrl;
-      link.download  = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(objUrl);
       setUrl('');
       setMetadata(null);
     } catch (err) {
@@ -117,12 +142,12 @@ export default function DownloadInput() {
             value={url}
             onChange={e => { setUrl(e.target.value); if (error) setError(''); }}
             onKeyDown={e => e.key === 'Enter' && handleFetch()}
-            placeholder="open.spotify.com/track/…"
+            placeholder="open.spotify.com/track/… · soundcloud.com/… · artist.bandcamp.com/…"
             disabled={loading}
             style={{
               flex: 1, height: 52, background: 'transparent', border: 'none',
               outline: 'none', color: 'var(--text-primary)',
-              fontSize: 13, fontFamily: 'ui-monospace, "SF Mono", monospace',
+              fontSize: 12, fontFamily: 'ui-monospace, "SF Mono", monospace',
               letterSpacing: '0.01em',
             }}
           />
@@ -148,14 +173,21 @@ export default function DownloadInput() {
           </button>
         </div>
 
-        {/* Type labels */}
-        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-          {['TRACK', 'ALBUM', 'PLAYLIST'].map(t => (
-            <span key={t} style={{
+        {/* Platform + type labels */}
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+          {[
+            { label: 'SPOTIFY TRACK', active: urlType === 'spotify' },
+            { label: 'SPOTIFY ALBUM', active: urlType === 'spotify' },
+            { label: 'SOUNDCLOUD',    active: urlType === 'soundcloud' },
+            { label: 'BANDCAMP',      active: urlType === 'bandcamp' },
+          ].map(({ label, active }) => (
+            <span key={label} style={{
               fontSize: 9, fontWeight: 700, letterSpacing: '0.12em',
-              color: 'var(--text-muted)', padding: '2px 6px',
-              border: '1px solid var(--border-subtle)', borderRadius: 2,
-            }}>{t}</span>
+              color: active ? 'var(--accent-cyan)' : 'var(--text-muted)',
+              padding: '2px 6px',
+              border: `1px solid ${active ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
+              borderRadius: 2, transition: 'color 0.15s, border-color 0.15s',
+            }}>{label}</span>
           ))}
         </div>
       </motion.div>
@@ -217,15 +249,19 @@ export default function DownloadInput() {
                       fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
                       color: 'var(--accent-emerald)', textTransform: 'uppercase',
                     }}>
-                      {metadata.type} FOUND
+                      {metadata._urlType !== 'spotify' ? 'TRACK FOUND' : `${metadata.type} FOUND`}
                     </span>
                     <span style={{
                       fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
-                      color: metadata.source === 'cache' ? 'var(--accent-amber)' : 'var(--text-muted)',
-                      background: metadata.source === 'cache' ? 'var(--accent-amber-dim)' : 'var(--surface-1)',
-                      padding: '1px 5px', borderRadius: 2,
+                      color: metadata._urlType !== 'spotify' ? 'var(--accent-cyan)'
+                           : metadata.source === 'cache' ? 'var(--accent-amber)' : 'var(--text-muted)',
+                      background: metadata._urlType !== 'spotify' ? 'rgba(6,182,212,0.12)'
+                                : metadata.source === 'cache' ? 'var(--accent-amber-dim)' : 'var(--surface-1)',
+                      padding: '1px 5px', borderRadius: 2, textTransform: 'uppercase',
                     }}>
-                      {metadata.source === 'cache' ? 'CACHED' : 'SPOTIFY'}
+                      {metadata._urlType !== 'spotify'
+                        ? metadata._urlType
+                        : metadata.source === 'cache' ? 'CACHED' : 'SPOTIFY'}
                     </span>
                   </div>
                   {/* Title */}
@@ -314,8 +350,26 @@ export default function DownloadInput() {
                 </div>
               )}
 
+              {/* Source badge for direct URLs */}
+              {metadata._urlType && metadata._urlType !== 'spotify' && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 7,
+                  padding: '6px 10px', marginBottom: 10, borderRadius: 2,
+                  background: 'rgba(6,182,212,0.07)',
+                  border: '1px solid rgba(6,182,212,0.2)',
+                }}>
+                  <Radio style={{ width: 12, height: 12, color: 'var(--accent-cyan)', flexShrink: 0 }} />
+                  <div style={{ fontSize: 11, color: 'var(--accent-cyan)' }}>
+                    <strong style={{ textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      {metadata._urlType}
+                    </strong>
+                    {' '}· Will be downloaded directly to your Library and auto-classified
+                  </div>
+                </div>
+              )}
+
               {/* Download CTA — local only */}
-              {IS_CLOUD ? (
+              {IS_CLOUD && metadata._urlType === 'spotify' ? (
                 <div style={{
                   display: 'flex', alignItems: 'flex-start', gap: 10,
                   padding: '10px 12px', borderRadius: 3,
@@ -342,11 +396,13 @@ export default function DownloadInput() {
                   {downloading
                     ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> DOWNLOADING…</>
                     : <>
-                        {metadata.type === 'album'
-                          ? 'DOWNLOAD ALL'
-                          : metadata.already_in_library
-                            ? 'DOWNLOAD AGAIN'
-                            : 'DOWNLOAD'}
+                        {metadata._urlType !== 'spotify'
+                          ? 'DOWNLOAD TO LIBRARY'
+                          : metadata.type === 'album'
+                            ? 'DOWNLOAD ALL'
+                            : metadata.already_in_library
+                              ? 'DOWNLOAD AGAIN'
+                              : 'DOWNLOAD'}
                         <ArrowRight style={{ width: 13, height: 13 }} />
                       </>}
                 </button>

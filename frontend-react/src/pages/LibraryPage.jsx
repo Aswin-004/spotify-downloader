@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Music, Search, ChevronRight, ChevronDown,
   AlertTriangle, RotateCw, Loader2, MoreHorizontal, FolderInput, X, Download,
-  Play, Pause, Tags, Pencil, Check,
+  Play, Pause, Tags, Pencil, Check, BarChart2, ExternalLink,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -86,6 +86,9 @@ export default function LibraryPage() {
   const [retagging, setRetagging] = useState(false);
   const [folderTags, setFolderTags] = useState({});   // { "Library/House": { "Song.mp3": {bpm,camelot_key,...} } }
   const { retagProgress } = useSocket();
+  const [gaps, setGaps]           = useState(null);
+  const [gapsLoading, setGapsLoading] = useState(false);
+  const [gapsOpen, setGapsOpen]   = useState(false);
 
   function handleTogglePlay(file, folderFiles) {
     if (nowPlaying?.path === file.path) { toggle(); return; }
@@ -224,6 +227,23 @@ export default function LibraryPage() {
   const totalFiles = files.length;
   const isKnownGenre = (name) => KNOWN_GENRES.has(name.toLowerCase());
 
+  async function loadGaps() {
+    setGapsLoading(true);
+    try {
+      const data = await api.getLibraryGaps();
+      setGaps(data);
+    } catch {
+      // silently fail — gaps are supplementary
+    } finally {
+      setGapsLoading(false);
+    }
+  }
+
+  function handleToggleGaps() {
+    if (!gapsOpen && !gaps) loadGaps();
+    setGapsOpen(v => !v);
+  }
+
   async function handleRetag() {
     setRetagging(true);
     try {
@@ -347,6 +367,146 @@ export default function LibraryPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Gap Analysis panel */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ ...ease, delay: 0.06 }}>
+        <button
+          onClick={handleToggleGaps}
+          style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '9px 14px', borderRadius: gapsOpen ? '4px 4px 0 0' : 4,
+            background: 'var(--surface-0)', border: '1px solid var(--border-subtle)',
+            cursor: 'pointer', color: 'var(--text-secondary)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <BarChart2 style={{ width: 14, height: 14, color: 'var(--accent-amber)' }} />
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace' }}>
+              Library Gap Analysis
+            </span>
+            {gaps && (
+              <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                {gaps.total_tracks} tracks · {gaps.thin_genres?.length ?? 0} thin genres · {gaps.solo_artists?.length ?? 0} solo artists
+              </span>
+            )}
+          </div>
+          <ChevronDown style={{
+            width: 13, height: 13, color: 'var(--text-muted)',
+            transform: gapsOpen ? 'rotate(180deg)' : 'none',
+            transition: 'transform 0.2s',
+          }} />
+        </button>
+
+        <AnimatePresence>
+          {gapsOpen && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              style={{
+                overflow: 'hidden', borderRadius: '0 0 4px 4px',
+                border: '1px solid var(--border-subtle)', borderTop: 'none',
+                background: 'var(--surface-0)',
+              }}
+            >
+              {gapsLoading ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '16px 14px' }}>
+                  <Loader2 style={{ width: 14, height: 14, color: 'var(--accent-amber)' }} className="animate-spin" />
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Scanning library…</span>
+                </div>
+              ) : gaps ? (
+                <div style={{ padding: '14px', display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+
+                  {/* Thin genres */}
+                  <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--accent-amber)', textTransform: 'uppercase', fontFamily: 'monospace', marginBottom: 8 }}>
+                      Thin Genres <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>≤ 8 tracks</span>
+                    </div>
+                    {gaps.thin_genres?.length === 0 ? (
+                      <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>All genres healthy ✓</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {gaps.thin_genres?.slice(0, 12).map(({ genre, count }) => (
+                          <div key={genre} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {genre}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                              <span style={{ fontSize: 9, fontFamily: 'monospace', color: 'var(--accent-amber)', fontWeight: 700 }}>{count}</span>
+                              <a
+                                href={`https://open.spotify.com/search/${encodeURIComponent(genre)}`}
+                                target="_blank" rel="noopener noreferrer"
+                                style={{ color: 'var(--accent-cyan)', display: 'flex' }}
+                                title={`Search Spotify for ${genre}`}
+                              >
+                                <ExternalLink style={{ width: 10, height: 10 }} />
+                              </a>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Top genres bar chart */}
+                  <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--accent-violet)', textTransform: 'uppercase', fontFamily: 'monospace', marginBottom: 8 }}>
+                      Genre Distribution
+                    </div>
+                    {Object.entries(gaps.genre_counts ?? {}).slice(0, 8).map(([genre, count]) => {
+                      const maxCount = Math.max(...Object.values(gaps.genre_counts ?? { _: 1 }));
+                      const pct = Math.round((count / maxCount) * 100);
+                      return (
+                        <div key={genre} style={{ marginBottom: 5 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                            <span style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{genre}</span>
+                            <span style={{ fontSize: 9, fontFamily: 'monospace', color: 'var(--text-muted)' }}>{count}</span>
+                          </div>
+                          <div style={{ height: 3, background: 'var(--surface-2)', borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent-violet)', borderRadius: 2, transition: 'width 0.5s ease' }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Solo artists */}
+                  <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--accent-cyan)', textTransform: 'uppercase', fontFamily: 'monospace', marginBottom: 8 }}>
+                      Solo Artists <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>only 1 track</span>
+                    </div>
+                    {gaps.solo_artists?.length === 0 ? (
+                      <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>No solo artists</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        {gaps.solo_artists?.slice(0, 12).map(({ artist }) => (
+                          <div key={artist} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {artist}
+                            </span>
+                            <a
+                              href={`https://open.spotify.com/search/${encodeURIComponent(artist)}`}
+                              target="_blank" rel="noopener noreferrer"
+                              style={{ color: 'var(--accent-cyan)', display: 'flex', flexShrink: 0 }}
+                              title={`Find more from ${artist} on Spotify`}
+                            >
+                              <ExternalLink style={{ width: 10, height: 10 }} />
+                            </a>
+                          </div>
+                        ))}
+                        {(gaps.solo_artists?.length ?? 0) > 12 && (
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>+{gaps.solo_artists.length - 12} more</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              ) : null}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
 
       {/* Search — terminal filter */}
       <motion.div

@@ -48,6 +48,24 @@ export const api = {
     });
   },
 
+  // Direct URL download (SoundCloud / Bandcamp) — metadata only
+  fetchDirectMetadata(url) {
+    return apiFetch('/api/fetch-direct-metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    }).then(handleResponse);
+  },
+
+  // Direct URL download (SoundCloud / Bandcamp) — queue download to Library
+  downloadDirect(url, title, artist) {
+    return apiFetch('/api/download-direct', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, title, artist }),
+    }).then(handleResponse);
+  },
+
   getFiles() {
     return apiFetch('/api/files').then(handleResponse);
   },
@@ -322,6 +340,10 @@ export const api = {
 
   getFolderTags(folder) {
     return apiFetch(`/api/files/folder-tags?folder=${encodeURIComponent(folder)}`).then(handleResponse);
+  },
+
+  getLibraryGaps() {
+    return apiFetch('/api/library/gaps').then(handleResponse);
   },
 
   updateTrackTags(path, { artist, title }) {
