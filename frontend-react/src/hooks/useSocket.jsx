@@ -372,7 +372,11 @@ export function SocketProvider({ children }) {
 
   const startMaintenance = useCallback((task) => {
     const label = _TASK_LABELS[task] || task;
-    setMaintenanceLogs([{ task, line: `Starting ${label}…`, done: false }]);
+    // Preserve other tasks' logs — only reset the current task's slot
+    setMaintenanceLogs(prev => [
+      ...prev.filter(e => e.task !== task),
+      { task, line: `Starting ${label}…`, done: false },
+    ]);
     setMaintenanceRunning(true);
   }, []);
 
@@ -380,8 +384,9 @@ export function SocketProvider({ children }) {
     setMaintenanceRunning(false);
   }, []);
 
-  const clearMaintenanceLogs = useCallback(() => {
-    setMaintenanceLogs([]);
+  // taskId = clear only that task's logs; omit = clear all
+  const clearMaintenanceLogs = useCallback((taskId) => {
+    setMaintenanceLogs(prev => taskId ? prev.filter(e => e.task !== taskId) : []);
   }, []);
 
   return (

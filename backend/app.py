@@ -151,26 +151,7 @@ MAX_HISTORY = 100
 _user_config_lock = threading.Lock()
 
 
-def load_existing_files():
-    """Scan BASE_DOWNLOAD_DIR recursively for all .mp3 files."""
-    files = []
-    if not os.path.isdir(BASE_DOWNLOAD_DIR):
-        return files
-    for root, _dirs, filenames in os.walk(BASE_DOWNLOAD_DIR):
-        for fname in filenames:
-            if fname.lower().endswith(".mp3"):
-                full = os.path.join(root, fname)
-                rel_folder = os.path.relpath(root, BASE_DOWNLOAD_DIR)
-                if rel_folder == ".":
-                    rel_folder = ""
-                files.append({
-                    "name": fname,
-                    "folder": rel_folder,
-                    "path": full,
-                    "mtime": os.path.getmtime(full)
-                })
-    files.sort(key=lambda f: f["mtime"], reverse=True)
-    return files
+from routes.library import _load_existing_files as load_existing_files
 
 
 def seed_history_from_disk():

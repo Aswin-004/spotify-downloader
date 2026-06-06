@@ -96,6 +96,15 @@ function TaskCard({ task, activeTask, onRun, running, logs, devMode }) {
   const lastLog = useMemo(() => myLogs[myLogs.length - 1], [myLogs]);
   const isDone  = useMemo(() => Boolean(lastLog?.done), [lastLog]);
   const exitOk  = useMemo(() => isDone && lastLog?.exit_code === 0, [isDone, lastLog]);
+  // Last few meaningful lines shown in simple-mode summary after completion
+  const summaryLines = useMemo(() => {
+    if (!isDone || myLogs.length < 2) return [];
+    return myLogs
+      .slice(0, -1)   // exclude the "✓ Done" line itself
+      .slice(-4)      // last 4 output lines
+      .map(e => e.line)
+      .filter(l => l && !l.startsWith('▶ Started') && !l.startsWith('Starting '));
+  }, [isDone, myLogs]);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -311,14 +320,36 @@ function TaskCard({ task, activeTask, onRun, running, logs, devMode }) {
                     exitOk ? (
                       <>
                         <CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-emerald)' }} />
-                        <span className="text-12" style={{ color: 'var(--accent-emerald)' }}>Completed successfully</span>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-12" style={{ color: 'var(--accent-emerald)' }}>Completed successfully</span>
+                          {summaryLines.length > 0 && (
+                            <div className="mt-1 space-y-0.5">
+                              {summaryLines.map((line, i) => (
+                                <div key={i} className="font-mono leading-4"
+                                     style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {line}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </>
                     ) : (
                       <>
                         <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-rose)' }} />
-                        <span className="text-12" style={{ color: 'var(--accent-rose)' }}>
-                          Finished with errors — enable Developer mode for details
-                        </span>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-12" style={{ color: 'var(--accent-rose)' }}>
+                            Finished with errors — enable Developer mode for details
+                          </span>
+                          {summaryLines.length > 0 && (
+                            <div className="mt-1">
+                              <div className="font-mono leading-4"
+                                   style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {summaryLines[summaryLines.length - 1]}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </>
                     )
                   ) : null}
@@ -369,7 +400,7 @@ export default function MaintenancePage() {
 
   async function handleRun(taskId, opts) {
     setError('');
-    clearMaintenanceLogs();
+    clearMaintenanceLogs(taskId);   // only clear THIS task's previous logs
     setActiveTask(taskId);
     startMaintenance(taskId);
     try {
@@ -382,7 +413,7 @@ export default function MaintenancePage() {
       setError(safeMsg);
       setActiveTask(null);
       stopMaintenance();
-      clearMaintenanceLogs();
+      clearMaintenanceLogs(taskId);
     }
   }
 
@@ -410,10 +441,9 @@ export default function MaintenancePage() {
           onClick={toggleDevMode}
           title={devMode ? 'Disable developer mode' : 'Enable developer mode (shows raw logs and advanced options)'}
           className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0 transition-all duration-200 cursor-pointer focus-ring"
-          style={{ borderRadius: 4 }}
           style={devMode
-            ? { background: 'var(--accent-violet-dim)', border: '1px solid rgba(139,92,246,0.35)', color: 'var(--accent-violet)' }
-            : { background: 'var(--surface-1)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }
+            ? { borderRadius: 4, background: 'var(--accent-violet-dim)', border: '1px solid rgba(139,92,246,0.35)', color: 'var(--accent-violet)' }
+            : { borderRadius: 4, background: 'var(--surface-1)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }
           }
         >
           <Code2 className="w-3.5 h-3.5" />
@@ -427,8 +457,7 @@ export default function MaintenancePage() {
           <motion.div
             initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
             className="flex items-center gap-3 px-4 py-3"
-            style={{ borderRadius: 4 }}
-            style={{ background: 'var(--accent-cyan-dim)', border: '1px solid rgba(6,182,212,0.2)' }}
+            style={{ borderRadius: 4, background: 'var(--accent-cyan-dim)', border: '1px solid rgba(6,182,212,0.2)' }}
           >
             <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: 'var(--accent-cyan)' }} />
             <span className="text-13" style={{ color: 'var(--accent-cyan)' }}>
@@ -444,8 +473,7 @@ export default function MaintenancePage() {
           <motion.div
             initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             className="flex items-center gap-3 px-4 py-3"
-            style={{ borderRadius: 4 }}
-            style={{ background: 'var(--accent-rose-dim)', border: '1px solid rgba(244,63,94,0.2)' }}
+            style={{ borderRadius: 4, background: 'var(--accent-rose-dim)', border: '1px solid rgba(244,63,94,0.2)' }}
           >
             <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-rose)' }} />
             <span className="text-13" style={{ color: 'var(--text-secondary)' }}>{error}</span>

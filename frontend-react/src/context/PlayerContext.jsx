@@ -21,29 +21,28 @@ export function PlayerProvider({ children }) {
   const [queueIndex,  setQueueIndex]  = useState(-1);
 
   // Core: load a track and start playing.
-  // Awaits any in-flight play() promise before switching src — prevents
-  // AbortError on mobile browsers when tracks are changed rapidly.
   const _load = useCallback((track, index) => {
     const audio = audioRef.current;
     if (!audio || !track?.audioUrl) return;
 
-    const doLoad = () => {
-      audio.src = track.audioUrl;
-      audio.load();
-      playPromiseRef.current = audio.play().catch(() => {});
-      setNowPlaying(track);
-      setCurrentTime(0);
-      setDuration(0);
-      setQueueIndex(index);
-      idxRef.current = index;
-    };
+    // Immediately cancel any in-flight play() by pausing — the previous
+    // play() promise rejects with AbortError, caught by its own .catch().
+    audio.pause();
+    audio.src = track.audioUrl;
+    audio.load();
 
-    // If a play() is in flight, let it settle first (ignore outcome)
-    if (playPromiseRef.current) {
-      playPromiseRef.current.then(doLoad, doLoad);
-    } else {
-      doLoad();
-    }
+    setNowPlaying(track);
+    setCurrentTime(0);
+    setDuration(0);
+    setQueueIndex(index);
+    idxRef.current = index;
+
+    playPromiseRef.current = audio.play().catch((err) => {
+      // NotAllowedError = browser autoplay policy; user can click Play in the bar
+      if (err.name !== 'NotAllowedError') {
+        console.warn('[player]', err.name, err.message);
+      }
+    });
   }, []);
 
   // Create audio element once, wire all events
@@ -64,12 +63,17 @@ export function PlayerProvider({ children }) {
         setPlaying(false);
       }
     };
+    const onError = () => {
+      const e = audio.error;
+      if (e) console.warn('[player] audio load error:', e.code, e.message, audio.src.slice(0, 120));
+    };
 
     audio.addEventListener('timeupdate',     onTime);
     audio.addEventListener('durationchange', onDur);
     audio.addEventListener('play',           onPlay);
     audio.addEventListener('pause',          onPause);
     audio.addEventListener('ended',          onEnded);
+    audio.addEventListener('error',          onError);
 
     return () => {
       audio.pause();
@@ -79,6 +83,7 @@ export function PlayerProvider({ children }) {
       audio.removeEventListener('play',           onPlay);
       audio.removeEventListener('pause',          onPause);
       audio.removeEventListener('ended',          onEnded);
+      audio.removeEventListener('error',          onError);
     };
   }, [_load]);
 

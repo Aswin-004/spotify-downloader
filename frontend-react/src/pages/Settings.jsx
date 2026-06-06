@@ -330,8 +330,7 @@ export default function Settings() {
         <motion.div
           initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
           className="flex items-start gap-3 px-4 py-3"
-            style={{ borderRadius: 4 }}
-          style={{ background: 'var(--accent-amber-dim)', border: '1px solid rgba(245,158,11,0.25)' }}
+          style={{ borderRadius: 4, background: 'var(--accent-amber-dim)', border: '1px solid rgba(245,158,11,0.25)' }}
         >
           <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--accent-amber)' }} />
           <p className="text-13" style={{ color: 'var(--text-secondary)' }}>
@@ -500,9 +499,8 @@ export default function Settings() {
               exit={{ opacity: 0, height: 0 }}
               className="overflow-hidden mt-3"
             >
-              <div style={{ borderRadius: 4, padding: '14px 16px' }}
-                   className="space-y-4"
-                   style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+              <div style={{ borderRadius: 4, padding: '14px 16px', background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+                   className="space-y-4">
                 <div>
                   <Label>AcoustID Key <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>— Audio fingerprint matching. Free at acoustid.org/api-key</span></Label>
                   <SecretInput

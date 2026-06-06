@@ -633,6 +633,7 @@ export default function LibraryPage() {
                                       style={{
                                         color: nowPlaying?.path === file.path ? 'var(--accent-violet)' : 'var(--text-muted)',
                                         background: nowPlaying?.path === file.path ? 'var(--accent-violet-dim)' : 'transparent',
+                                        ...(nowPlaying?.path === file.path ? { opacity: 1 } : {}),
                                       }}
                                       onMouseEnter={e => { if (nowPlaying?.path !== file.path) { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--accent-violet)'; }}}
                                       onMouseLeave={e => { if (nowPlaying?.path !== file.path) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}}
