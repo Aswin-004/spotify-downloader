@@ -260,8 +260,7 @@ export default function ReviewPage() {
       {needsReviewItems.length === 0 && !retryAllProgress && (
         <motion.div
           {...fadeUp}
-          className="flex flex-col items-center justify-center py-20 rounded-2xl text-center"
-          style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+          className="glass-card flex flex-col items-center justify-center py-20 text-center"
         >
           <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4"
                style={{ background: 'var(--accent-emerald-dim)' }}>
@@ -279,16 +278,16 @@ export default function ReviewPage() {
         <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
 
           {/* Left: track list */}
-          <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 4, overflow: 'hidden' }}>
+          <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
             {/* Header */}
             <div style={{
-              padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)',
+              padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             }}>
               <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace', color: 'var(--text-secondary)' }}>
                 PENDING
               </span>
-              <span style={{ fontSize: 11, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: 'var(--accent-amber)' }}>
+              <span className="tbl-badge badge-amber">
                 {needsReviewItems.length}
               </span>
             </div>
@@ -307,13 +306,13 @@ export default function ReviewPage() {
                       style={{
                         width: '100%', display: 'flex', alignItems: 'center', gap: 10,
                         padding: '8px 12px 8px 0', paddingLeft: 12,
-                        background: isSelected ? 'rgba(245,158,11,0.06)' : 'transparent',
+                        background: isSelected ? 'var(--glass-strong)' : 'transparent',
                         borderBottom: '1px solid var(--border-subtle)',
                         borderLeft: `3px solid ${isSelected ? 'var(--accent-amber)' : 'transparent'}`,
                         border: 'none', cursor: 'pointer', textAlign: 'left',
                         transition: 'background 0.1s, border-color 0.1s',
                       }}
-                      onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--surface-0)'; }}
+                      onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--glass-subtle)'; }}
                       onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
                     >
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -341,7 +340,8 @@ export default function ReviewPage() {
                 animate={{ opacity: 1, x: 0  }}
                 exit={{ opacity: 0, x: -16   }}
                 transition={ease}
-                style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}
+                className="glass-card"
+                style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}
               >
                 {/* Track info */}
                 <div className="flex items-start gap-4">
@@ -506,8 +506,8 @@ export default function ReviewPage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             transition={ease}
-            className="rounded-xl overflow-hidden"
-            style={{ background: 'var(--surface-0)', border: '1px solid rgba(6,182,212,0.2)' }}
+            className="glass-card"
+            style={{ padding: 0, overflow: 'hidden' }}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3"
@@ -517,8 +517,7 @@ export default function ReviewPage() {
                 <span className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>
                   Duplicate Files
                 </span>
-                <span className="text-11 font-mono px-2 py-0.5 rounded-full"
-                      style={{ background: 'var(--accent-cyan-dim)', color: 'var(--accent-cyan)' }}>
+                <span className="tbl-badge badge-cyan">
                   {duplicates.length}
                 </span>
               </div>
@@ -528,29 +527,26 @@ export default function ReviewPage() {
             </div>
 
             {/* Rows */}
-            <div className="divide-y" style={{ '--tw-divide-opacity': 1 }}>
+            <div className="px-2 pb-2">
               {duplicates.map(dup => (
                 <motion.div
                   key={dup.filename}
                   layout
                   exit={{ opacity: 0, height: 0 }}
                   transition={{ duration: 0.18 }}
-                  className="flex items-center gap-3 px-4 py-3"
-                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  className="tbl-row"
                 >
                   {/* Icon */}
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                       style={{ background: 'var(--accent-cyan-dim)' }}>
+                  <div className="tbl-thumb" style={{ width: 32, height: 32, background: 'linear-gradient(135deg, var(--accent-cyan-dim), transparent)' }}>
                     <Music className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
                   </div>
 
                   {/* Info */}
                   <div className="flex-1 min-w-0">
-                    <p className="text-13 font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                    <p className="tbl-name truncate">
                       {dup.title}
                     </p>
-                    <p className="text-10 truncate font-mono" style={{ color: 'var(--text-muted)' }}>
+                    <p className="tbl-artist truncate font-mono">
                       {dup.artist && <span className="mr-2">{dup.artist}</span>}
                       {dup.filename}
                     </p>
@@ -614,8 +610,7 @@ export default function ReviewPage() {
       {skippedTracks && skippedTracks.total > 0 && (
         <motion.div
           {...fadeUp}
-          className="rounded-xl p-4 space-y-3"
-          style={{ background: 'var(--surface-0)', border: '1px solid rgba(244,63,94,0.2)' }}
+          className="glass-card space-y-3"
         >
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">

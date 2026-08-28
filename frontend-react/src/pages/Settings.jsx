@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { api } from '@/services/api';
 import { useToast } from '@/components/ui/toast';
 import { ease } from '@/lib/motion';
+import { cn } from '@/lib/utils';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -44,9 +45,9 @@ function SectionCard({ icon: Icon, accent, title, desc, children, delay = 0 }) {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ ...ease, delay }}
+      className="glass-card"
       style={{
-        background: 'var(--surface-0)', border: '1px solid var(--border-subtle)',
-        borderLeft: `3px solid ${accent}`, borderRadius: 4, padding: '16px 18px',
+        borderLeft: `3px solid ${accent}`,
         display: 'flex', flexDirection: 'column', gap: 16,
       }}
     >
@@ -87,7 +88,7 @@ function DenseModeCard() {
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ ...ease, delay: 0.22 }}
-      style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '16px 18px' }}
+      className="glass-card"
     >
       <div className="flex items-center justify-between">
         <div className="flex items-start gap-3">
@@ -99,16 +100,7 @@ function DenseModeCard() {
             </p>
           </div>
         </div>
-        <div
-          onClick={toggle}
-          className="w-10 h-6 rounded-full relative transition-colors duration-200 cursor-pointer flex-shrink-0"
-          style={{ background: compact ? 'var(--accent-violet)' : 'var(--surface-2)' }}
-        >
-          <div
-            className="absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200"
-            style={{ transform: compact ? 'translateX(20px)' : 'translateX(4px)' }}
-          />
-        </div>
+        <div onClick={toggle} className={cn('toggle', compact && 'on')} />
       </div>
     </motion.div>
   );
@@ -329,8 +321,8 @@ export default function Settings() {
       {cfg && !cfg._setup_complete && (
         <motion.div
           initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-          className="flex items-start gap-3 px-4 py-3"
-          style={{ borderRadius: 4, background: 'var(--accent-amber-dim)', border: '1px solid rgba(245,158,11,0.25)' }}
+          className="glass-card flex items-start gap-3"
+          style={{ background: 'var(--accent-amber-dim)', border: '1px solid rgba(245,158,11,0.25)' }}
         >
           <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--accent-amber)' }} />
           <p className="text-13" style={{ color: 'var(--text-secondary)' }}>
@@ -467,10 +459,10 @@ export default function Settings() {
 
       {/* Save button */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.18 }}>
-        <Button onClick={handleSave} disabled={saving} className="w-full h-11 text-13 font-semibold">
+        <button onClick={handleSave} disabled={saving} className="btn-p w-full" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, fontSize: 13 }}>
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           {saving ? 'Saving…' : 'Save All Settings'}
-        </Button>
+        </button>
         <p className="text-11 text-center mt-2" style={{ color: 'var(--text-muted)' }}>
           Changes apply immediately — no restart needed.
         </p>
@@ -499,8 +491,7 @@ export default function Settings() {
               exit={{ opacity: 0, height: 0 }}
               className="overflow-hidden mt-3"
             >
-              <div style={{ borderRadius: 4, padding: '14px 16px', background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
-                   className="space-y-4">
+              <div className="glass-card space-y-4">
                 <div>
                   <Label>AcoustID Key <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>— Audio fingerprint matching. Free at acoustid.org/api-key</span></Label>
                   <SecretInput
@@ -563,10 +554,10 @@ export default function Settings() {
                 return (
                   <div
                     key={o.artist_key}
-                    className="flex items-center gap-2 py-2 px-3 rounded-lg transition-colors duration-150 group/rule"
-                    style={{ background: 'var(--surface-1)' }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-1)'}
+                    className="setting-row gap-2 group/rule"
+                    style={{ transition: 'background 0.15s' }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--glass-subtle)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-0)'}
                   >
                     <div className="flex-1 min-w-0">
                       <span className="text-12 font-medium truncate block" style={{ color: 'var(--text-primary)' }}>
@@ -652,8 +643,8 @@ export default function Settings() {
             <p className="text-11 font-medium" style={{ color: 'var(--text-tertiary)' }}>Saved mappings:</p>
             {mappings.map(m => (
               <div key={m.folder_name} className="flex items-center gap-2">
-                <div className="flex-1 text-11 font-mono truncate px-3 py-2 rounded-lg min-w-0"
-                     style={{ background: 'var(--surface-1)', color: 'var(--text-secondary)' }}>
+                <div className="flex-1 text-11 font-mono truncate min-w-0"
+                     style={{ background: 'var(--glass-default)', border: '1px solid var(--border-subtle)', borderRadius: 8, padding: '7px 12px', color: 'var(--text-secondary)' }}>
                   {m.folder_name}
                 </div>
                 <span className="text-10 flex-shrink-0" style={{ color: 'var(--text-muted)' }}>→</span>

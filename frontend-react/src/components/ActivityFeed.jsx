@@ -29,6 +29,11 @@ export default function ActivityFeed({ onClose }) {
     return [...live, ...history];
   }, [downloads, history]);
 
+  const latestCompleted = useMemo(
+    () => events.find(e => e.status === 'success' || e.status === 'completed'),
+    [events]
+  );
+
   const isAutoActive = autoStatus.status === 'downloading' || autoStatus.status === 'checking';
 
   return (
@@ -117,30 +122,28 @@ export default function ActivityFeed({ onClose }) {
                   layout
                   {...slideInRight}
                   transition={{ duration: 0.2, delay: Math.min(i * 0.025, 0.18) }}
-                  className="flex items-start gap-2.5 px-2 py-2 rounded-lg transition-colors group cursor-default"
+                  className="pl-item"
                   style={{
                     borderLeft: item._live && item.status === 'downloading'
                       ? '2px solid var(--accent-cyan)'
                       : '2px solid transparent',
                   }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-0)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                 >
                   {/* Status icon */}
-                  <div className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5"
-                       style={{ background: `${cfg.accent}18` }}>
+                  <div className="pl-thumb"
+                       style={{ width: 28, height: 28, background: `linear-gradient(135deg, ${cfg.accent}33, ${cfg.accent}10)` }}>
                     <Icon
-                      className={cn('w-3 h-3', cfg.spin && 'animate-spin')}
+                      className={cn('w-3.5 h-3.5', cfg.spin && 'animate-spin')}
                       style={{ color: cfg.accent }}
                     />
                   </div>
 
                   {/* Content */}
                   <div className="flex-1 min-w-0">
-                    <p className="text-12 font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                    <p className="pl-name truncate">
                       {item.title}
                     </p>
-                    <p className="text-11 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                    <p className="pl-meta truncate">
                       {item.artist}
                     </p>
                     {item.status === 'failed' && item.error && (
@@ -162,6 +165,24 @@ export default function ActivityFeed({ onClose }) {
           </AnimatePresence>
         )}
       </div>
+
+      {/* Latest completed */}
+      {latestCompleted && (
+        <div className="p-2 flex-shrink-0" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+          <div className="glass-card">
+            <p className="text-label mb-2">Latest Completed</p>
+            <div className="flex items-center gap-2.5">
+              <div className="pl-thumb" style={{ width: 36, height: 36, background: `linear-gradient(135deg, ${STATUS.completed.accent}40, ${STATUS.completed.accent}10)` }}>
+                <CheckCircle2 className="w-4 h-4" style={{ color: STATUS.completed.accent }} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="pl-name truncate">{latestCompleted.title}</p>
+                <p className="pl-meta truncate">{latestCompleted.artist}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

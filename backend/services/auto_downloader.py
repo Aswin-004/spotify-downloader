@@ -436,6 +436,146 @@ def _process_retry_queue():
             mf.write_text(json.dumps(data, indent=2))
 
 
+# ── INDEX RECOVERY (P0) — hardening for silent library_index write failures ──
+# Distinct from the retry queue above: that queue is specifically for MOVE
+# failures, where the staged file has NOT yet reached its final destination.
+# An index-write failure is the opposite shape — the download succeeded and
+# the file IS already sitting at final_path; only the library_index write
+# failed. Reusing _write_retry_manifest/_process_retry_queue for this would be
+# unsafe: _process_retry_queue() discards any manifest whose staged_path no
+# longer exists, which is *always* true here (the staged file was already
+# moved away by the time an index-write failure can even occur). A separate,
+# minimal queue avoids that mismatch instead of overloading the move-retry one.
+
+INDEX_QUEUE_DIR = Path(STAGING_FOLDER).parent / ".index_queue"
+MAX_INDEX_RETRY_ATTEMPTS = 5
+
+
+def _write_index_recovery_manifest(identity_key: str, spotify_id: str, title: str,
+                                    artist: str, filename: str, final_path: str,
+                                    genre_folder: str, genre_confidence: float,
+                                    duration_ms=None):
+    """Persist enough to safely retry a failed library_index write later.
+
+    The downloaded file itself is never touched by this — it only records what
+    index_track() needs in order to be called again. Safe to replay any number
+    of times: index_track() is an upsert keyed on identity_key (the collection's
+    only unique index), so a replay can never create a duplicate index document.
+    """
+    try:
+        INDEX_QUEUE_DIR.mkdir(exist_ok=True)
+        manifest = {
+            "identity_key": identity_key,
+            "spotify_id": spotify_id or "",
+            "title": title or "",
+            "artist": artist or "",
+            "filename": filename or "",
+            "final_path": final_path or "",
+            "genre_folder": genre_folder or "",
+            "genre_confidence": genre_confidence or 0.0,
+            "duration_ms": duration_ms,
+            "attempt_count": 0,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        mf_name = f"{int(time.time())}_{spotify_id or 'unknown'}.json"
+        (INDEX_QUEUE_DIR / mf_name).write_text(json.dumps(manifest, indent=2))
+        logger.info(f"[ingest] Index-recovery manifest written: {mf_name}")
+    except Exception as _e:
+        logger.warning(f"[ingest] Failed to write index-recovery manifest: {_e}")
+
+
+def _process_index_queue():
+    """
+    Replay pending index-recovery manifests from .index_queue/.
+
+    Called at the start of each ingest_download cycle, alongside
+    _process_retry_queue(). For each manifest:
+      - if final_path no longer exists on disk, discard it — there is nothing
+        left to safely index (the file may have been manually moved/removed).
+      - if identity_key is already indexed, discard it — already resolved,
+        whether by a prior replay that crashed before cleanup, a manual
+        repair, or any other writer.
+      - otherwise, retry index_track() with the recorded fields.
+
+    Manifests that still fail after MAX_INDEX_RETRY_ATTEMPTS are moved to
+    .index_queue/dead/, mirroring the existing retry-queue convention — never
+    deleted, so a persistently-failing case stays inspectable.
+    """
+    if not INDEX_QUEUE_DIR.is_dir():
+        return
+    manifests = list(INDEX_QUEUE_DIR.glob("*.json"))
+    if not manifests:
+        return
+    logger.info(f"[ingest] Index-recovery queue: {len(manifests)} pending manifest(s)")
+
+    from database import index_track as _idx, is_indexed as _is_indexed
+    from services.dedup_service import content_hash as _ch
+
+    for mf in manifests:
+        try:
+            data = json.loads(mf.read_text())
+        except Exception as _e:
+            logger.warning(f"[ingest] Bad index-recovery manifest {mf.name}: {_e}")
+            continue
+
+        identity_key = data.get("identity_key", "")
+        final_path = data.get("final_path", "")
+        if not identity_key or not final_path:
+            mf.unlink(missing_ok=True)
+            continue
+
+        if not os.path.isfile(final_path):
+            logger.warning(
+                f"[ingest] Index-recovery {mf.name}: final file missing "
+                f"({final_path}) — discarding, nothing left to index"
+            )
+            mf.unlink(missing_ok=True)
+            continue
+
+        try:
+            if _is_indexed(identity_key):
+                logger.info(f"[ingest] Index-recovery {mf.name}: already indexed — discarding")
+                mf.unlink(missing_ok=True)
+                continue
+        except Exception as _chk_err:
+            logger.warning(f"[ingest] Index-recovery {mf.name}: is_indexed() check failed: {_chk_err}")
+            # Fall through and attempt the upsert anyway — it's safe even if
+            # the track turns out to already be indexed (upsert, not insert).
+
+        attempt_count = data.get("attempt_count", 0)
+        if attempt_count >= MAX_INDEX_RETRY_ATTEMPTS:
+            dead_dir = INDEX_QUEUE_DIR / "dead"
+            dead_dir.mkdir(exist_ok=True)
+            mf.rename(dead_dir / mf.name)
+            logger.warning(
+                f"[ingest] Index-recovery {mf.name}: exceeded {MAX_INDEX_RETRY_ATTEMPTS} "
+                f"attempts — moved to dead/"
+            )
+            continue
+
+        try:
+            _idx(
+                identity_key=identity_key,
+                spotify_id=data.get("spotify_id", ""),
+                content_hash=_ch(data.get("title", ""), data.get("artist", ""), data.get("duration_ms")),
+                title=data.get("title", ""),
+                artist=data.get("artist", ""),
+                filename=data.get("filename", ""),
+                final_path=final_path,
+                genre_folder=data.get("genre_folder", ""),
+                genre_confidence=data.get("genre_confidence", 0.0),
+            )
+            logger.info(f"[ingest] Index-recovery succeeded: {mf.name} ({identity_key})")
+            mf.unlink(missing_ok=True)
+        except Exception as _re:
+            logger.warning(
+                f"[ingest] Index-recovery {mf.name} attempt {attempt_count + 1} failed: "
+                f"{type(_re).__name__}: {_re}"
+            )
+            data["attempt_count"] = attempt_count + 1
+            mf.write_text(json.dumps(data, indent=2))
+
+
 def ingest_download(download_dir=None, force_folder=None, force_redownload=False):
     """Download new tracks from the ingest playlist with parallel workers.
 
@@ -461,6 +601,13 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
         _process_retry_queue()
     except Exception as _rq_err:
         logger.warning(f"[ingest] Retry queue processing failed: {_rq_err}")
+
+    # INDEX RECOVERY (P0) — replay any pending manifests from previous failed
+    # library_index writes (download succeeded, index write did not).
+    try:
+        _process_index_queue()
+    except Exception as _iq_err:
+        logger.warning(f"[ingest] Index-recovery queue processing failed: {_iq_err}")
 
     # Skip if globally rate-limited
     if is_rate_limited():
@@ -767,6 +914,25 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                         f"(Spotify conf={genre_confidence:.2f}, Gemini unavail)"
                                     )
 
+                # Every routing branch above except the plain Electronic catch-all
+                # returns a "Library/..." forward-slash path (genre_router.py's
+                # _library_path()/map_genre_string()/Gemini-fallback convention —
+                # confirmed: os.path.join(BASE_DOWNLOAD_DIR, "Library/Bollywood")
+                # on Windows does NOT normalize the slash inside the second
+                # argument, so final_folder ends up mixed-separator, e.g.
+                # "C:\Users\...\DJ music\Library/Bollywood". The move/os.makedirs
+                # calls below still work (Windows tolerates '/' in paths), but the
+                # exact-string final_path written to library_index a few lines
+                # down never matches the all-backslash paths produced by
+                # pathlib/os.walk in reconcile_library_state.py or repair_index.py
+                # — every such track is misreported as "orphaned" even though it
+                # has a valid (if oddly-formatted) index entry. Confirmed live:
+                # 9 tracks downloaded via this exact path tonight (2026-08-25)
+                # showed up as orphans in repair_index.py --dry-run. normpath()
+                # collapses this to a clean native path without touching which
+                # file it points to.
+                final_folder = os.path.normpath(final_folder)
+
                 os.makedirs(final_folder, exist_ok=True)
 
                 # PASS 3: Move from staging to final folder
@@ -917,7 +1083,27 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                         except Exception as _techno_err:
                             logger.debug(f"[ingest] Techno BPM re-analysis skipped: {_techno_err}")
                 except Exception as _idx_err:
-                    logger.warning(f"[ingest] library_index write failed: {_idx_err}")
+                    _idx_genre_folder = locals().get("_genre_folder", "")
+                    logger.error(
+                        "[ingest] library_index write FAILED — file is saved on disk but NOT "
+                        "in library_index (not dedup-safe, not searchable) | "
+                        f"op=database.index_track()->library_index.update_one(upsert=True) "
+                        f"exc_type={type(_idx_err).__name__} exc_msg={_idx_err} "
+                        f"title={title!r} artist={artist!r} spotify_id={tid!r} "
+                        f"identity_key={track_key!r} final_path={final_filepath!r} "
+                        f"genre_folder={_idx_genre_folder!r}"
+                    )
+                    _write_index_recovery_manifest(
+                        identity_key=track_key,
+                        spotify_id=tid,
+                        title=title,
+                        artist=artist,
+                        filename=result.get("filename", ""),
+                        final_path=final_filepath,
+                        genre_folder=_idx_genre_folder,
+                        genre_confidence=genre_confidence,
+                        duration_ms=track_info.get("duration_ms"),
+                    )
                 _routing_label = (
                     "Needs Sorting" if "NeedsReview" in _genre_folder
                     else "Unclassified" if "Electronic" in _genre_folder and _is_catchall

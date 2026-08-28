@@ -122,53 +122,41 @@ function TaskCard({ task, activeTask, onRun, running, logs, devMode }) {
 
   return (
     <motion.div
+      className="glass-card"
       style={{
-        background: 'var(--surface-0)',
         border: `1px solid ${isRunningMe ? task.border : 'var(--border-subtle)'}`,
         borderLeft: `3px solid ${isRunningMe ? task.accent : task.border}`,
-        borderRadius: 4, overflow: 'hidden',
         boxShadow: isRunningMe ? `0 0 12px ${task.accent}22` : 'none',
-        transition: 'border-color 0.3s, box-shadow 0.3s',
+        transition: 'border-color 0.3s, box-shadow 0.3s, background 0.2s',
       }}
     >
-      <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {/* Header */}
         <div className="flex items-start gap-3">
-          <Icon
-            className={cn('w-4 h-4 flex-shrink-0 mt-0.5', isRunningMe && 'animate-spin')}
-            style={{ color: task.accent }}
-          />
+          <div className="task-ic" style={{ background: task.dim }}>
+            <Icon
+              className={cn('w-4 h-4', isRunningMe && 'animate-spin')}
+              style={{ color: task.accent }}
+            />
+          </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
-              <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+              <h3 className="task-name">
                 {task.title}
               </h3>
               {isRunningMe && (
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
-                  padding: '2px 6px', borderRadius: 2,
-                  background: 'var(--accent-cyan-dim)', color: 'var(--accent-cyan)',
-                  fontFamily: 'ui-monospace, monospace', textTransform: 'uppercase',
-                }}>
+                <span className="tbl-badge badge-cyan" style={{ gap: 4 }}>
                   <Loader2 className="w-2.5 h-2.5 animate-spin" />
                   RUNNING
                 </span>
               )}
               {isDone && (
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
-                  padding: '2px 6px', borderRadius: 2,
-                  fontFamily: 'ui-monospace, monospace', textTransform: 'uppercase',
-                  background: exitOk ? 'var(--accent-emerald-dim)' : 'var(--accent-rose-dim)',
-                  color: exitOk ? 'var(--accent-emerald)' : 'var(--accent-rose)',
-                }}>
+                <span className={cn('tbl-badge', exitOk ? 'badge-emerald' : 'badge-rose')} style={{ gap: 4 }}>
                   {exitOk ? <><CheckCircle2 className="w-2.5 h-2.5" /> DONE</> : <><AlertTriangle className="w-2.5 h-2.5" /> FAILED</>}
                 </span>
               )}
             </div>
-            <p style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{task.description}</p>
+            <p className="task-meta">{task.description}</p>
           </div>
         </div>
 
@@ -307,8 +295,7 @@ function TaskCard({ task, activeTask, onRun, running, logs, devMode }) {
                 </div>
               ) : (
                 /* Simple mode: just status summary */
-                <div className="rounded-xl px-4 py-3 flex items-center gap-3"
-                     style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+                <div className="flex items-center gap-3" style={{ background: 'var(--glass-subtle)', border: '1px solid var(--border-subtle)', borderRadius: 10, padding: '12px 16px' }}>
                   {isRunningMe ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: 'var(--accent-cyan)' }} />
@@ -456,8 +443,8 @@ export default function MaintenancePage() {
         {maintenanceRunning && (
           <motion.div
             initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-            className="flex items-center gap-3 px-4 py-3"
-            style={{ borderRadius: 4, background: 'var(--accent-cyan-dim)', border: '1px solid rgba(6,182,212,0.2)' }}
+            className="glass-card flex items-center gap-3"
+            style={{ background: 'var(--accent-cyan-dim)', border: '1px solid rgba(6,182,212,0.2)' }}
           >
             <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: 'var(--accent-cyan)' }} />
             <span className="text-13" style={{ color: 'var(--accent-cyan)' }}>
@@ -472,8 +459,8 @@ export default function MaintenancePage() {
         {error && (
           <motion.div
             initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-            className="flex items-center gap-3 px-4 py-3"
-            style={{ borderRadius: 4, background: 'var(--accent-rose-dim)', border: '1px solid rgba(244,63,94,0.2)' }}
+            className="glass-card flex items-center gap-3"
+            style={{ background: 'var(--accent-rose-dim)', border: '1px solid rgba(244,63,94,0.2)' }}
           >
             <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent-rose)' }} />
             <span className="text-13" style={{ color: 'var(--text-secondary)' }}>{error}</span>
@@ -507,7 +494,7 @@ export default function MaintenancePage() {
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ ...ease, delay: 0.28 }}
-        style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: 18 }}
+        className="glass-card"
       >
         <h3 className="text-14 font-semibold mb-0.5" style={{ color: 'var(--text-primary)' }}>Quick Actions</h3>
         <p className="text-11 mb-4" style={{ color: 'var(--text-muted)' }}>One-click utilities that take effect immediately.</p>

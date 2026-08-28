@@ -41,6 +41,21 @@ class Config:
 
     # Groq API (replaces Gemini for genre classification — free tier, 14400 calls/day)
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    # Model was previously hardcoded as "llama-3.1-8b-instant" in gemini_service.py,
+    # then briefly defaulted to "llama-3.3-70b-versatile" — Groq rejected BOTH for
+    # this account with "does not exist or you do not have access to it"
+    # (model_not_found). Neither was a malformed string; this account simply has no
+    # Llama chat models enabled at all, confirmed via a live, read-only
+    # GET /v1/models call against this account's own key (2026-08-25) — no chat
+    # model beginning with "llama-" appeared in the account's actual model list.
+    # Current default ("openai/gpt-oss-20b") is one of that live list's
+    # general-purpose chat models — fast/cheap, suited to the short structured-JSON
+    # classification calls this service makes. "openai/gpt-oss-120b" (larger, same
+    # family) is a fallback if classification quality matters more than throughput.
+    # Deliberately NOT using "groq/compound" or "groq/compound-mini" (also on the
+    # live list) — those are agentic systems with built-in tool use (e.g. web
+    # browsing) and are not a safe drop-in for a single structured-completion call.
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
     # Last.fm API (free — register at last.fm/api)
     LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "")

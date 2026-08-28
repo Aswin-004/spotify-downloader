@@ -42,6 +42,7 @@ from services.strict_matcher import (
     log_acceptance,
     string_similarity,
     is_blacklisted,  # QUALITY UPGRADE
+    HARD_DURATION_LIMIT_SEC,  # PHASE 2 — dynamic message, was a stale hardcoded "30s"
 )
 from download_history import save_report
 
@@ -1053,6 +1054,28 @@ class DownloaderService:
           Stage 3: "{artist} {title} youtube music"       — ytsearch5
           Stage 4: "{title} {artist}"                     — ytsearch3  (last resort)
           Stage 5: SoundCloud fallback via scsearch:       — scsearch3
+
+        PHASE 2 HARDENING — search-stage selection:
+        Previously this loop downloaded whatever the FIRST stage produced
+        that merely cleared select_best_candidate's min_score (0.40), even
+        if that candidate was only marginally acceptable and a later,
+        stricter-query stage (e.g. Stage 1 "Official Audio") would have
+        found something much stronger. Confirmed vulnerability: a Stage-4
+        generic-query candidate scoring e.g. 0.42 would win outright and
+        Stage 1-3 would never even run.
+
+        Minimum fix (not a redesign): each stage now only SCORES its
+        candidates (_score_stage_candidates, no download). A candidate
+        scoring >= STAGE_CONFIDENT_ACCEPT_SCORE is downloaded immediately —
+        no reason to keep searching once we have a confident match, and
+        this avoids extra API calls for the common case. A candidate that
+        only clears min_score but not the confident bar is HELD (kept only
+        if it beats whatever was already held) while later stages are
+        tried. The best held candidate is downloaded once stages are
+        exhausted. STAGE_CONFIDENT_ACCEPT_SCORE reuses 0.75 — not a new
+        invented number, but the existing CONF_ACCEPT_WARN threshold from
+        legacy_identification_service.py, which this codebase already
+        treats as "confident enough to act on without further review".
         """
         actual_dir = output_dir or self.download_dir
         os.makedirs(actual_dir, exist_ok=True)
@@ -1070,6 +1093,12 @@ class DownloaderService:
         ]
 
         MAX_RETRIES = 2
+        STAGE_CONFIDENT_ACCEPT_SCORE = 0.75
+
+        # Best marginal (min_score <= score < confident bar) candidate seen
+        # across all stages so far: {"candidate", "score", "stage_num",
+        # "stage_name", "quality", "platform"} or None.
+        held = None
 
         for stage_num, stage_name, query, quality, platform in stages:
             for attempt in range(1 + MAX_RETRIES):
@@ -1079,24 +1108,66 @@ class DownloaderService:
                     if progress_callback and attempt > 0:
                         progress_callback(5, f"Retrying {stage_name} ({attempt}/{MAX_RETRIES})...")
 
-                    filename = self._try_download_with_duration_check(
-                        query, stage_name,
-                        progress_callback, output_dir=actual_dir,
-                        output_filename=output_filename, duration_ms=duration_ms,
+                    candidate, score, reason = self._score_stage_candidates(
+                        query, stage_name, duration_ms=duration_ms,
                         spotify_title=spotify_title, artist=artist,
                     )
-                    logger.info(f"{stage_name} success: {filename}")
-                    self._last_match_quality = quality
-                    # ── CHANGED: record which stage + platform succeeded ──
-                    self._last_query_stage = stage_num
-                    self._last_source_platform = platform
-                    return filename
+
+                    if candidate is None:
+                        # No candidate cleared min_score in this stage — not
+                        # a fetch error, just nothing worth holding. Move on
+                        # to the next stage without retrying this one.
+                        logger.info(f"{stage_name}: {reason}")
+                        break
+
+                    logger.info(f"{stage_name}: best candidate score={score:.3f} — {reason}")
+
+                    if score >= STAGE_CONFIDENT_ACCEPT_SCORE:
+                        filename = self._finalize_and_download(
+                            candidate, stage_name, spotify_title, duration_ms,
+                            progress_callback, output_dir=actual_dir,
+                            output_filename=output_filename,
+                        )
+                        logger.info(f"{stage_name} confident accept ({score:.3f}): {filename}")
+                        self._last_match_quality = quality
+                        self._last_query_stage = stage_num
+                        self._last_source_platform = platform
+                        return filename
+
+                    # Marginal — hold it only if it beats what's already held
+                    if held is None or score > held["score"]:
+                        held = {
+                            "candidate": candidate, "score": score,
+                            "stage_num": stage_num, "stage_name": stage_name,
+                            "quality": quality, "platform": platform,
+                        }
+                        logger.info(
+                            f"{stage_name}: holding marginal candidate "
+                            f"(score={score:.3f} < {STAGE_CONFIDENT_ACCEPT_SCORE} confident-accept bar) — "
+                            f"continuing to later stages"
+                        )
+                    break  # done with this stage, no need to retry — got a scored result
                 except Exception as e:
                     logger.warning(f"{stage_name} attempt {attempt+1} failed: {str(e)[:150]}")
                     if attempt < MAX_RETRIES:
                         time.sleep(1)
                     else:
                         logger.info(f"{stage_name} exhausted, moving on...")
+
+        if held is not None:
+            filename = self._finalize_and_download(
+                held["candidate"], held["stage_name"], spotify_title, duration_ms,
+                progress_callback, output_dir=actual_dir,
+                output_filename=output_filename,
+            )
+            logger.info(
+                f"All stages exhausted — downloading best held candidate from "
+                f"{held['stage_name']} (score={held['score']:.3f}): {filename}"
+            )
+            self._last_match_quality = held["quality"]
+            self._last_query_stage = held["stage_num"]
+            self._last_source_platform = held["platform"]
+            return filename
 
         error_msg = f"All download stages failed for: {title} — {art}"
         logger.error(error_msg)
@@ -1106,16 +1177,26 @@ class DownloaderService:
     # STRICT CANDIDATE MATCHING (updated scoring fed to strict_matcher)
     # ═══════════════════════════════════════════════════════════════════
 
-    def _try_download_with_duration_check(self, query, source_name, progress_callback=None,
-                                           output_dir=None, output_filename=None, duration_ms=None,
-                                           spotify_title=None, artist=None):
+    def _score_stage_candidates(self, query, source_name, duration_ms=None,
+                                 spotify_title=None, artist=None):
         """
-        STRICT matching: extract search results, score, validate, then download.
+        Fetch one search stage's results and score them — NO download.
+
+        PHASE 2: split out of the old _try_download_with_duration_check so
+        _download_from_youtube can compare a stage's best candidate against
+        one held from an earlier stage before committing to a download
+        (see _download_from_youtube's docstring for why).
+
+        Raises only on a genuine fetch/search failure (network, extractor
+        error) — that's what the caller's retry-per-stage loop is for.
+        When the fetch succeeds but nothing clears min_score, this returns
+        (None, 0.0-ish score, reason) rather than raising, since that's not
+        a failure worth retrying — it's a real "nothing here" result.
+
+        Returns:
+            (candidate_dict_or_None, score, reason)
         """
         logger.info(f"[{source_name}] STRICT matching starting: {query}")
-
-        actual_dir = output_dir or self.download_dir
-        os.makedirs(actual_dir, exist_ok=True)
 
         # ── CHANGED: lossless-first format during extraction as well ──
         extract_opts = {
@@ -1170,40 +1251,56 @@ class DownloaderService:
         if blacklisted_count > 0:  # QUALITY UPGRADE
             logger.info(f"[{source_name}] Blacklist filtered {blacklisted_count} candidate(s)")  # QUALITY UPGRADE
 
-        best_candidate, selection_reason = select_best_candidate(
+        best_candidate, best_score, selection_reason = select_best_candidate(
             candidates=candidates,
             spotify_title=spotify_title or query,
             artist=artist or "",
             expected_duration_sec=int(expected_secs) if expected_secs else None,
-            min_score=0.35,
+            min_score=0.40,
         )
 
         if not best_candidate:
-            raise Exception(f"[{source_name}] No acceptable match. {selection_reason}")
+            return None, best_score, f"No acceptable match. {selection_reason}"
+
+        return best_candidate, best_score, selection_reason
+
+    def _finalize_and_download(self, candidate, source_name, spotify_title, duration_ms,
+                                progress_callback=None, output_dir=None, output_filename=None):
+        """
+        Final pre-download validation + actual download for a candidate
+        already chosen by _download_from_youtube (either a confident-accept
+        or the best held candidate after all stages ran).
+
+        PHASE 2: split out of the old _try_download_with_duration_check.
+        """
+        actual_dir = output_dir or self.download_dir
+        os.makedirs(actual_dir, exist_ok=True)
+
+        expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
 
         # Final duration validation
-        best_duration = best_candidate.get("duration")
+        best_duration = candidate.get("duration")
         if expected_secs and best_duration:
             if not final_duration_check(best_duration, int(expected_secs)):
                 diff = abs(best_duration - int(expected_secs))
                 raise Exception(
-                    f"[{source_name}] Final validation failed: duration diff {diff}s > 30s "
-                    f"for \"{best_candidate.get('title', '')}\""
+                    f"[{source_name}] Final validation failed: duration diff {diff}s > "
+                    f"{HARD_DURATION_LIMIT_SEC}s for \"{candidate.get('title', '')}\""
                 )
 
         # ── CHANGED: record title similarity for quality report ──
-        clean_yt = clean_title(best_candidate.get("title", ""))
+        clean_yt = clean_title(candidate.get("title", ""))
         clean_sp = clean_title(spotify_title or "")
         self._last_title_similarity = string_similarity(clean_sp, clean_yt)
 
         # QUALITY UPGRADE — capture verified status for quality report
-        self._last_channel_verified = best_candidate.get("channel_is_verified", False)  # QUALITY UPGRADE
+        self._last_channel_verified = candidate.get("channel_is_verified", False)  # QUALITY UPGRADE
 
-        video_url = best_candidate.get("url")
+        video_url = candidate.get("url")
         if not video_url:
             raise Exception(f"[{source_name}] Selected candidate missing URL")
 
-        logger.info(f"[{source_name}] ✅ Selected: \"{best_candidate.get('title', '')}\" — Downloading...")
+        logger.info(f"[{source_name}] ✅ Selected: \"{candidate.get('title', '')}\" — Downloading...")
 
         return self._try_download_with_query(
             video_url, source_name, progress_callback,

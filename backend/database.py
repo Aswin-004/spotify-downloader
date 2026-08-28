@@ -55,6 +55,24 @@ def _get_db():  # MUSICBRAINZ
             MONGODB_URI,  # MUSICBRAINZ
             serverSelectionTimeoutMS=10000,  # Atlas M0 SRV cold-connect needs >5s
             connectTimeoutMS=10000,  # MUSICBRAINZ
+            # socketTimeoutMS was missing entirely — serverSelectionTimeoutMS/
+            # connectTimeoutMS only bound *establishing* a connection; once a
+            # socket is open, PyMongo's default socketTimeoutMS is None (no
+            # limit) for any individual read/write. This client is a single
+            # module-level singleton shared by every part of the app, and
+            # maintenance_worker.py's _run_loop() runs its 9 tasks in one
+            # single-threaded `for task in tasks` loop with no per-task
+            # timeout — so one stalled query (e.g. during an Atlas M0 pause,
+            # mid one of reconcile's several full-collection scans, the
+            # heaviest task, run every 30 min) would block that query's
+            # caller forever with no exception ever raised, silently freezing
+            # every other maintenance task behind it. Observed live on
+            # 2026-08-27/28: the reconcile task's report stopped updating and
+            # every other periodic maintenance log line went silent for >20h
+            # with zero errors logged anywhere — consistent with exactly this.
+            # 45s is generous enough not to false-trigger on legitimately slow
+            # M0-tier queries, short enough to actually recover a stuck one.
+            socketTimeoutMS=45000,
         )  # MUSICBRAINZ
         _db = _client[MONGODB_DB]  # MUSICBRAINZ
         _ensure_indexes()  # MUSICBRAINZ

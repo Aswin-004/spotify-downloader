@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   AlertTriangle, RefreshCw, RotateCcw, Menu, FolderInput,
-  X, Settings2, CheckCircle2, StopCircle,
+  X, Settings2, CheckCircle2, StopCircle, ChevronLeft, ChevronRight,
+  Search, Disc3,
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
@@ -10,8 +12,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { fadeBackdrop, scaleModal } from '@/lib/motion';
 
-export default function Header({ onMenuToggle }) {
+export default function Header({ onMenuToggle, onOpenCommand }) {
   const { connected, autoStatus } = useSocket();
+  const navigate = useNavigate();
 
   const [refreshOpen,  setRefreshOpen]  = useState(false);
   const [forceFolder,  setForceFolder]  = useState('');
@@ -103,7 +106,7 @@ export default function Header({ onMenuToggle }) {
   return (
     <>
       <header
-        className="sticky top-0 z-30 flex items-center justify-between h-12 px-5 flex-shrink-0"
+        className="sticky top-0 z-30 flex items-center gap-3 h-12 px-4 flex-shrink-0"
         style={{
           background: 'rgba(12,12,20,0.85)',
           backdropFilter: 'blur(12px)',
@@ -114,14 +117,49 @@ export default function Header({ onMenuToggle }) {
         {/* Left: mobile menu toggle */}
         <button
           onClick={onMenuToggle}
-          className="lg:hidden w-8 h-8 flex items-center justify-center rounded-lg cursor-pointer focus-ring transition-colors"
+          className="lg:hidden w-8 h-8 flex items-center justify-center rounded-lg cursor-pointer focus-ring transition-colors flex-shrink-0"
           style={{ color: 'var(--text-tertiary)' }}
         >
           <Menu className="w-4 h-4" />
         </button>
 
+        {/* Logo (mobile only — sidebar carries it on desktop) */}
+        <div className="lg:hidden flex items-center gap-2 flex-shrink-0">
+          <div
+            className="w-6 h-6 rounded-md flex items-center justify-center"
+            style={{ background: 'var(--accent-violet-dim)' }}
+          >
+            <Disc3 className="w-3.5 h-3.5" style={{ color: 'var(--accent-violet)' }} />
+          </div>
+        </div>
+
+        {/* Nav history arrows */}
+        <div className="hidden sm:flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={() => navigate(-1)}
+            className="tb-btn"
+            title="Go back"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => navigate(1)}
+            className="tb-btn"
+            title="Go forward"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Search → opens command palette */}
+        <button onClick={onOpenCommand} className="search-wrap hidden md:flex">
+          <Search className="w-3.5 h-3.5 flex-shrink-0" />
+          <span className="tb-search text-left">Search pages, actions…</span>
+          <span className="text-mono flex-shrink-0" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>Ctrl K</span>
+        </button>
+
         {/* Right: actions */}
-        <div className="flex items-center gap-2 ml-auto">
+        <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
 
           {/* Rate limit warning */}
           <AnimatePresence>
@@ -169,8 +207,7 @@ export default function Header({ onMenuToggle }) {
           <div className="relative" ref={settingsPanelRef}>
             <button
               onClick={() => setSettingsOpen(v => !v)}
-              className="w-8 h-8 flex items-center justify-center rounded-lg cursor-pointer focus-ring transition-all"
-              style={{ color: settingsOpen ? 'var(--accent-violet)' : 'var(--text-tertiary)' }}
+              className={`tb-btn ${settingsOpen ? 'on' : ''}`}
               title="Configure ingest playlist"
             >
               <Settings2 className="w-4 h-4" />
@@ -250,8 +287,8 @@ export default function Header({ onMenuToggle }) {
           {/* Refresh button */}
           <button
             onClick={() => setRefreshOpen(v => !v)}
-            className="w-8 h-8 flex items-center justify-center rounded-lg cursor-pointer focus-ring transition-all"
-            style={{ color: submitting ? 'var(--accent-cyan)' : 'var(--text-tertiary)' }}
+            className={`tb-btn ${submitting ? 'on' : ''}`}
+            style={submitting ? { color: 'var(--accent-cyan)' } : undefined}
             title="Refresh playlist"
           >
             <RefreshCw className={`w-4 h-4 ${submitting ? 'animate-spin' : ''}`} />
@@ -259,7 +296,7 @@ export default function Header({ onMenuToggle }) {
 
           {/* Connection dot */}
           <div
-            className="w-2 h-2 rounded-full flex-shrink-0"
+            className="w-2 h-2 rounded-full flex-shrink-0 ml-1"
             style={{ background: connected ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}
             title={connected ? 'Connected' : 'Disconnected'}
           />

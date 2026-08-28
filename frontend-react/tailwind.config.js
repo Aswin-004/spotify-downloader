@@ -59,8 +59,8 @@ export default {
       },
       fontFamily: {
         display: ['Geist', 'Inter', 'system-ui', 'sans-serif'],
-        sans:    ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
-        mono:    ['JetBrains Mono', 'monospace'],
+        sans:    ['Geist', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        mono:    ['JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Roboto Mono', 'Consolas', 'monospace'],
       },
       fontSize: {
         '10': ['10px', { lineHeight: '1.4' }],

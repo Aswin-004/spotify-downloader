@@ -3,28 +3,37 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Download, History, ListMusic, BarChart3,
   AlertTriangle, Wrench, Settings, BookOpen, Disc3,
-  ChevronLeft, ChevronRight, Radio, Zap, Loader2,
-  CheckCircle2, SkipForward, XCircle,
+  ChevronLeft, ChevronRight, Radio, Loader2,
+  CheckCircle2,
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { cn, capitalize } from '@/lib/utils';
 import { ease, springGentle } from '@/lib/motion';
 
 const navItems = [
-  { to: '/',                icon: Download,      label: 'Download',    end: true  },
-  { to: '/history',         icon: History,       label: 'History'               },
-  { to: '/library',         icon: ListMusic,     label: 'Library'               },
-  { to: '/analytics',       icon: BarChart3,     label: 'Analytics'             },
-  { to: '/review',          icon: AlertTriangle, label: 'Review',  badge: true  },
-  { to: '/maintenance',     icon: Wrench,        label: 'Maintenance'           },
-  { to: '/settings',        icon: Settings,      label: 'Settings'              },
-  { to: '/getting-started', icon: BookOpen,      label: 'Guide'                 },
+  { to: '/',                icon: Download,      label: 'Download',  end: true },
+  { to: '/history',         icon: History,       label: 'History'             },
+  { to: '/library',         icon: ListMusic,     label: 'Library'             },
+  { to: '/analytics',       icon: BarChart3,     label: 'Analytics'           },
+  { to: '/review',          icon: AlertTriangle, label: 'Review',  badge: true },
+  { to: '/maintenance',     icon: Wrench,        label: 'Maintenance'         },
+  { to: '/settings',        icon: Settings,      label: 'Settings'            },
+  { to: '/getting-started', icon: BookOpen,      label: 'Guide'               },
 ];
 
-export default function Sidebar({ collapsed, onToggle }) {
+/**
+ * Sidebar
+ *
+ * Props:
+ *   collapsed  — boolean, whether the sidebar is collapsed to icon-only rail
+ *   onToggle   — fn, toggles collapsed state
+ *   inFlow     — boolean (default false). When true the sidebar is a flex child
+ *                inside the glass app container (desktop). When false it keeps
+ *                its original `fixed` positioning (mobile overlay wrapper handles it).
+ */
+export default function Sidebar({ collapsed, onToggle, inFlow = false }) {
   const {
     autoStatus, connected, downloads, needsReviewCount, maintenanceRunning,
-    queueStatus,
   } = useSocket();
 
   const dlCounts = {
@@ -35,21 +44,31 @@ export default function Sidebar({ collapsed, onToggle }) {
   };
 
   const totalActivity = dlCounts.downloading + dlCounts.completed + dlCounts.skipped + dlCounts.failed;
-  const isAutoActive   = autoStatus.status === 'downloading' || autoStatus.status === 'checking';
-  const isAutoError    = autoStatus.current?.startsWith('Fetch error') || autoStatus.current?.startsWith('Error');
-  const isAIActive     = maintenanceRunning;
+  const isAutoActive  = autoStatus.status === 'downloading' || autoStatus.status === 'checking';
+  const isAutoError   = autoStatus.current?.startsWith('Fetch error') || autoStatus.current?.startsWith('Error');
+  const isAIActive    = maintenanceRunning;
 
   return (
     <motion.aside
       initial={false}
       animate={{ width: collapsed ? 'var(--nav-icon-width)' : 'var(--nav-width)' }}
       transition={springGentle}
-      className="fixed left-0 top-0 bottom-0 z-40 flex flex-col overflow-hidden"
-      style={{ background: 'var(--void)', borderRight: '1px solid var(--border-subtle)' }}
+      className={cn(
+        'z-40 flex flex-col overflow-hidden flex-shrink-0',
+        inFlow
+          ? 'h-full relative'                      // desktop: in-flow inside glass container
+          : 'fixed left-0 top-0 bottom-0'           // mobile overlay: wrapper provides fixed positioning
+      )}
+      style={{
+        background: inFlow ? 'rgba(0,0,0,0.22)' : 'var(--void)',
+        borderRight: '1px solid var(--border-subtle)',
+      }}
     >
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 h-14 flex-shrink-0"
-           style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+      <div
+        className="flex items-center gap-3 px-4 h-14 flex-shrink-0"
+        style={{ borderBottom: '1px solid var(--border-subtle)' }}
+      >
         <motion.div
           className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center"
           style={{ background: 'var(--accent-violet-dim)' }}
@@ -92,12 +111,10 @@ export default function Sidebar({ collapsed, onToggle }) {
               }
               style={({ isActive }) => ({
                 color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                ...(!isActive && {}),
               })}
             >
               {({ isActive }) => (
                 <>
-                  {/* Active left bar */}
                   {isActive && (
                     <motion.div
                       layoutId="nav-indicator"
@@ -109,10 +126,11 @@ export default function Sidebar({ collapsed, onToggle }) {
 
                   <div className="relative flex-shrink-0">
                     <Icon className="w-4 h-4" />
-                    {/* Dot badge when collapsed */}
                     {showBadge && collapsed && (
-                      <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full"
-                            style={{ background: 'var(--accent-amber)' }} />
+                      <span
+                        className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full"
+                        style={{ background: 'var(--accent-amber)' }}
+                      />
                     )}
                   </div>
 
@@ -130,14 +148,15 @@ export default function Sidebar({ collapsed, onToggle }) {
                     )}
                   </AnimatePresence>
 
-                  {/* Count badge */}
                   {!collapsed && showBadge && (
-                    <span className="text-11 font-bold px-1.5 py-0.5 rounded-full tabular-nums"
-                          style={{
-                            background: 'var(--accent-amber-dim)',
-                            color: 'var(--accent-amber)',
-                            border: '1px solid rgba(245,158,11,0.25)',
-                          }}>
+                    <span
+                      className="text-11 font-bold px-1.5 py-0.5 rounded-full tabular-nums"
+                      style={{
+                        background: 'var(--accent-amber-dim)',
+                        color: 'var(--accent-amber)',
+                        border: '1px solid rgba(245,158,11,0.25)',
+                      }}
+                    >
                       {needsReviewCount}
                     </span>
                   )}
@@ -149,21 +168,28 @@ export default function Sidebar({ collapsed, onToggle }) {
       </nav>
 
       {/* Bottom status section */}
-      <div className="px-2 pb-3 space-y-2 flex-shrink-0"
-           style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
-
+      <div
+        className="px-2 pb-3 space-y-2 flex-shrink-0"
+        style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}
+      >
         {/* Queue pill */}
         {totalActivity > 0 && (
-          <div className="rounded-lg px-3 py-2 flex items-center gap-2"
-               style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+          <div
+            className="rounded-lg px-3 py-2 flex items-center gap-2"
+            style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+          >
             {dlCounts.downloading > 0 && (
-              <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0"
-                       style={{ color: 'var(--accent-cyan)' }} />
+              <Loader2
+                className="w-3.5 h-3.5 animate-spin flex-shrink-0"
+                style={{ color: 'var(--accent-cyan)' }}
+              />
             )}
             <AnimatePresence>
               {!collapsed && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                            className="flex items-center gap-2 text-11 min-w-0">
+                <motion.div
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  className="flex items-center gap-2 text-11 min-w-0"
+                >
                   {dlCounts.downloading > 0 && (
                     <span className="font-mono tabular-nums" style={{ color: 'var(--accent-cyan)' }}>
                       {dlCounts.downloading} active
@@ -186,19 +212,27 @@ export default function Sidebar({ collapsed, onToggle }) {
         )}
 
         {/* Auto-sync status */}
-        <div className="rounded-lg px-3 py-2 flex items-center gap-2"
-             style={{
-               background: isAutoActive ? 'var(--accent-cyan-dim)' : isAutoError ? 'var(--accent-rose-dim)' : 'var(--surface-0)',
-               border: `1px solid ${isAutoActive ? 'rgba(6,182,212,0.2)' : isAutoError ? 'rgba(244,63,94,0.2)' : 'var(--border-subtle)'}`,
-             }}>
-          <Radio className="w-3.5 h-3.5 flex-shrink-0"
-                 style={{ color: isAutoActive ? 'var(--accent-cyan)' : isAutoError ? 'var(--accent-rose)' : 'var(--text-tertiary)' }} />
+        <div
+          className="rounded-lg px-3 py-2 flex items-center gap-2"
+          style={{
+            background: isAutoActive ? 'var(--accent-cyan-dim)' : isAutoError ? 'var(--accent-rose-dim)' : 'var(--surface-0)',
+            border: `1px solid ${isAutoActive ? 'rgba(6,182,212,0.2)' : isAutoError ? 'rgba(244,63,94,0.2)' : 'var(--border-subtle)'}`,
+          }}
+        >
+          <Radio
+            className="w-3.5 h-3.5 flex-shrink-0"
+            style={{ color: isAutoActive ? 'var(--accent-cyan)' : isAutoError ? 'var(--accent-rose)' : 'var(--text-tertiary)' }}
+          />
           <AnimatePresence>
             {!collapsed && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                          className="flex-1 min-w-0">
-                <div className="text-11 font-medium truncate"
-                     style={{ color: isAutoActive ? 'var(--accent-cyan)' : isAutoError ? 'var(--accent-rose)' : 'var(--text-tertiary)' }}>
+              <motion.div
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="flex-1 min-w-0"
+              >
+                <div
+                  className="text-11 font-medium truncate"
+                  style={{ color: isAutoActive ? 'var(--accent-cyan)' : isAutoError ? 'var(--accent-rose)' : 'var(--text-tertiary)' }}
+                >
                   {isAutoError ? 'Sync error' : isAutoActive ? 'Auto syncing' : `Auto sync · ${capitalize(autoStatus.status || 'idle')}`}
                 </div>
                 {isAutoActive && autoStatus.synced_total != null && (
@@ -211,29 +245,35 @@ export default function Sidebar({ collapsed, onToggle }) {
           </AnimatePresence>
         </div>
 
-        {/* AI status + connection */}
+        {/* Connection + AI status */}
         <div className="flex items-center gap-2 px-2 py-1">
-          {/* Connection dot */}
-          <div className={cn('w-2 h-2 rounded-full flex-shrink-0', connected ? 'glow-dot-emerald' : 'animate-pulse-slow')}
-               style={{ background: connected ? 'var(--accent-emerald)' : 'var(--accent-rose)' }} />
+          <div
+            className={cn('w-2 h-2 rounded-full flex-shrink-0', connected ? 'glow-dot-emerald' : 'animate-pulse-slow')}
+            style={{ background: connected ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}
+          />
           <AnimatePresence>
             {!collapsed && (
-              <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                           className="text-11 flex-1" style={{ color: 'var(--text-tertiary)' }}>
+              <motion.span
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="text-11 flex-1" style={{ color: 'var(--text-tertiary)' }}
+              >
                 {connected ? 'Connected' : 'Disconnected'}
               </motion.span>
             )}
           </AnimatePresence>
 
-          {/* AI pulse when running */}
           {isAIActive && (
-            <div className="w-2 h-2 rounded-full flex-shrink-0 glow-dot-violet"
-                 style={{ background: 'var(--accent-violet)' }} />
+            <div
+              className="w-2 h-2 rounded-full flex-shrink-0 glow-dot-violet"
+              style={{ background: 'var(--accent-violet)' }}
+            />
           )}
           <AnimatePresence>
             {!collapsed && isAIActive && (
-              <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                           className="text-11" style={{ color: 'var(--accent-violet)' }}>
+              <motion.span
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="text-11" style={{ color: 'var(--accent-violet)' }}
+              >
                 AI
               </motion.span>
             )}

@@ -4,6 +4,7 @@ import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import {
   Loader2, CheckCircle2, SkipForward, XCircle,
   Download, Inbox, BookOpen, X, Settings, AlertTriangle, StopCircle,
+  Music, ArrowRight,
 } from 'lucide-react';
 import DownloadInput from '@/components/DownloadInput';
 import StatsCards from '@/components/StatsCards';
@@ -13,6 +14,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { cn } from '@/lib/utils';
 import { api } from '@/services/api';
 import { ease } from '@/lib/motion';
+import { getGenreColor, getCamelotColor } from '@/lib/tokens';
 
 const TABS = [
   { id: 'downloading', label: 'Downloading', icon: Loader2,      spin: true  },
@@ -37,7 +39,7 @@ const EMPTY = {
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('downloading');
-  const { downloads, ingestProgress, clearDownloads } = useSocket();
+  const { downloads, ingestProgress, clearDownloads, files, history } = useSocket();
   const [showGuide,    setShowGuide]    = useState(() => !localStorage.getItem('onboarding_seen'));
   const [setupComplete, setSetupComplete] = useState(null);
 
@@ -69,6 +71,27 @@ export default function Dashboard() {
   const accent        = TAB_ACCENT[activeTab];
   const empty         = EMPTY[activeTab];
   const EmptyIcon     = empty.icon;
+
+  // Recently downloaded tracks (for the "Recent" grid)
+  const recentDownloads = useMemo(
+    () => history.filter(h => h.status === 'success').slice(0, 6),
+    [history]
+  );
+
+  // Top genre folders in the Library (for the "Made For You" grid)
+  const topGenres = useMemo(() => {
+    const counts = {};
+    files.forEach(f => {
+      const folder = (f.folder || '').replace(/\\/g, '/');
+      if (folder !== 'Library' && !folder.startsWith('Library/')) return;
+      const genre = folder === 'Library' ? 'Library' : folder.slice('Library/'.length);
+      counts[genre] = (counts[genre] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([genre, count]) => ({ genre, count }));
+  }, [files]);
 
   return (
     <div className="max-w-2xl mx-auto space-y-4">
@@ -129,6 +152,57 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
+      {/* Recently downloaded */}
+      {recentDownloads.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-label">Recently Downloaded</p>
+          <div className="grid-2">
+            {recentDownloads.map((item, i) => {
+              const accent = getCamelotColor(item.camelot_key);
+              return (
+                <div key={`${item.title}-${item.timestamp}-${i}`} className="pl-item">
+                  <div className="pl-thumb" style={{ background: `linear-gradient(135deg, ${accent}33, ${accent}10)` }}>
+                    <Music className="w-4 h-4" style={{ color: accent }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="pl-name truncate">{item.title}</p>
+                    <p className="pl-meta truncate">{item.artist}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Library genre folders */}
+      {topGenres.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-label">From Your Library</p>
+            <Link to="/library" className="btn-s text-11 flex items-center gap-1">
+              Show all <ArrowRight className="w-3 h-3" />
+            </Link>
+          </div>
+          <div className="grid-3">
+            {topGenres.map(({ genre, count }) => {
+              const accent = getGenreColor(genre);
+              return (
+                <Link key={genre} to="/library" className="glass-card hoverable alb-card">
+                  <div className="alb-art" style={{ background: `linear-gradient(135deg, ${accent}55, ${accent}15)` }}>
+                    <Music className="w-6 h-6" style={{ color: accent }} />
+                  </div>
+                  <div>
+                    <p className="alb-title">{genre}</p>
+                    <p className="alb-artist">{count} track{count === 1 ? '' : 's'}</p>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Download input */}
       <DownloadInput />
 
@@ -167,10 +241,9 @@ export default function Dashboard() {
               </div>
             </div>
             {/* Progress bar */}
-            <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+            <div className="prog-bar" style={{ margin: 0 }}>
               <motion.div
-                className="h-full rounded-full"
-                style={{ background: 'var(--accent-cyan)' }}
+                className="prog-fill h-full"
                 animate={{ width: `${ingestProgress.percent ?? 0}%` }}
                 transition={{ duration: 0.5, ease: 'easeOut' }}
               />
@@ -189,8 +262,7 @@ export default function Dashboard() {
         <LayoutGroup>
           <div>
             {/* Tab bar */}
-            <div className="flex items-center gap-1 p-1 rounded-xl"
-                 style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+            <div className="tab-row items-center">
               {TABS.map(tab => {
                 const Icon    = tab.icon;
                 const count   = counts[tab.id];
@@ -201,35 +273,23 @@ export default function Dashboard() {
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
-                    className="relative flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-12 font-medium cursor-pointer transition-colors duration-150 focus-ring z-10"
-                    style={{
-                      color: isActive ? tabAccent : 'var(--text-tertiary)',
-                    }}
+                    className={cn('tab-btn flex items-center gap-1.5', isActive && 'on')}
+                    style={{ color: isActive ? tabAccent : undefined }}
                   >
-                    {isActive && (
-                      <motion.div
-                        layoutId="tab-indicator"
-                        className="absolute inset-0 rounded-lg"
-                        style={{ background: `${tabAccent}12`, border: `1px solid ${tabAccent}25` }}
-                        transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                      />
+                    <Icon className={cn('w-3.5 h-3.5', tab.spin && isActive && count > 0 && 'animate-spin')} />
+                    <span className="hidden sm:inline">{tab.label}</span>
+                    {count > 0 && (
+                      <motion.span
+                        key={count}
+                        initial={{ scale: 1.3 }}
+                        animate={{ scale: 1 }}
+                        transition={{ type: 'spring', stiffness: 500 }}
+                        className="font-mono text-10 px-1.5 py-0.5 rounded-full tabular-nums"
+                        style={{ background: 'rgba(255,255,255,0.08)', color: isActive ? tabAccent : 'var(--text-muted)' }}
+                      >
+                        {count}
+                      </motion.span>
                     )}
-                    <span className="relative flex items-center gap-1.5 z-10">
-                      <Icon className={cn('w-3.5 h-3.5', tab.spin && isActive && count > 0 && 'animate-spin')} />
-                      <span className="hidden sm:inline">{tab.label}</span>
-                      {count > 0 && (
-                        <motion.span
-                          key={count}
-                          initial={{ scale: 1.3 }}
-                          animate={{ scale: 1 }}
-                          transition={{ type: 'spring', stiffness: 500 }}
-                          className="font-mono text-10 px-1.5 py-0.5 rounded-full tabular-nums"
-                          style={{ background: 'rgba(255,255,255,0.08)', color: isActive ? tabAccent : 'var(--text-muted)' }}
-                        >
-                          {count}
-                        </motion.span>
-                      )}
-                    </span>
                   </button>
                 );
               })}
@@ -260,8 +320,7 @@ export default function Dashboard() {
                 {items.length === 0 ? (
                   <motion.div
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                    className="flex flex-col items-center justify-center py-14 rounded-xl"
-                    style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+                    className="glass-card flex flex-col items-center justify-center py-14"
                   >
                     {/* Waveform animation for downloading empty state */}
                     {activeTab === 'downloading' ? (

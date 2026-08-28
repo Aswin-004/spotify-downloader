@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
+import { cn } from '@/lib/utils';
 import { ease } from '@/lib/motion';
 
 const STATUS_CONFIG = {
@@ -17,24 +18,28 @@ const STATUS_CONFIG = {
     label: 'Downloaded',
     accent: 'var(--accent-emerald)',
     dim: 'var(--accent-emerald-dim)',
+    badge: 'badge-emerald',
   },
   skipped: {
     icon: SkipForward,
     label: 'Skipped',
     accent: 'var(--accent-slate)',
     dim: 'var(--accent-slate-dim)',
+    badge: 'badge-slate',
   },
   failed: {
     icon: XCircle,
     label: 'Failed',
     accent: 'var(--accent-rose)',
     dim: 'var(--accent-rose-dim)',
+    badge: 'badge-rose',
   },
   fallback: {
     icon: RotateCw,
     label: 'Fallback',
     accent: 'var(--accent-amber)',
     dim: 'var(--accent-amber-dim)',
+    badge: 'badge-amber',
   },
 };
 
@@ -173,70 +178,31 @@ export default function History() {
         transition={{ ...ease, delay: 0.08 }}
         style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
       >
-        {/* Terminal search */}
-        <div
-          style={{
-            display: 'flex', alignItems: 'center',
-            border: '1px solid var(--border-default)',
-            borderRadius: 4, background: 'var(--surface-0)',
-            transition: 'border-color 0.15s, box-shadow 0.15s',
-          }}
-          onFocusCapture={e => {
-            e.currentTarget.style.borderColor = 'var(--accent-cyan)';
-            e.currentTarget.style.boxShadow = '0 0 0 1px var(--accent-cyan)';
-          }}
-          onBlurCapture={e => {
-            e.currentTarget.style.borderColor = 'var(--border-default)';
-            e.currentTarget.style.boxShadow = 'none';
-          }}
-        >
-          <span style={{
-            paddingLeft: 12, paddingRight: 6, flexShrink: 0,
-            color: 'var(--accent-cyan)', fontSize: 11, fontWeight: 700,
-            letterSpacing: '0.04em', userSelect: 'none',
-            fontFamily: 'ui-monospace, monospace',
-          }}>filter:</span>
+        {/* Search */}
+        <div className="search-wrap" style={{ maxWidth: 'none' }}>
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="title or artist…"
-            style={{
-              flex: 1, height: 38, background: 'transparent', border: 'none',
-              outline: 'none', color: 'var(--text-primary)',
-              fontSize: 13, fontFamily: 'ui-monospace, monospace',
-            }}
+            placeholder="Filter by title or artist…"
+            className="tb-search"
+            style={{ cursor: 'text', height: 22 }}
           />
           {search && (
-            <button onClick={() => setSearch('')}
-              style={{ padding: '0 10px', color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+            <button onClick={() => setSearch('')} className="flex-shrink-0" style={{ color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>
               <X style={{ width: 12, height: 12 }} />
             </button>
           )}
         </div>
 
-        {/* Flat underline status tabs */}
-        <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border-subtle)' }}>
+        {/* Status tabs */}
+        <div className="tab-row">
           {FILTERS.map(f => {
             const isActive = filter === f.value;
-            const accent = f.value === 'all' ? 'var(--accent-violet)'
-              : f.value === 'success' ? 'var(--accent-emerald)'
-              : f.value === 'failed'  ? 'var(--accent-rose)'
-              : 'var(--accent-slate)';
             return (
               <button
                 key={f.value}
                 onClick={() => setFilter(f.value)}
-                style={{
-                  padding: '6px 14px', border: 'none', cursor: 'pointer',
-                  background: 'transparent',
-                  fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
-                  textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
-                  color: isActive ? accent : 'var(--text-muted)',
-                  borderBottom: isActive ? `2px solid ${accent}` : '2px solid transparent',
-                  marginBottom: -1, transition: 'color 0.15s, border-color 0.15s',
-                }}
-                onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-secondary)'; }}
-                onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-muted)'; }}
+                className={cn('tab-btn', isActive && 'on')}
               >
                 {f.label}
               </button>
@@ -250,9 +216,15 @@ export default function History() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ ...ease, delay: 0.12 }}
-        style={{ border: '1px solid var(--border-subtle)', borderRadius: 4, overflow: 'hidden' }}
+        className="glass-card"
       >
-        <ScrollArea className="max-h-[calc(100vh-300px)]">
+        <div className="tbl-hdr">
+          <span style={{ width: 32, flexShrink: 0 }} />
+          <span className="flex-1">Track</span>
+          <span style={{ minWidth: 52, textAlign: 'right' }}>Time</span>
+          <span>Status</span>
+        </div>
+        <ScrollArea className="max-h-[calc(100vh-340px)]">
           {filtered.length === 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '56px 0' }}>
               <HistoryIcon style={{ width: 20, height: 20, color: 'var(--text-muted)', marginBottom: 10 }} />
@@ -274,38 +246,22 @@ export default function History() {
                     initial={{ opacity: 0, x: -6 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: Math.min(i * 0.012, 0.25), duration: 0.15 }}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      padding: '7px 12px 7px 0',
-                      borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none',
-                      borderLeft: `3px solid ${cfg.accent}`,
-                      paddingLeft: 12, transition: 'background 0.1s',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-0)'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    className="tbl-row"
                   >
-                    {/* Timestamp */}
-                    <span style={{
-                      fontSize: 9, fontFamily: 'monospace', color: 'var(--text-muted)',
-                      fontVariantNumeric: 'tabular-nums', flexShrink: 0,
-                      minWidth: 52, letterSpacing: '0.02em',
-                    }}>
-                      {item.timestamp}
-                    </span>
+                    {/* Status icon thumb */}
+                    <div className="tbl-thumb" style={{ width: 32, height: 32, background: `linear-gradient(135deg, ${cfg.accent}33, ${cfg.accent}10)` }}>
+                      <StatusIcon className="w-4 h-4" style={{ color: cfg.accent }} />
+                    </div>
 
                     {/* Content */}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{
-                        fontSize: 12, fontWeight: 500, color: 'var(--text-primary)',
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
+                      <p className="tbl-name truncate">
                         {item.title}
                       </p>
                       {(item.artist || (item.status === 'failed' && item.error)) && (
-                        <p style={{
-                          fontSize: 10, marginTop: 1,
+                        <p className="truncate" style={{
+                          fontSize: 11, marginTop: 1,
                           color: item.status === 'failed' && item.error ? 'var(--accent-rose)' : 'var(--text-tertiary)',
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         }}>
                           {item.status === 'failed' && item.error ? friendlyError(item.error) : item.artist}
                         </p>
@@ -318,24 +274,24 @@ export default function History() {
                         onClick={() => handleTogglePlay(item)}
                         title={isPlaying ? 'Pause' : 'Preview'}
                         style={{
-                          width: 22, height: 22, border: 'none', borderRadius: 4,
+                          width: 24, height: 24, border: 'none', borderRadius: 100,
                           background: isPlaying ? 'var(--accent-violet-dim)' : 'transparent',
                           color: 'var(--accent-violet)', cursor: 'pointer',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                           flexShrink: 0,
                         }}
                       >
-                        {isPlaying ? <Pause style={{ width: 10, height: 10 }} /> : <Play style={{ width: 10, height: 10 }} />}
+                        {isPlaying ? <Pause style={{ width: 11, height: 11 }} /> : <Play style={{ width: 11, height: 11 }} />}
                       </button>
                     )}
 
+                    {/* Timestamp */}
+                    <span className="text-mono flex-shrink-0" style={{ minWidth: 52, textAlign: 'right', color: 'var(--text-muted)', fontSize: 10 }}>
+                      {item.timestamp}
+                    </span>
+
                     {/* Status chip */}
-                    <span style={{
-                      fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
-                      textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
-                      padding: '2px 6px', borderRadius: 2, flexShrink: 0,
-                      background: `${cfg.accent}18`, color: cfg.accent,
-                    }}>
+                    <span className={cn('tbl-badge', cfg.badge)}>
                       {cfg.label}
                     </span>
                   </motion.div>

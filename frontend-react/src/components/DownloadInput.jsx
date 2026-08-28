@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Music2, Disc3, AlertTriangle, ArrowRight, Radio } from 'lucide-react';
 import { api, IS_CLOUD } from '@/services/api';
-import { formatDuration } from '@/lib/utils';
+import { cn, formatDuration } from '@/lib/utils';
 
 const SPOTIFY_URL_RE    = /open\.spotify\.com\/(track|album|playlist)\/[A-Za-z0-9]+/;
 const SOUNDCLOUD_URL_RE = /soundcloud\.com\//i;
@@ -13,21 +13,6 @@ function detectUrlType(url) {
   if (SOUNDCLOUD_URL_RE.test(url)) return 'soundcloud';
   if (BANDCAMP_URL_RE.test(url))   return 'bandcamp';
   return null;
-}
-
-// Shared sharp-corner button style
-function cmdBtn(active, accent = '#8B5CF6') {
-  return {
-    height: 42, padding: '0 18px',
-    background: active ? accent : 'var(--surface-1)',
-    color: active ? '#fff' : 'var(--text-muted)',
-    border: 'none', borderRadius: 3,
-    fontSize: 11, fontWeight: 700, letterSpacing: '0.1em',
-    cursor: active ? 'pointer' : 'not-allowed',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-    transition: 'background 0.12s',
-    flexShrink: 0,
-  };
 }
 
 export default function DownloadInput() {
@@ -111,32 +96,7 @@ export default function DownloadInput() {
         animate={{ opacity: 1, y: 0  }}
         transition={{ duration: 0.3, ease: [0.22,1,0.36,1] }}
       >
-        <div
-          style={{
-            display: 'flex', alignItems: 'stretch',
-            border: '1px solid var(--border-default)',
-            borderRadius: 4, background: 'var(--surface-0)',
-            transition: 'border-color 0.15s, box-shadow 0.15s',
-          }}
-          onFocusCapture={e => {
-            e.currentTarget.style.borderColor = 'var(--accent-cyan)';
-            e.currentTarget.style.boxShadow   = '0 0 0 1px var(--accent-cyan)';
-          }}
-          onBlurCapture={e => {
-            e.currentTarget.style.borderColor = 'var(--border-default)';
-            e.currentTarget.style.boxShadow   = 'none';
-          }}
-        >
-          {/* Terminal prompt */}
-          <div style={{
-            display: 'flex', alignItems: 'center',
-            paddingLeft: 14, paddingRight: 8,
-            color: 'var(--accent-cyan)', fontSize: 15, fontWeight: 700,
-            flexShrink: 0, userSelect: 'none', letterSpacing: '-0.02em',
-          }}>
-            ▸
-          </div>
-
+        <div className="dl-bar">
           {/* URL input */}
           <input
             value={url}
@@ -144,50 +104,33 @@ export default function DownloadInput() {
             onKeyDown={e => e.key === 'Enter' && handleFetch()}
             placeholder="open.spotify.com/track/… · soundcloud.com/… · artist.bandcamp.com/…"
             disabled={loading}
-            style={{
-              flex: 1, height: 52, background: 'transparent', border: 'none',
-              outline: 'none', color: 'var(--text-primary)',
-              fontSize: 12, fontFamily: 'ui-monospace, "SF Mono", monospace',
-              letterSpacing: '0.01em',
-            }}
+            className="dl-in"
+            style={{ height: 44, paddingLeft: 14 }}
           />
 
           {/* Fetch button */}
           <button
             onClick={handleFetch}
             disabled={loading || !url.trim()}
-            style={{
-              height: 52, padding: '0 22px',
-              background: loading || !url.trim() ? 'transparent' : 'var(--accent-violet)',
-              color: loading || !url.trim() ? 'var(--text-muted)' : '#fff',
-              border: 'none', borderLeft: '1px solid var(--border-subtle)',
-              borderRadius: '0 3px 3px 0',
-              fontSize: 11, fontWeight: 700, letterSpacing: '0.1em',
-              cursor: loading || !url.trim() ? 'not-allowed' : 'pointer',
-              transition: 'background 0.15s, color 0.15s',
-              flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7,
-            }}
+            className="btn-p"
+            style={{ height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7 }}
           >
             {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            {loading ? 'SCANNING…' : 'FETCH'}
+            {loading ? 'Scanning…' : 'Fetch'}
           </button>
         </div>
 
         {/* Platform + type labels */}
-        <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+        <div className="tab-row" style={{ marginTop: 8 }}>
           {[
-            { label: 'SPOTIFY TRACK', active: urlType === 'spotify' },
-            { label: 'SPOTIFY ALBUM', active: urlType === 'spotify' },
-            { label: 'SOUNDCLOUD',    active: urlType === 'soundcloud' },
-            { label: 'BANDCAMP',      active: urlType === 'bandcamp' },
+            { label: 'Spotify Track', active: urlType === 'spotify' },
+            { label: 'Spotify Album', active: urlType === 'spotify' },
+            { label: 'SoundCloud',    active: urlType === 'soundcloud' },
+            { label: 'Bandcamp',      active: urlType === 'bandcamp' },
           ].map(({ label, active }) => (
-            <span key={label} style={{
-              fontSize: 9, fontWeight: 700, letterSpacing: '0.12em',
-              color: active ? 'var(--accent-cyan)' : 'var(--text-muted)',
-              padding: '2px 6px',
-              border: `1px solid ${active ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
-              borderRadius: 2, transition: 'color 0.15s, border-color 0.15s',
-            }}>{label}</span>
+            <span key={label} className={cn('tab-btn', active && 'on')} style={{ cursor: 'default' }}>
+              {label}
+            </span>
           ))}
         </div>
       </motion.div>
@@ -390,8 +333,8 @@ export default function DownloadInput() {
                 <button
                   onClick={handleDownload}
                   disabled={downloading}
-                  style={cmdBtn(!downloading)}
-                  className="w-full"
+                  className="btn-p w-full"
+                  style={{ height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}
                 >
                   {downloading
                     ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> DOWNLOADING…</>

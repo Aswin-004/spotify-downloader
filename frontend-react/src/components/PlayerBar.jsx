@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { SkipBack, SkipForward, Play, Pause, Volume2, Volume1, VolumeX } from 'lucide-react';
+import { SkipBack, SkipForward, Play, Pause, Volume2, Volume1, VolumeX, Disc3 } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { usePlayer } from '@/context/PlayerContext';
+import { api } from '@/services/api';
 import { getCamelotColor } from '@/lib/tokens';
 
 function fmt(sec) {
@@ -12,7 +13,7 @@ function fmt(sec) {
 
 export default function PlayerBar() {
   const player = usePlayer();
-  if (!player) return null; // must be inside PlayerProvider — should never happen
+  if (!player) return null;
 
   const {
     nowPlaying, playing, currentTime, duration, volume,
@@ -23,6 +24,9 @@ export default function PlayerBar() {
   const [seeking,  setSeeking]  = useState(false);
   const [seekVal,  setSeekVal]  = useState(0);
   const [showVol,  setShowVol]  = useState(false);
+  const [artFailed, setArtFailed] = useState(false);
+
+  useEffect(() => { setArtFailed(false); }, [nowPlaying?.path]);
 
   const hasPrev = queueIndex > 0;
   const hasNext = queueIndex < (queue?.length ?? 0) - 1;
@@ -30,30 +34,63 @@ export default function PlayerBar() {
 
   useHotkeys('space', e => { e.preventDefault(); toggle?.(); },
     { enabled: !!nowPlaying, enableOnFormTags: false });
-  useHotkeys('left',  () => seek?.(Math.max(0, (currentTime||0) - 5)),
+  useHotkeys('left',  () => seek?.(Math.max(0, (currentTime || 0) - 5)),
     { enabled: !!nowPlaying, enableOnFormTags: false });
-  useHotkeys('right', () => seek?.(Math.min(duration||0, (currentTime||0) + 5)),
+  useHotkeys('right', () => seek?.(Math.min(duration || 0, (currentTime || 0) + 5)),
     { enabled: !!nowPlaying, enableOnFormTags: false });
 
   return (
     <AnimatePresence>
       {nowPlaying && (
         <motion.div
-          initial={{ y: 88, opacity: 0 }}
-          animate={{ y: 0,  opacity: 1 }}
-          exit={{    y: 88, opacity: 0 }}
+          initial={{ y: 100, opacity: 0 }}
+          animate={{ y: 0,   opacity: 1 }}
+          exit={{    y: 100, opacity: 0 }}
           transition={{ type: 'spring', stiffness: 380, damping: 38 }}
           style={{
-            position: 'fixed', bottom: 0, left: 0, right: 0,
+            /* ── Floating pill — sits just inside the glass container edges ── */
+            position: 'fixed',
+            bottom: '28px',
+            left:   '28px',
+            right:  '28px',
             zIndex: 45,
-            background: 'var(--void)',
-            borderTop: '1px solid var(--border-subtle)',
+            /* Glass */
+            background: 'rgba(10,10,18,0.88)',
+            backdropFilter: 'blur(24px) saturate(1.3)',
+            WebkitBackdropFilter: 'blur(24px) saturate(1.3)',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: '16px',
+            boxShadow: '0 12px 48px rgba(0,0,0,0.5), 0 0 0 0.5px rgba(255,255,255,0.06) inset',
           }}
         >
-          <div style={{ padding: '10px 20px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ padding: '10px 18px', display: 'flex', flexDirection: 'column', gap: 8 }}>
 
-            {/* ── Row 1: track info · controls · vol ───────────────── */}
+            {/* ── Row 1: track info · controls · vol ─────────────── */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+
+              {/* Album art */}
+              {nowPlaying.path && !artFailed ? (
+                <div className="tbl-thumb" style={{ width: 36, height: 36, flexShrink: 0, overflow: 'hidden' }}>
+                  <img
+                    src={api.artworkUrl(nowPlaying.path)}
+                    alt=""
+                    className="w-full h-full object-cover"
+                    onError={() => setArtFailed(true)}
+                  />
+                </div>
+              ) : (
+                <div className="tbl-thumb" style={{
+                  width: 36, height: 36, flexShrink: 0,
+                  background: `linear-gradient(135deg, ${getCamelotColor(nowPlaying.camelot)}55, ${getCamelotColor(nowPlaying.camelot)}15)`,
+                }}>
+                  <motion.div
+                    animate={playing ? { rotate: 360 } : { rotate: 0 }}
+                    transition={playing ? { duration: 6, ease: 'linear', repeat: Infinity } : { duration: 0.3 }}
+                  >
+                    <Disc3 style={{ width: 16, height: 16, color: getCamelotColor(nowPlaying.camelot) }} />
+                  </motion.div>
+                </div>
+              )}
 
               {/* LEFT — title + badges + artist */}
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -132,7 +169,7 @@ export default function PlayerBar() {
                   <SkipBack style={{ width: 15, height: 15 }} />
                 </button>
 
-                {/* Play/Pause with expanding ring when active */}
+                {/* Play/Pause with ring pulse */}
                 <div style={{ position: 'relative', flexShrink: 0 }}>
                   {playing && (
                     <motion.div
@@ -153,7 +190,7 @@ export default function PlayerBar() {
                       background: 'var(--accent-violet)', color: '#fff',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       cursor: 'pointer', flexShrink: 0,
-                      boxShadow: playing ? '0 0 18px rgba(139,92,246,0.55)' : 'none',
+                      boxShadow: playing ? '0 0 20px rgba(139,92,246,0.6)' : 'none',
                       transition: 'box-shadow 0.25s',
                     }}
                   >
@@ -178,10 +215,7 @@ export default function PlayerBar() {
               </div>
 
               {/* RIGHT — queue position + volume */}
-              <div style={{
-                flex: 1, display: 'flex', justifyContent: 'flex-end',
-                alignItems: 'center', gap: 10,
-              }}>
+              <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10 }}>
                 {(queue?.length ?? 0) > 1 && (
                   <span style={{
                     fontSize: 10, color: 'var(--text-muted)',
@@ -234,9 +268,8 @@ export default function PlayerBar() {
               </div>
             </div>
 
-            {/* ── Row 2: seek bar with diamond marker ──────────────── */}
+            {/* ── Row 2: seek bar with diamond marker ──────────── */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-              {/* Elapsed */}
               <span style={{
                 fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.04em',
                 color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums',
@@ -245,7 +278,6 @@ export default function PlayerBar() {
                 {fmt(currentTime)}
               </span>
 
-              {/* Seek track */}
               <div
                 style={{
                   flex: 1, position: 'relative', height: 16,
@@ -254,10 +286,7 @@ export default function PlayerBar() {
                 }}
               >
                 {/* Track */}
-                <div style={{
-                  position: 'absolute', left: 0, right: 0, height: 1,
-                  background: 'rgba(255,255,255,0.08)',
-                }} />
+                <div style={{ position: 'absolute', left: 0, right: 0, height: 1, background: 'rgba(255,255,255,0.08)' }} />
                 {/* Progress fill */}
                 <div style={{
                   position: 'absolute', left: 0,
@@ -266,7 +295,7 @@ export default function PlayerBar() {
                   transition: seeking ? 'none' : 'width 0.1s linear',
                   borderRadius: '0 1px 1px 0',
                 }} />
-                {/* Diamond playhead — the signature element */}
+                {/* Diamond playhead */}
                 <div style={{
                   position: 'absolute',
                   left: `calc(${pct}% - 4px)`,
@@ -276,13 +305,11 @@ export default function PlayerBar() {
                   boxShadow: playing
                     ? '0 0 10px rgba(139,92,246,0.95), 0 0 20px rgba(139,92,246,0.4)'
                     : '0 0 5px rgba(139,92,246,0.5)',
-                  transition: seeking
-                    ? 'none'
-                    : 'left 0.1s linear, box-shadow 0.3s',
+                  transition: seeking ? 'none' : 'left 0.1s linear, box-shadow 0.3s',
                   pointerEvents: 'none',
                   zIndex: 1,
                 }} />
-                {/* Interactive range (invisible) */}
+                {/* Invisible range input */}
                 <input
                   type="range"
                   min={0} max={duration || 100} step={0.1}
@@ -298,7 +325,6 @@ export default function PlayerBar() {
                 />
               </div>
 
-              {/* Duration */}
               <span style={{
                 fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.04em',
                 color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums',
@@ -307,7 +333,6 @@ export default function PlayerBar() {
                 {fmt(duration)}
               </span>
             </div>
-
           </div>
         </motion.div>
       )}

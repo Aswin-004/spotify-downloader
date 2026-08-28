@@ -1,5 +1,7 @@
 """
-AI genre classification service — powered by Groq (Llama 3.3 70B).
+AI genre classification service — powered by Groq (model set via
+config.GROQ_MODEL / GROQ_MODEL env var — see config.py for which models are
+actually enabled on this account and why the current default was chosen).
 Reads ID3 tags from the file and sends title + artist to the model.
 Keeps the exact same public API as the old Gemini service so all callers
 (maintenance_worker, auto_downloader, tagger_service, backfill_gemini)
@@ -74,6 +76,7 @@ _SYSTEM = (
 
 def _call_groq(title: str, artist: str, existing_genre: str = "") -> dict:
     import time
+    from config import config
     prompt = (
         f'Track: "{title}" by "{artist}"'
         + (f' (existing tag: "{existing_genre}")' if existing_genre else "")
@@ -91,14 +94,31 @@ def _call_groq(title: str, artist: str, existing_genre: str = "") -> dict:
     for attempt in range(3):
         try:
             response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model=config.GROQ_MODEL,
                 messages=[
                     {"role": "system", "content": _SYSTEM},
                     {"role": "user",   "content": prompt},
                 ],
-                max_tokens=200,
+                # 600, not 200: reasoning models (e.g. openai/gpt-oss-20b, this
+                # project's default) spend part of the completion budget on an
+                # internal reasoning pass before writing the JSON answer — observed
+                # 102-198 reasoning tokens per call in production (2026-08-25). At
+                # 200 total, several real tracks got finish_reason="length" with
+                # content truncated or empty. max_completion_tokens is the
+                # non-deprecated name for this param (max_tokens still works but
+                # the installed SDK flags it deprecated in favor of this one).
+                max_completion_tokens=600,
                 temperature=0.2,
             )
+            if response.choices[0].finish_reason == "length":
+                # Budget exceeded anyway (longer-than-usual reasoning, or a very
+                # verbose description) — log it so a future recurrence is
+                # immediately diagnosable instead of surfacing only as a generic
+                # JSON-decode error below.
+                logger.warning(
+                    f"[ai] Groq response truncated (finish_reason=length) for "
+                    f"title={title!r} artist={artist!r} — usage={getattr(response, 'usage', None)}"
+                )
             raw = response.choices[0].message.content.strip()
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)

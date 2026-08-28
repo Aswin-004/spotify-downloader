@@ -44,15 +44,10 @@ export default function FooterDock() {
           </div>
 
           {/* Progress bar */}
-          <div className="w-32 h-1 rounded-full overflow-hidden flex-shrink-0"
-               style={{ background: 'var(--surface-2)' }}>
+          <div className="prog-bar w-32 flex-shrink-0" style={{ margin: 0 }}>
             <motion.div
-              className="h-full rounded-full"
-              style={{
-                background: 'var(--accent-cyan)',
-                transformOrigin: 'left',
-                width: '100%',
-              }}
+              className="prog-fill h-full"
+              style={{ transformOrigin: 'left', width: '100%' }}
               animate={{ scaleX: progress / 100 }}
               transition={{ type: 'spring', stiffness: 120, damping: 20 }}
             />
@@ -66,7 +61,7 @@ export default function FooterDock() {
 
           {/* Queue count */}
           {queueStatus?.total > 0 && (
-            <span className="text-11 flex-shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+            <span className="tbl-badge flex-shrink-0">
               Queue: {queueStatus.total}
             </span>
           )}

@@ -338,6 +338,10 @@ export const api = {
     return `${_BASE}/api/preview-track?path=${encodeURIComponent(relativePath)}`;
   },
 
+  artworkUrl(relativePath) {
+    return `${_BASE}/api/artwork?path=${encodeURIComponent(relativePath)}`;
+  },
+
   getFolderTags(folder) {
     return apiFetch(`/api/files/folder-tags?folder=${encodeURIComponent(folder)}`).then(handleResponse);
   },

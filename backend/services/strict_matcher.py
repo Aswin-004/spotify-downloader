@@ -31,7 +31,32 @@ except ImportError:
 
 # Hard duration ceiling — reject any candidate with diff > this many seconds
 # Applied as final validation BEFORE download (Step 10).
-HARD_DURATION_LIMIT_SEC = 90
+#
+# PHASE 2 HARDENING: was 90s. duration_score()'s own tier table (below)
+# already treats any diff > 60s as 0.0 value ("no signal") — but at 90s
+# this hard gate was 30s looser than that, so a candidate could be up to
+# 89s off and still pass: dur_score=0.0 zeroes out the 0.2-weight duration
+# term, yet a strong title+artist score alone (e.g. title=1.0, artist=1.0
+# -> final=0.5+0.3+0+0+0=0.80) clears min_score=0.40 with no duration
+# check ever stopping it. Tightened to 60s so this hard gate can never be
+# looser than the point duration_score() itself already calls "no match" —
+# reusing an existing code-defined boundary, not an invented number.
+HARD_DURATION_LIMIT_SEC = 60
+
+# ARTIST GATE — reject candidates where the artist name has essentially no
+# overlap with the YouTube title/channel AND the title isn't a near-exact
+# match. Without this, a high title_score alone (e.g. "Pinky (From Zanjeer)"
+# vs KATSEYE's "PINKY UP") can pass min_score even though it's a completely
+# different song by an unrelated artist.
+ARTIST_GATE_MIN_SCORE = 0.35
+ARTIST_GATE_TITLE_EXEMPTION = 0.90
+
+# TITLE GATE (Phase 2) — symmetric counterpart to the artist gate above:
+# reject when the title barely resembles the request, even if the artist
+# matches perfectly (a strong artist score alone doesn't identify WHICH
+# song by that artist this is). Deliberately reuses ARTIST_GATE_MIN_SCORE's
+# value rather than introducing a new threshold — see score_candidate().
+TITLE_GATE_MIN_SCORE = ARTIST_GATE_MIN_SCORE
 
 # ═══════════════════════════════════════════════════════════════════
 # STRICT REJECTION KEYWORDS — mandatory hard filter (Step 2)
@@ -95,6 +120,65 @@ TITLE_NOISE_PATTERNS = [
     (r'\byt\s*rip\b',          '', re.IGNORECASE),
     (r'\byoutube\s*rip\b',     '', re.IGNORECASE),
 ]
+
+# ═══════════════════════════════════════════════════════════════════
+# VERSION / REMIX VALIDATION (Phase 2 hardening)
+# ═══════════════════════════════════════════════════════════════════
+# REJECT_KEYWORDS above already hard-rejects "cover", "karaoke", "mashup",
+# "instrumental" etc. (Step 2), each exempted when the Spotify title itself
+# requests that exact word. But it does NOT cover the "same-family, wrong-
+# edition" words below — remix, radio edit, extended mix, VIP, live,
+# acoustic, bootleg, rework — because a token_set_ratio title_score does
+# not penalize a candidate for having EXTRA words the query didn't ask for
+# ("Song Title (XYZ Remix)" vs Spotify "Song Title" still scores high on
+# title alone). Left unchecked, a plausible-duration remix/live/acoustic
+# cut of the right song can outscore min_score and get downloaded in place
+# of the original studio version.
+#
+# Adapted (not copied) from legacy_identification_service.py's
+# _REMIX_TOKEN_SET / _get_remix_flags(): same word-boundary token-set-
+# intersection technique, reused because it's already proven in this
+# codebase. Differences from the legacy set, both deliberate:
+#   - "live" and "acoustic" ADDED — the legacy set lacks both, but the
+#     task/product goal ("ONLY correct, full, original songs") and this
+#     phase's own test matrix explicitly require rejecting live/acoustic
+#     cuts, so the set must cover them.
+#   - "instrumental" DROPPED — already a hard, unconditional REJECT_KEYWORDS
+#     entry (Step 2 runs before this gate), so duplicating it here would be
+#     dead/redundant, not a functional gap.
+VERSION_TOKENS = frozenset({
+    "remix", "vip", "edit", "extended", "club", "radio", "mix",
+    "bootleg", "dub", "flip", "rework", "live", "acoustic",
+})
+_VERSION_WORD_RE = re.compile(r"\b([a-zA-Z]+)\b")
+
+
+def _version_tokens(text: str) -> frozenset:
+    """Extract version/edition tokens present in text (bracket-agnostic)."""
+    if not text:
+        return frozenset()
+    return frozenset(m.group(1).lower() for m in _VERSION_WORD_RE.finditer(text)) & VERSION_TOKENS
+
+
+def version_mismatch(yt_title: str, spotify_title: str) -> Optional[frozenset]:
+    """
+    Return the set of version tokens present in the candidate title but NOT
+    requested by the Spotify title, or None if there's no mismatch.
+
+    Symmetric to has_reject_keyword's exemption logic: a version word is
+    only a problem when the CANDIDATE has it and the QUERY didn't ask for
+    it. "Si Ai (Marshmello Remix)" vs Spotify title "Si Ai - Marshmello
+    Remix" is a legitimate accept — both sides carry "remix". "Song Title"
+    vs a candidate "Song Title (Bootleg Remix)" is not — the candidate
+    introduces an edition the listener never asked for.
+    """
+    cand = _version_tokens(yt_title)
+    if not cand:
+        return None
+    requested = _version_tokens(spotify_title)
+    extra = cand - requested
+    return extra or None
+
 
 # ═══════════════════════════════════════════════════════════════════
 # CORE MATCHING FUNCTIONS
@@ -236,11 +320,14 @@ def score_candidate(
 
     Pipeline:
       Step 2: Hard filter — reject forbidden keywords
+      Step 2b: Version/edition mismatch gate (remix, live, acoustic, ...)
       Step 3: Multi-factor scoring (title, artist, channel)
       Step 4: Smart duration scoring (tiered)
+      Step 4b: Title gate (reject if title_score too low, any artist)
+      Step 4c: Artist gate (reject if artist_score too low, any title)
       Step 5: Weighted final score
       Step 6: Official boost
-      Step 10: Hard duration ceiling (30s)
+      Step 10: Hard duration ceiling (HARD_DURATION_LIMIT_SEC)
 
     Formula:
       final = 0.5 * title_score + 0.3 * artist_score + 0.2 * duration_score + official_boost
@@ -264,6 +351,19 @@ def score_candidate(
     if rejected_keyword:
         rejections.append(f"Contains forbidden keyword: {rejected_keyword}")
         log_rejection(f"forbidden keyword '{rejected_keyword}'", yt_title)
+        return 0.0, rejections
+
+    # ── STEP 2b: Version/edition mismatch gate ──
+    # Catches remix/VIP/edit/extended/radio/bootleg/rework/live/acoustic
+    # candidates that REJECT_KEYWORDS doesn't cover (see VERSION_TOKENS).
+    mismatched_versions = version_mismatch(yt_title, spotify_title)
+    if mismatched_versions:
+        extras = ", ".join(sorted(mismatched_versions))
+        rejections.append(
+            f"Version mismatch: candidate is a '{extras}' edition not requested "
+            f"by the Spotify title"
+        )
+        log_rejection(f"version mismatch ({extras})", yt_title)
         return 0.0, rejections
 
     # ── STEP 10 (early): Hard duration ceiling ──
@@ -290,6 +390,62 @@ def score_candidate(
 
     # ── STEP 4: Smart duration scoring ──
     dur_score = duration_score(actual_duration_sec, expected_duration_sec)
+
+    # ── TITLE GATE (Phase 2 hardening): reject wrong-song matches where the
+    # title barely resembles the request, even with the right artist ──
+    # Confirmed false-positive: correct artist + wrong title + a middling
+    # duration can still clear min_score, because the artist term's 0.3
+    # weight partially buys back a weak title term (0.5 weight) — e.g.
+    # title=0.20, artist=1.00, dur=0.20 -> final=0.10+0.30+0.04=0.44,
+    # clears the live 0.40 threshold despite being a different song by the
+    # same artist. Mirrors the existing ARTIST GATE's shape and reuses its
+    # threshold (TITLE_GATE_MIN_SCORE == ARTIST_GATE_MIN_SCORE == 0.35) —
+    # not a new invented number — rather than tuning the 0.5/0.3/0.2 weights
+    # themselves, which would be a larger, less targeted change. No
+    # exemption: an artist can release many different songs, so a strong
+    # artist match legitimately says nothing about which song this is.
+    if title_score < TITLE_GATE_MIN_SCORE:
+        rejections.append(
+            f"Title mismatch: title_score={title_score:.2f} < {TITLE_GATE_MIN_SCORE} "
+            f"(artist={artist_score:.2f}, dur={dur_score:.2f}) — likely a different "
+            f"song by the same artist/channel"
+        )
+        log_rejection(f"title mismatch (title_score={title_score:.2f})", yt_title)
+        return 0.0, rejections
+
+    # ── ARTIST GATE: reject wrong-song matches with no artist overlap ──
+    # A high title_score from shared keywords (e.g. "Pinky (From Zanjeer)" vs
+    # "PINKY UP") is not enough on its own — the artist must appear somewhere
+    # in the title/channel unless the title is a near-exact match AND the
+    # duration also lines up (two unrelated songs sharing a generic title
+    # like "Criminal" rarely also share a duration).
+    #
+    # PHASE 2 HARDENING: the exemption previously fired at dur_score >= 0.5,
+    # i.e. any duration within 10s (see duration_score() tiers). That's wide
+    # enough that "Artist A - Song X" (requested) vs "Artist B - Song X"
+    # (wrong artist, same generic title, coincidentally similar length) could
+    # bypass the artist check entirely on title+duration alone — exactly the
+    # confirmed false-positive shape from the forensic case file (title=0.50,
+    # artist=0.35, dur=0.50 -> final=0.455, cleared the old 0.40 threshold).
+    # Tightened to dur_score >= 1.0 (diff <= 2s — the tightest existing tier)
+    # so the exemption only rescues the legitimate case it exists for: the
+    # correct recording uploaded to a channel that doesn't name the artist
+    # anywhere in title/uploader text (artist_score genuinely absent, not
+    # contradicted). Two DIFFERENT recordings sharing an identical title AND
+    # a sub-2-second duration by coincidence is not realistically preventable
+    # without per-candidate audio analysis (fingerprinting), which is
+    # explicitly out of scope for this phase — documented as a residual risk
+    # in the Phase 2 report rather than papered over here.
+    title_is_near_exact = title_score >= ARTIST_GATE_TITLE_EXEMPTION and dur_score >= 1.0
+    if artist and artist_score < ARTIST_GATE_MIN_SCORE and not title_is_near_exact:
+        rejections.append(
+            f"Artist mismatch: artist_score={artist_score:.2f} < {ARTIST_GATE_MIN_SCORE} "
+            f"and title/duration not a strong enough match "
+            f"(title={title_score:.2f}, dur={dur_score:.2f}) "
+            f"(likely a different song by '{uploader or yt_title}')"
+        )
+        log_rejection(f"artist mismatch (artist_score={artist_score:.2f}, title_score={title_score:.2f})", yt_title)
+        return 0.0, rejections
 
     # ── STEP 6: Official boost ──
     official_bonus = 0.05 if "official" in yt_lower else 0.0
@@ -323,12 +479,19 @@ def select_best_candidate(
     artist: str,
     expected_duration_sec: Optional[int],
     min_score: float = 0.35,
-) -> Tuple[Optional[Dict], str]:
+) -> Tuple[Optional[Dict], float, str]:
     """
     Step 7+8: Accept candidates >= min_score, sort descending, pick best.
+
+    PHASE 2: return signature widened from (candidate, reason) to
+    (candidate, score, reason) so callers can compare a stage's best
+    candidate against a candidate held from an earlier search stage
+    (see downloader_service._download_from_youtube) instead of committing
+    to the first stage that merely clears min_score. Verified exactly one
+    call site existed before this change (downloader_service.py).
     """
     if not candidates:
-        return None, "No YouTube search results available"
+        return None, 0.0, "No YouTube search results available"
 
     scored = []
     for i, candidate in enumerate(candidates):
@@ -363,14 +526,14 @@ def select_best_candidate(
         reasons = best["rejections"] or [f"Score {best['score']:.3f} below threshold {min_score}"]
         reason_str = " | ".join(reasons)
         logger.warning(f"No acceptable candidate (best={best['score']:.3f} < {min_score}): {reason_str}")
-        return None, f"Best candidate scored {best['score']:.3f} (below {min_score} threshold): {reason_str}"
+        return None, best["score"], f"Best candidate scored {best['score']:.3f} (below {min_score} threshold): {reason_str}"
 
     selected = best["candidate"]
     yt_title = selected.get("title", "Unknown")
     log_acceptance(yt_title, best["score"], selected.get("url"))
     logger.info(f"Selected: \"{yt_title}\" | Score: {best['score']:.2f}")
 
-    return selected, f"Selected candidate with score={best['score']:.3f}"
+    return selected, best["score"], f"Selected candidate with score={best['score']:.3f}"
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -32,23 +32,24 @@ function extractArtist(filename) {
   return parts.length > 1 ? parts[parts.length - 1].trim() : '';
 }
 
-function TrackArt({ path }) {
+function TrackArt({ path, accentColor }) {
   const [failed, setFailed] = useState(false);
   if (failed) {
     return (
-      <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-           style={{ background: 'var(--surface-2)' }}>
-        <Music className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+      <div className="tbl-thumb" style={{ background: `linear-gradient(135deg, ${accentColor}33, ${accentColor}10)` }}>
+        <Music className="w-3.5 h-3.5" style={{ color: accentColor }} />
       </div>
     );
   }
   return (
-    <img
-      src={`/api/artwork?path=${encodeURIComponent(path)}`}
-      alt=""
-      className="w-8 h-8 rounded-lg object-cover flex-shrink-0"
-      onError={() => setFailed(true)}
-    />
+    <div className="tbl-thumb" style={{ overflow: 'hidden' }}>
+      <img
+        src={api.artworkUrl(path)}
+        alt=""
+        className="w-full h-full object-cover"
+        onError={() => setFailed(true)}
+      />
+    </div>
   );
 }
 
@@ -167,6 +168,10 @@ export default function LibraryPage() {
   }, [files, search]);
 
   const folderNames = useMemo(() => Object.keys(grouped).sort(), [grouped]);
+  const maxFolderSize = useMemo(
+    () => Math.max(1, ...folderNames.map(f => grouped[f].length)),
+    [folderNames, grouped]
+  );
 
   function toggleFolder(name) {
     setExpandedFolders(prev => {
@@ -369,13 +374,13 @@ export default function LibraryPage() {
       </AnimatePresence>
 
       {/* Gap Analysis panel */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ ...ease, delay: 0.06 }}>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ ...ease, delay: 0.06 }} className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
         <button
           onClick={handleToggleGaps}
           style={{
             width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '9px 14px', borderRadius: gapsOpen ? '4px 4px 0 0' : 4,
-            background: 'var(--surface-0)', border: '1px solid var(--border-subtle)',
+            padding: '12px 16px',
+            background: 'transparent', border: 'none',
             cursor: 'pointer', color: 'var(--text-secondary)',
           }}
         >
@@ -404,9 +409,8 @@ export default function LibraryPage() {
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
               style={{
-                overflow: 'hidden', borderRadius: '0 0 4px 4px',
-                border: '1px solid var(--border-subtle)', borderTop: 'none',
-                background: 'var(--surface-0)',
+                overflow: 'hidden',
+                borderTop: '1px solid var(--border-subtle)',
               }}
             >
               {gapsLoading ? (
@@ -462,8 +466,8 @@ export default function LibraryPage() {
                             <span style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{genre}</span>
                             <span style={{ fontSize: 9, fontFamily: 'monospace', color: 'var(--text-muted)' }}>{count}</span>
                           </div>
-                          <div style={{ height: 3, background: 'var(--surface-2)', borderRadius: 2, overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent-violet)', borderRadius: 2, transition: 'width 0.5s ease' }} />
+                          <div className="prog-bar" style={{ margin: 0, height: 3 }}>
+                            <div className="prog-fill h-full" style={{ width: `${pct}%` }} />
                           </div>
                         </div>
                       );
@@ -508,46 +512,24 @@ export default function LibraryPage() {
         </AnimatePresence>
       </motion.div>
 
-      {/* Search — terminal filter */}
+      {/* Search */}
       <motion.div
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ ...ease, delay: 0.08 }}
-        style={{
-          display: 'flex', alignItems: 'center',
-          border: '1px solid var(--border-default)',
-          borderRadius: 4, background: 'var(--surface-0)',
-          transition: 'border-color 0.15s, box-shadow 0.15s',
-        }}
-        onFocusCapture={e => {
-          e.currentTarget.style.borderColor = 'var(--accent-cyan)';
-          e.currentTarget.style.boxShadow = '0 0 0 1px var(--accent-cyan)';
-        }}
-        onBlurCapture={e => {
-          e.currentTarget.style.borderColor = 'var(--border-default)';
-          e.currentTarget.style.boxShadow = 'none';
-        }}
+        className="search-wrap" style={{ maxWidth: 'none' }}
       >
-        <span style={{
-          paddingLeft: 12, paddingRight: 6, flexShrink: 0,
-          color: 'var(--accent-cyan)', fontSize: 11, fontWeight: 700,
-          letterSpacing: '0.04em', userSelect: 'none',
-          fontFamily: 'ui-monospace, monospace',
-        }}>
-          filter:
-        </span>
+        <Search style={{ width: 13, height: 13, flexShrink: 0 }} />
         <input
           placeholder="artist, title, or genre…"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          style={{
-            flex: 1, height: 40, background: 'transparent', border: 'none',
-            outline: 'none', color: 'var(--text-primary)',
-            fontSize: 13, fontFamily: 'ui-monospace, monospace',
-          }}
+          className="tb-search"
+          style={{ cursor: 'text', height: 22 }}
         />
         {search && (
           <button
             onClick={() => setSearch('')}
-            style={{ padding: '0 10px', color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+            className="flex-shrink-0"
+            style={{ color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
           >
             <X style={{ width: 12, height: 12 }} />
           </button>
@@ -562,8 +544,7 @@ export default function LibraryPage() {
           ) : folderNames.length === 0 ? (
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-              className="flex flex-col items-center justify-center py-16 rounded-xl"
-              style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+              className="glass-card flex flex-col items-center justify-center py-16"
             >
               <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-4"
                    style={{ background: 'var(--surface-1)' }}>
@@ -590,61 +571,66 @@ export default function LibraryPage() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
                     transition={{ ...ease, delay: Math.min(idx * 0.03, 0.18) }}
-                    style={{ borderBottom: '1px solid var(--border-subtle)', overflow: 'hidden' }}
+                    className="glass-card"
+                    style={{ padding: 0, overflow: 'hidden', marginBottom: 8 }}
                   >
-                    {/* Folder header — crate divider with genre color bar */}
+                    {/* Folder header */}
                     <button
                       onClick={() => toggleFolder(folder)}
                       aria-expanded={isExpanded}
                       aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${genreName}`}
                       className="w-full focus-ring group/folder"
                       style={{
-                        display: 'flex', alignItems: 'center', gap: 10,
-                        padding: '9px 12px',
+                        display: 'flex', flexDirection: 'column', gap: 6,
+                        padding: '12px 14px',
                         background: 'transparent', border: 'none', cursor: 'pointer',
-                        borderLeft: `3px solid ${accentColor}`,
                         transition: 'background 0.1s',
                       }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-0)'}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--glass-subtle)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
-                      <motion.div
-                        animate={{ rotate: isExpanded ? 90 : 0 }}
-                        transition={{ duration: 0.15 }}
-                        style={{ flexShrink: 0 }}
-                      >
-                        <ChevronRight style={{ width: 12, height: 12, color: accentColor }} />
-                      </motion.div>
-                      <span style={{
-                        fontSize: 11, fontWeight: 700, letterSpacing: '0.09em',
-                        textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
-                        color: isExpanded ? 'var(--text-primary)' : 'var(--text-secondary)',
-                        flex: 1, textAlign: 'left',
-                      }}>
-                        {genreName}
-                      </span>
-                      <span style={{
-                        fontSize: 10, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums',
-                        color: 'var(--text-muted)', flexShrink: 0,
-                      }}>
-                        {tracks.length}
-                      </span>
-                      <a
-                        href={api.rekordboxExportUrl(folder, folder.split('/').pop())}
-                        download
-                        title={`Export "${genreName}" as Rekordbox XML`}
-                        onClick={e => e.stopPropagation()}
-                        style={{
-                          width: 22, height: 22, display: 'flex', alignItems: 'center',
-                          justifyContent: 'center', borderRadius: 4, flexShrink: 0,
-                          color: 'var(--text-muted)', opacity: 0, transition: 'opacity 0.15s',
-                        }}
-                        className="group-hover/folder:opacity-100 focus:opacity-100"
-                        onMouseEnter={e => { e.currentTarget.style.color = accentColor; e.currentTarget.style.background = 'var(--surface-1)'; }}
-                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.background = 'transparent'; }}
-                      >
-                        <Download style={{ width: 12, height: 12 }} />
-                      </a>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>
+                        <motion.div
+                          animate={{ rotate: isExpanded ? 90 : 0 }}
+                          transition={{ duration: 0.15 }}
+                          style={{ flexShrink: 0 }}
+                        >
+                          <ChevronRight style={{ width: 12, height: 12, color: accentColor }} />
+                        </motion.div>
+                        <span style={{
+                          fontSize: 11, fontWeight: 700, letterSpacing: '0.09em',
+                          textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
+                          color: isExpanded ? 'var(--text-primary)' : 'var(--text-secondary)',
+                          flex: 1, textAlign: 'left',
+                        }}>
+                          {genreName}
+                        </span>
+                        <span style={{
+                          fontSize: 10, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums',
+                          color: 'var(--text-muted)', flexShrink: 0,
+                        }}>
+                          {tracks.length}
+                        </span>
+                        <a
+                          href={api.rekordboxExportUrl(folder, folder.split('/').pop())}
+                          download
+                          title={`Export "${genreName}" as Rekordbox XML`}
+                          onClick={e => e.stopPropagation()}
+                          style={{
+                            width: 22, height: 22, display: 'flex', alignItems: 'center',
+                            justifyContent: 'center', borderRadius: 4, flexShrink: 0,
+                            color: 'var(--text-muted)', opacity: 0, transition: 'opacity 0.15s',
+                          }}
+                          className="group-hover/folder:opacity-100 focus:opacity-100"
+                          onMouseEnter={e => { e.currentTarget.style.color = accentColor; e.currentTarget.style.background = 'var(--surface-1)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <Download style={{ width: 12, height: 12 }} />
+                        </a>
+                      </div>
+                      <div className="prog-bar" style={{ margin: 0, height: 3 }}>
+                        <div className="prog-fill h-full" style={{ width: `${Math.round((tracks.length / maxFolderSize) * 100)}%`, background: accentColor }} />
+                      </div>
                     </button>
 
                     {/* Track rows */}
@@ -663,22 +649,11 @@ export default function LibraryPage() {
                               initial={{ opacity: 0, x: -8 }}
                               animate={{ opacity: 1, x: 0 }}
                               transition={{ delay: Math.min(fileIdx * 0.015, 0.12), duration: 0.15 }}
-                              className="group/track"
-                              style={{
-                                display: 'flex', alignItems: 'center', gap: 8,
-                                padding: '5px 12px',
-                                borderTop: '1px solid var(--border-subtle)',
-                                minHeight: 38, transition: 'background 0.1s',
-                              }}
-                              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-0)'}
-                              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                              className="tbl-row group/track"
+                              style={{ borderRadius: 0 }}
                             >
                               {/* Row index */}
-                              <span style={{
-                                fontSize: 9, fontFamily: 'monospace', color: 'var(--text-muted)',
-                                width: 20, textAlign: 'right', flexShrink: 0,
-                                fontVariantNumeric: 'tabular-nums',
-                              }}>
+                              <span className="tbl-num">
                                 {fileIdx + 1}
                               </span>
 
@@ -687,19 +662,13 @@ export default function LibraryPage() {
                                 const meta = folderTags[folder]?.[file.name];
                                 return (
                                   <>
-                                    <TrackArt path={file.path} />
+                                    <TrackArt path={file.path} accentColor={accentColor} />
                                     <div className="min-w-0 flex-1">
-                                      <p style={{
-                                        fontSize: 12, fontWeight: 500, color: 'var(--text-primary)',
-                                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                      }}>
+                                      <p className="tbl-name truncate">
                                         {meta?.title || file.name}
                                       </p>
                                       {meta?.artist && (
-                                        <p style={{
-                                          fontSize: 10, color: 'var(--text-tertiary)',
-                                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                        }}>
+                                        <p className="tbl-artist truncate">
                                           {meta.artist}
                                         </p>
                                       )}

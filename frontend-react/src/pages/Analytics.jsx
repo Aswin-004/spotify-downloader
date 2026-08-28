@@ -71,40 +71,22 @@ function StatCard({ icon: Icon, label, value, accent, loading }) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={ease}
-      style={{
-        background: 'var(--surface-0)', border: '1px solid var(--border-subtle)',
-        borderRadius: 4, padding: '14px 16px',
-        borderLeft: `3px solid ${accent}`,
-      }}
+      className="stat-card"
     >
+      <Icon className="stat-ic" style={{ width: 22, height: 22, color: accent }} />
+      <div className="stat-lbl text-label">{label}</div>
       {loading ? (
-        <Skeleton className="h-8 w-16 mb-1" />
+        <Skeleton className="h-6 w-16 mt-1" />
       ) : (
-        <p style={{
-          fontSize: 28, fontWeight: 800, fontVariantNumeric: 'tabular-nums',
-          lineHeight: 1, color: accent, letterSpacing: '-0.04em', marginBottom: 5,
-        }}>
-          {value}
-        </p>
+        <div className="stat-val" style={{ color: accent }}>{value}</div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        <Icon style={{ width: 10, height: 10, color: accent, opacity: 0.7 }} />
-        <p style={{
-          fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
-          textTransform: 'uppercase', fontFamily: 'ui-monospace, monospace',
-          color: 'var(--text-muted)',
-        }}>{label}</p>
-      </div>
     </motion.div>
   );
 }
 
 function ChartCard({ title, icon: Icon, accent, children, action }) {
   return (
-    <div style={{
-      background: 'var(--surface-0)', border: '1px solid var(--border-subtle)',
-      borderRadius: 4, overflow: 'hidden',
-    }}>
+    <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)',
@@ -271,11 +253,11 @@ export default function Analytics() {
       )}
 
       {/* KPI strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 0, border: '1px solid var(--border-subtle)', borderRadius: 4, overflow: 'hidden', background: 'var(--surface-0)' }}>
-        <StatCard icon={Download}   label="Total Downloads" value={overview?.total_downloads ?? '—'} accent="var(--accent-emerald)" loading={loading} />
-        <div style={{ borderLeft: '1px solid var(--border-subtle)' }}><StatCard icon={TrendingUp} label="Success Rate"  value={overview ? `${overview?.success_rate ?? '—'}%` : '—'} accent="var(--accent-cyan)"    loading={loading} /></div>
-        <div style={{ borderLeft: '1px solid var(--border-subtle)' }}><StatCard icon={HardDrive}  label="MB Cached"    value={overview?.musicbrainz_cached ?? '—'}                  accent="var(--accent-amber)"   loading={loading} /></div>
-        <div style={{ borderLeft: '1px solid var(--border-subtle)' }}><StatCard icon={Users}      label="Total Artists" value={overview?.total_artists ?? '—'}                      accent="var(--accent-violet)"  loading={loading} /></div>
+      <div className="grid-stat">
+        <StatCard icon={Download}    label="Total Downloads" value={overview?.total_downloads ?? '—'}                     accent="var(--accent-emerald)" loading={loading} />
+        <StatCard icon={TrendingUp}  label="Success Rate"    value={overview ? `${overview?.success_rate ?? '—'}%` : '—'} accent="var(--accent-cyan)"    loading={loading} />
+        <StatCard icon={HardDrive}   label="MB Cached"        value={overview?.musicbrainz_cached ?? '—'}                  accent="var(--accent-amber)"   loading={loading} />
+        <StatCard icon={Users}       label="Total Artists"    value={overview?.total_artists ?? '—'}                       accent="var(--accent-violet)"  loading={loading} />
       </div>
 
       {/* Downloads per day */}
@@ -374,8 +356,7 @@ export default function Analytics() {
       {/* Recent + Failed tables */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Recent downloads */}
-        <div className="rounded-xl overflow-hidden"
-             style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+        <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
           <div className="flex items-center gap-2 px-5 py-4"
                style={{ borderBottom: '1px solid var(--border-subtle)' }}>
             <Download className="w-4 h-4" style={{ color: CHART.emerald }} />
@@ -392,56 +373,32 @@ export default function Analytics() {
                 <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>No downloads yet</p>
               </div>
             ) : (
-              <table className="w-full">
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    {['Title', 'Artist', 'Platform', 'Tagged', 'Time'].map((h, i) => (
-                      <th key={h} className={`text-left px-4 py-2.5 text-10 font-semibold uppercase tracking-wide${i >= 2 ? ' hidden sm:table-cell' : ''}${i === 4 ? ' text-right' : ''}`}
-                          style={{ color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentDownloads.map((item, i) => (
-                    <tr key={item._id || i}
-                        style={{ borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none' }}
-                        onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
-                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                      <td className="px-4 py-2.5 truncate max-w-[140px] text-12" style={{ color: 'var(--text-primary)' }}>
-                        {item.track_title || '—'}
-                      </td>
-                      <td className="px-4 py-2.5 truncate max-w-[100px] text-11" style={{ color: 'var(--text-tertiary)' }}>
-                        {item.artist || '—'}
-                      </td>
-                      <td className="px-4 py-2.5 hidden sm:table-cell">
-                        <span className="text-10 font-semibold px-2 py-0.5 rounded-full uppercase tracking-wide"
-                              style={{ background: 'var(--surface-2)', color: 'var(--text-tertiary)' }}>
-                          {item.source_platform || '—'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 hidden sm:table-cell">
-                        {item.tagging_report
-                          ? <CheckCircle2 className="w-3.5 h-3.5" style={{ color: CHART.emerald }} />
-                          : <XCircle className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
-                        }
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-10 font-mono whitespace-nowrap"
-                          style={{ color: 'var(--text-muted)' }}>
-                        {formatTime(item.downloaded_at)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="px-2 pb-2">
+                {recentDownloads.map((item, i) => (
+                  <div key={item._id || i} className="tbl-row">
+                    <div className="tbl-thumb" style={{ width: 32, height: 32, background: item.tagging_report ? 'linear-gradient(135deg, rgba(16,185,129,0.2), rgba(16,185,129,0.06))' : 'var(--glass-default)' }}>
+                      {item.tagging_report
+                        ? <CheckCircle2 className="w-3.5 h-3.5" style={{ color: CHART.emerald }} />
+                        : <XCircle className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+                      }
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="tbl-name truncate">{item.track_title || '—'}</p>
+                      <p className="tbl-artist truncate">{item.artist || '—'}</p>
+                    </div>
+                    <span className="tbl-badge flex-shrink-0 hidden sm:inline-flex">{item.source_platform || '—'}</span>
+                    <span className="text-mono flex-shrink-0" style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                      {formatTime(item.downloaded_at)}
+                    </span>
+                  </div>
+                ))}
+              </div>
             )}
           </ScrollArea>
         </div>
 
         {/* Failed downloads */}
-        <div className="rounded-xl overflow-hidden"
-             style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+        <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
           <div className="flex items-center justify-between px-5 py-4"
                style={{ borderBottom: '1px solid var(--border-subtle)' }}>
             <div className="flex items-center gap-2">
@@ -449,8 +406,7 @@ export default function Analytics() {
               <h3 className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>Failed Downloads</h3>
             </div>
             {failedDownloads.length > 0 && (
-              <span className="text-10 font-mono px-2 py-0.5 rounded-full"
-                    style={{ background: 'var(--accent-rose-dim)', color: 'var(--accent-rose)' }}>
+              <span className="tbl-badge badge-rose">
                 {failedDownloads.length}
               </span>
             )}
@@ -466,57 +422,36 @@ export default function Analytics() {
                 <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>No failures — great!</p>
               </div>
             ) : (
-              <table className="w-full">
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    {['Title', 'Artist', 'Error', 'Time', ''].map((h, i) => (
-                      <th key={i} className={`text-left px-4 py-2.5 text-10 font-semibold uppercase tracking-wide${i === 2 ? ' hidden sm:table-cell' : ''}${i >= 3 ? ' text-right' : ''}`}
-                          style={{ color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {failedDownloads.map((item, i) => (
-                    <tr key={item._id || i}
-                        style={{ borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none' }}
-                        onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-1)'}
-                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                      <td className="px-4 py-2.5 truncate max-w-[120px] text-12" style={{ color: 'var(--text-primary)' }}>
-                        {item.title || '—'}
-                      </td>
-                      <td className="px-4 py-2.5 truncate max-w-[80px] text-11" style={{ color: 'var(--text-tertiary)' }}>
-                        {item.artist || '—'}
-                      </td>
-                      <td className="px-4 py-2.5 truncate max-w-[140px] text-10 hidden sm:table-cell"
-                          style={{ color: 'var(--accent-rose)' }}>
+              <div className="px-2 pb-2">
+                {failedDownloads.map((item, i) => (
+                  <div key={item._id || i} className="tbl-row">
+                    <div className="tbl-thumb" style={{ width: 32, height: 32, background: 'linear-gradient(135deg, rgba(244,63,94,0.2), rgba(244,63,94,0.06))' }}>
+                      <XCircle className="w-3.5 h-3.5" style={{ color: CHART.rose }} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="tbl-name truncate">{item.title || '—'}</p>
+                      <p className="truncate" style={{ fontSize: 11, marginTop: 1, color: 'var(--accent-rose)' }}>
                         {item.error || '—'}
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-10 font-mono whitespace-nowrap"
-                          style={{ color: 'var(--text-muted)' }}>
-                        {formatTime(item.timestamp)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right">
-                        <button
-                          disabled={retrying[i]}
-                          onClick={() => handleRetry(item.track_id, i)}
-                          className="text-11 px-2 py-1 rounded-lg transition-all duration-150 cursor-pointer focus-ring disabled:opacity-40"
-                          style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)' }}
-                          onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent-amber)'; e.currentTarget.style.borderColor = 'rgba(245,158,11,0.3)'; }}
-                          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
-                        >
-                          {retrying[i]
-                            ? <Loader2 className="w-3 h-3 animate-spin inline" />
-                            : <RotateCw className="w-3 h-3 inline" />
-                          }
-                          {' '}Retry
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </p>
+                    </div>
+                    <span className="text-mono flex-shrink-0" style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                      {formatTime(item.timestamp)}
+                    </span>
+                    <button
+                      disabled={retrying[i]}
+                      onClick={() => handleRetry(item.track_id, i)}
+                      className="btn-s flex-shrink-0"
+                      style={{ padding: '4px 10px', fontSize: 11 }}
+                    >
+                      {retrying[i]
+                        ? <Loader2 className="w-3 h-3 animate-spin inline" />
+                        : <RotateCw className="w-3 h-3 inline" />
+                      }
+                      {' '}Retry
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
           </ScrollArea>
         </div>

@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Download, Loader2, TrendingUp, XCircle } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { api } from '@/services/api';
+import { cn } from '@/lib/utils';
 import { ease } from '@/lib/motion';
 
 function AnimatedNumber({ value, suffix = '' }) {
@@ -110,43 +111,17 @@ export default function StatsCards() {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: [0.22,1,0.36,1] }}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 4,
-        background: 'var(--surface-0)',
-        overflow: 'hidden',
-      }}
+      className="grid-stat"
     >
-      {KPI_CONFIG.map(({ key, label, icon: Icon, spin, suffix, accent, border }, i) => (
-        <div
-          key={key}
-          style={{
-            padding: '14px 16px',
-            borderLeft: i > 0 ? '1px solid var(--border-subtle)' : 'none',
-          }}
-        >
-          <div style={{
-            fontSize: 26, fontWeight: 800, letterSpacing: '-0.04em',
-            fontVariantNumeric: 'tabular-nums', lineHeight: 1, color: accent,
-            marginBottom: 5,
-          }}>
+      {KPI_CONFIG.map(({ key, label, icon: Icon, spin, suffix, accent }) => (
+        <div key={key} className="stat-card">
+          <Icon
+            className={cn('stat-ic', spin && values[key] > 0 && 'animate-spin')}
+            style={{ width: 22, height: 22, color: accent }}
+          />
+          <div className="stat-lbl text-label">{label}</div>
+          <div className="stat-val" style={{ color: accent }}>
             <AnimatedNumber value={values[key] ?? 0} suffix={suffix} />
-          </div>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-          }}>
-            <Icon
-              className={spin && values[key] > 0 ? 'animate-spin' : ''}
-              style={{ width: 10, height: 10, color: accent, opacity: 0.7, flexShrink: 0 }}
-            />
-            <span style={{
-              fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
-              color: 'var(--text-muted)', textTransform: 'uppercase',
-            }}>
-              {label}
-            </span>
           </div>
         </div>
       ))}

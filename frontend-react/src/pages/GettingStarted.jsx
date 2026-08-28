@@ -126,16 +126,14 @@ export default function GettingStarted() {
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ ...ease, delay: 0.08 + i * 0.05 }}
-              className="rounded-xl p-4 flex gap-4"
-              style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
+              className="step-card"
             >
-              <div className="w-7 h-7 rounded-full flex items-center justify-center text-12 font-bold flex-shrink-0 mt-0.5"
-                   style={{ background: 'var(--accent-violet-dim)', color: 'var(--accent-violet)' }}>
+              <div className="step-num">
                 {s.num}
               </div>
               <div className="space-y-1 min-w-0">
-                <p className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>{s.title}</p>
-                <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>{s.desc}</p>
+                <p className="step-title">{s.title}</p>
+                <p className="step-desc">{s.desc}</p>
                 {s.code && (
                   <code className="text-11 font-mono px-2 py-0.5 rounded-md inline-block"
                         style={{ background: 'var(--accent-violet-dim)', color: 'var(--text-accent)' }}>
@@ -151,8 +149,7 @@ export default function GettingStarted() {
       {/* Download workflow */}
       <Section delay={0.15}>
         <SectionTitle icon={Zap} color="var(--accent-amber)">The Download Workflow</SectionTitle>
-        <div className="flex flex-wrap gap-2 items-center p-4 rounded-xl"
-             style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+        <div className="glass-card flex flex-wrap gap-2 items-center">
           {workflow.map((step, i) => (
             <div key={i} className="flex items-center gap-2">
               <div className="space-y-0.5 text-center">
@@ -175,15 +172,10 @@ export default function GettingStarted() {
       {/* Pages at a glance */}
       <Section delay={0.2}>
         <SectionTitle icon={FolderOpen} color="var(--accent-cyan)">Pages at a Glance</SectionTitle>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid-2">
           {pages.map(({ icon: Icon, label, to, accent, desc }) => (
             <Link key={to} to={to} className="block">
-              <div
-                className="rounded-xl p-4 h-full space-y-2 transition-all duration-150 cursor-pointer focus-ring"
-                style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}
-                onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-1)'; e.currentTarget.style.borderColor = 'var(--border-default)'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface-0)'; e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
-              >
+              <div className="glass-card hoverable h-full space-y-2">
                 <div className="flex items-center gap-2">
                   <Icon className="w-4 h-4" style={{ color: accent }} />
                   <span className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>{label}</span>
@@ -199,8 +191,7 @@ export default function GettingStarted() {
       {/* Custom folders */}
       <Section delay={0.25}>
         <SectionTitle icon={Settings} color="var(--text-tertiary)">Using Your Existing DJ Folder Structure</SectionTitle>
-        <div className="rounded-xl p-5 space-y-3"
-             style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+        <div className="glass-card space-y-3">
           <p className="text-12" style={{ color: 'var(--text-tertiary)' }}>
             If you already have an organised music folder (e.g.{' '}
             <code className="text-11 font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--accent-violet-dim)', color: 'var(--text-accent)' }}>D:\Music\House\</code>
@@ -244,9 +235,7 @@ export default function GettingStarted() {
         <SectionTitle icon={BookOpen} color="var(--accent-violet)">FAQ</SectionTitle>
         <div className="space-y-3">
           {faqs.map((faq, i) => (
-            <div key={i}
-                 className="rounded-xl p-4 space-y-1.5"
-                 style={{ background: 'var(--surface-0)', border: '1px solid var(--border-subtle)' }}>
+            <div key={i} className="glass-card space-y-1.5">
               <p className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>{faq.q}</p>
               <p className="text-12 leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>{faq.a}</p>
             </div>

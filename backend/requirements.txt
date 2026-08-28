@@ -4,13 +4,24 @@ flask-socketio==5.6.1
 flask-limiter[redis]>=3.5.0
 simple-websocket>=1.0.0
 spotipy==2.26.0
-yt-dlp==2026.3.17
+yt-dlp>=2026.8.19  # NOT exact-pinned on purpose: YouTube periodically changes its
+# signature/format-signing logic, and yt-dlp needs frequent releases to keep up.
+# The exact pin here was 2026.3.17 (~5 months stale as of 2026-08-25) when every
+# download started failing with "unable to download video data: HTTP Error 403:
+# Forbidden" across every fallback stage/candidate — search & metadata extraction
+# still worked, only the actual media fetch was rejected, which is the classic
+# stale-yt-dlp signature. 2026.8.19 was the latest available at the time of this
+# fix and is what was verified (API surface unchanged: YoutubeDL, extract_info,
+# the FFmpegExtractAudio postprocessor args, cookiefile, extractor_args po_token/
+# player_client all still present/compatible). If this recurs, the fix is almost
+# always "pip install --upgrade yt-dlp", not a code change.
 python-dotenv==1.0.0
 loguru>=0.7.0
 thefuzz[speedup]>=0.22.0
 mutagen>=1.47.0
 requests>=2.31.0
 musicbrainzngs>=0.7.1
+groq==1.2.0
 pandas>=2.0.0
 celery==5.3.6
 redis==5.0.1

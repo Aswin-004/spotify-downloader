@@ -404,46 +404,60 @@ class MaintenanceWorker:
                 # ── 2. Spotify artist search ─────────────────────────────────
                 if not genre_path and artist_lower not in ("unknown", "electronic", ""):
                     try:
-                        from services.spotify_service import get_spotify_service as _get_sp
+                        from services.spotify_service import get_spotify_service as _get_sp, is_rate_limited as _is_rl
                         from services.genre_router import resolve_genre_folder_with_confidence as _rgfc
-                        _sp = _get_sp()
-                        if _sp:
-                            _res = _sp.sp.search(q=artist_name, type="artist", limit=1)
-                            _items = _res.get("artists", {}).get("items", [])
-                            _aid = _items[0]["id"] if _items else ""
-                            folder, conf, src = _rgfc(_aid, artist_name, _sp.sp)
-                            if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
-                                genre_path = folder
-                                route_source = src
-                    except Exception:
-                        pass
+                        if _is_rl():
+                            # Spotify is cooling down — this call would either raise or (since
+                            # this client uses retries=0) burn part of the cooldown for nothing.
+                            # Skip cleanly; steps 4-7 (Last.fm/MusicBrainz/AcoustID/Gemini) don't
+                            # need Spotify and this file gets another shot next cycle either way.
+                            logger.debug(f"[maintenance] retag_catchall: Spotify rate-limited — skipping artist search for {artist_name!r}")
+                        else:
+                            _sp = _get_sp()
+                            if _sp:
+                                _res = _sp.sp.search(q=artist_name, type="artist", limit=1)
+                                _items = _res.get("artists", {}).get("items", [])
+                                _aid = _items[0]["id"] if _items else ""
+                                if not _aid:
+                                    logger.debug(f"[maintenance] retag_catchall: Spotify artist search found no match for {artist_name!r}")
+                                folder, conf, src = _rgfc(_aid, artist_name, _sp.sp)
+                                if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
+                                    genre_path = folder
+                                    route_source = src
+                    except Exception as _e2:
+                        # Previously silent — now logged so a rate-limit/API failure here is
+                        # distinguishable from "Spotify genuinely has no match for this artist".
+                        logger.debug(f"[maintenance] retag_catchall: Spotify artist search failed for {artist_name!r}: {_e2}")
 
                 # ── 3. Spotify title-only search ─────────────────────────────
                 if not genre_path and title_tag:
                     try:
-                        from services.spotify_service import get_spotify_service as _get_sp
+                        from services.spotify_service import get_spotify_service as _get_sp, is_rate_limited as _is_rl
                         from services.genre_router import resolve_genre_folder_with_confidence as _rgfc
                         from mutagen.id3 import TPE1 as _TPE1
-                        _sp = _get_sp()
-                        if _sp:
-                            _res = _sp.sp.search(q=f"track:{title_tag}", type="track", limit=5)
-                            for _t in _res.get("tracks", {}).get("items", []):
-                                _sp_artist = _t.get("artists", [{}])[0].get("name", "")
-                                _sp_aid = _t.get("artists", [{}])[0].get("id", "")
-                                if not _sp_artist:
-                                    continue
-                                folder, conf, src = _rgfc(_sp_aid, _sp_artist, _sp.sp)
-                                if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
-                                    genre_path = folder
-                                    route_source = f"spotify_title/{src}"
-                                    try:
-                                        _tags["TPE1"] = _TPE1(encoding=3, text=_sp_artist)
-                                        _tags.save(str(fp))
-                                    except Exception:
-                                        pass
-                                    break
-                    except Exception:
-                        pass
+                        if _is_rl():
+                            logger.debug(f"[maintenance] retag_catchall: Spotify rate-limited — skipping title search for {title_tag!r}")
+                        else:
+                            _sp = _get_sp()
+                            if _sp:
+                                _res = _sp.sp.search(q=f"track:{title_tag}", type="track", limit=5)
+                                for _t in _res.get("tracks", {}).get("items", []):
+                                    _sp_artist = _t.get("artists", [{}])[0].get("name", "")
+                                    _sp_aid = _t.get("artists", [{}])[0].get("id", "")
+                                    if not _sp_artist:
+                                        continue
+                                    folder, conf, src = _rgfc(_sp_aid, _sp_artist, _sp.sp)
+                                    if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
+                                        genre_path = folder
+                                        route_source = f"spotify_title/{src}"
+                                        try:
+                                            _tags["TPE1"] = _TPE1(encoding=3, text=_sp_artist)
+                                            _tags.save(str(fp))
+                                        except Exception:
+                                            pass
+                                        break
+                    except Exception as _e3:
+                        logger.debug(f"[maintenance] retag_catchall: Spotify title search failed for {title_tag!r}: {_e3}")
 
                 # ── 4. Last.fm (free, no quota) ──────────────────────────────
                 if not genre_path and title_tag and artist_name:
