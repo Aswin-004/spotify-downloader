@@ -1,0 +1,624 @@
+{
+  "phase": "1C",
+  "generated_at": "2026-09-07T10:12:48.512670+00:00",
+  "backup": {
+    "backup_timestamp_utc": "2026-09-07T09:21:52.773278+00:00",
+    "mongo_database": "spotify_downloader",
+    "collection": "library_index",
+    "document_count": 2481,
+    "backup_path": "C:\\Users\\Aswin-pc\\AppData\\Local\\Temp\\claude\\C--Users-Aswin-pc-Desktop-Project-spotify-meta-downloader\\dc8555b5-5664-4fd1-97aa-84311b8ddb95\\scratchpad\\library_index_backup_20260907T092152Z.json",
+    "backup_bytes": 10391555,
+    "sha256": "ff56f228b634ae36e5920246cee7f37f1cb3557196c8356baf1580342fc99bba",
+    "format": "bson.json_util.dumps (lossless BSON, _id preserved as $oid)"
+  },
+  "repair_policy": {
+    "identity": "sp:<spotify_id> when a valid TXXX:spotify_id exists, else ch:<content_hash> (project convention, services/dedup_service.py)",
+    "write_mode": "field-scoped $set only; no whole-document or whole-subdocument writes",
+    "metadata_rule": "fill ONLY when the Mongo field is null/absent/empty; never overwrite an existing value",
+    "protected_fields": [
+      "gemini_*",
+      "lastfm_*",
+      "audio_fingerprint",
+      "acoustid_id",
+      "fingerprint_source",
+      "genre_folder",
+      "content_hash"
+    ],
+    "bpm_key_rule": "embedded ID3 BPM/key are metadata truth; librosa results were compared and recorded but never written over them",
+    "analysis_rule": "librosa wrote ONLY rms_energy, spectral_centroid_mean, zero_crossing_rate, duration_sec, confidence",
+    "spotify_id_guard": "spotify_id NOT written for files whose tag ID collides across multiple physical files",
+    "physical_files": "never modified, moved, renamed, retagged or deleted"
+  },
+  "execution_summary": {
+    "shadow_salvage_fields": 161,
+    "shadow_removed": 356,
+    "orphan_created": 1,
+    "orphan_skipped_exists": 39,
+    "fill_documents": 1927,
+    "fill_fields": 17974,
+    "field::album": 911,
+    "field::album_artist": 1909,
+    "field::year": 747,
+    "field::track_number": 766,
+    "field::audio_features.key_raw_tag": 1919,
+    "field::audio_features.duration_sec": 1925,
+    "field::title": 1497,
+    "field::artist": 1490,
+    "field::audio_features.bpm": 1509,
+    "field::audio_features.key": 1509,
+    "field::audio_features.camelot": 1509,
+    "field::content_hash": 1493,
+    "field::gemini_genre": 311,
+    "field::spotify_id": 479,
+    "fill_spotify_id_blocked_by_collision": 20
+  },
+  "changes_recorded": 2338,
+  "skipped_recorded": 59,
+  "errors": [],
+  "shadow_resolution": {
+    "pairs_resolved": 356,
+    "conflicts": 0,
+    "conflict_details": [],
+    "salvaged_fields": 161
+  },
+  "orphan_recovery": {
+    "indexed": 1,
+    "review_identity_on_soft_deleted_record": 39,
+    "review_incomplete_tags": 8,
+    "review_details": [
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\ingest\\uncategorized\\cloudy eyes (dance tonight) - reznik.mp3.trimmed.mp3",
+        "reason": "no_spotify_id_and_incomplete_tags",
+        "title": "",
+        "artist": ""
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\ingest\\uncategorized\\crazy for it - rampa.mp3.trimmed.mp3",
+        "reason": "no_spotify_id_and_incomplete_tags",
+        "title": "",
+        "artist": ""
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\ingest\\uncategorized\\selenophilia - oblium.mp3",
+        "reason": "no_spotify_id_and_incomplete_tags",
+        "title": "",
+        "artist": ""
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\trance\\03_-_yoshua_em_-_cuentame_tus_penas_klickaud.mp3",
+        "reason": "no_spotify_id_and_incomplete_tags",
+        "title": "",
+        "artist": ""
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\trance\\arrack-shanthi_devil-experimental_darkpsy_klickaud.mp3",
+        "reason": "no_spotify_id_and_incomplete_tags",
+        "title": "",
+        "artist": ""
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\trance\\demoniac_insomniac_-_nataraja_170_bpm_klickaud.mp3",
+        "reason": "no_spotify_id_and_incomplete_tags",
+        "title": "",
+        "artist": ""
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\trance\\natalia_lafourcade_ft_julieta_venegas_-_hu_hu_hu_biogenetic_remix_click_buy_to_free_dl_klickaud.mp3",
+        "reason": "no_spotify_id_and_incomplete_tags",
+        "title": "",
+        "artist": ""
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\trance\\shamanic_ritual_unmasterd_experimental_track_wav_file_klickaud.mp3",
+        "reason": "no_spotify_id_and_incomplete_tags",
+        "title": "",
+        "artist": ""
+      }
+    ]
+  },
+  "conflicts_review_queue": {
+    "id3_vs_mongo_disagreements": {
+      "key": 408,
+      "artist": 31,
+      "title": 17
+    },
+    "disagreement_samples": [
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\ingest\\ap dhillion\\humdard - arijit singh.mp3",
+        "field": "key",
+        "id3": "F maj",
+        "mongo": "F"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\9xm smashup # 8888 - dj ashmit patel & dj ishq bector - a.r. rahman.mp3",
+        "field": "key",
+        "id3": "A min",
+        "mongo": "Am"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\aigiri nandini - alfonso.mp3",
+        "field": "key",
+        "id3": "B maj",
+        "mongo": "B"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\aik muddat hui - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "E maj",
+        "mongo": "E"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\aisa bana sawarna - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "D# min",
+        "mongo": "D#m"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\akhiyan udeekdiyan - remix - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "E maj",
+        "mongo": "E"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\ari ari - ritviz.mp3",
+        "field": "artist",
+        "id3": "Mithoon",
+        "mongo": "Ritviz"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\ari ari - ritviz.mp3",
+        "field": "key",
+        "id3": "D maj",
+        "mongo": "D"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\baaraat - ritviz.mp3",
+        "field": "artist",
+        "id3": "Lata Mangeshkar",
+        "mongo": "Ritviz"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\baaraat - ritviz.mp3",
+        "field": "key",
+        "id3": "A min",
+        "mongo": "Am"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\bandhu 2.0 (from cocktail 2) - pritam.mp3",
+        "field": "key",
+        "id3": "D maj",
+        "mongo": "D"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\best of 2016 mashup (by dj kiran kamath) - pritam.mp3",
+        "field": "key",
+        "id3": "E maj",
+        "mongo": "E"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\bina maahi - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "C min",
+        "mongo": "Cm"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\dil pe zakham khate hain - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "C# min",
+        "mongo": "C#m"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\fakira - vishal-shekhar.mp3",
+        "field": "key",
+        "id3": "C min",
+        "mongo": "Cm"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\fasle gul hai - remix - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "G# maj",
+        "mongo": "G#"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\gardeshon ke hain marey - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "D# maj",
+        "mongo": "D#"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\gehra hua - shashwat sachdev.mp3",
+        "field": "key",
+        "id3": "D min",
+        "mongo": "Dm"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\hai kahan ka irada - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "C# min",
+        "mongo": "C#m"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\halka halka saroor - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "D maj",
+        "mongo": "D"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\hanju akhiyan de vehre - remix - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "G# min",
+        "mongo": "G#m"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\haqeeqat ka agar afsana - nusrat fateh ali khan.mp3",
+        "field": "key",
+        "id3": "C maj",
+        "mongo": "C"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\haram - danny roma x manrix.mp3",
+        "field": "artist",
+        "id3": "Atif Aslam",
+        "mongo": "Danny Roma x Manrix"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\haram - danny roma x manrix.mp3",
+        "field": "key",
+        "id3": "E min",
+        "mongo": "Em"
+      },
+      {
+        "path": "c:\\users\\aswin-pc\\desktop\\dj music\\library\\bollywood\\hua main (from animal) - raghav chaitanya.mp3",
+        "field": "key",
+        "id3": "C maj",
+        "mongo": "C"
+      }
+    ],
+    "spotify_id_collisions": {
+      "3Zg5ENFvbucf41iPRvPcHn": [
+        "Library\\Bollywood\\Ramba Ho.mp3",
+        "Library\\Punjabi\\Ramba Ho.mp3"
+      ],
+      "0SLedTMdKihqLsR6CGPAfD": [
+        "Library\\Grime\\Goodums - Sammy Virji Remix.mp3",
+        "Library\\UK Garage\\on & on - Sammy Virji Remix.mp3"
+      ],
+      "3taCbWWTilb7eNMsAzOBq4": [
+        "Library\\House\\Calling Out Your Name - Radio Edit.mp3",
+        "Library\\House\\Fight to Love - Radio Edit.mp3"
+      ],
+      "0nZUQdt97RJ429I0FuAO2r": [
+        "Library\\House\\Crazy For It - Rampa.mp3",
+        "Library\\House\\Crazy For It.mp3"
+      ],
+      "5jde2vTSXmrIAKaZYmhqSF": [
+        "Library\\House\\Cruel Summer (Again) - Tom Enzy Remix.mp3",
+        "Library\\House\\Let\u2019s Go (feat. Tom Enzy Juany Bravo & Sami Brielle) [HUGEL Remix].mp3"
+      ],
+      "401geNb9B5l7bFzi53Z3oP": [
+        "Library\\House\\OK OK - Hamdi remix.mp3",
+        "Library\\Punjabi\\Sweet Shop - Hamdi Remix.mp3"
+      ],
+      "5fwSHlTEWpluwOM0Sxnh5k": [
+        "Library\\Latin\\Beba.mp3",
+        "Library\\Pop\\Pepas.mp3"
+      ],
+      "6S0By3u06ttb3kU2XEtWnw": [
+        "Library\\Pop\\Alone - Mixed.mp3",
+        "Library\\Pop\\Oh Will - Mixed.mp3",
+        "Library\\Pop\\Somebody Else - Mixed.mp3",
+        "Library\\Pop\\Trumpet - Mixed.mp3"
+      ],
+      "0MbOLfDcGk8ROHJYXJHu5c": [
+        "Library\\Punjabi\\Play.mp3",
+        "Library\\Punjabi\\Players.mp3"
+      ],
+      "2nUs7DZ4tV0NOtTTRxyfFj": [
+        "Library\\Punjabi\\Zulfa.mp3",
+        "Library\\Punjabi\\Zulfaan.mp3"
+      ]
+    },
+    "rejected_bpm_values": [],
+    "unparseable_keys": []
+  },
+  "content_hash_verification": [
+    {
+      "classification": "TRUE_BYTE_DUPLICATE",
+      "files": [
+        {
+          "rel": "Library\\Electronic\\Bebopper - Ajja.mp3",
+          "sha256": "7e7d63a856e5ce7c2f30bc856131c9f518ed70fafda2d1113ac683c95e584541"
+        },
+        {
+          "rel": "Library\\Techno\\Bebopper - Ajja.mp3",
+          "sha256": "7e7d63a856e5ce7c2f30bc856131c9f518ed70fafda2d1113ac683c95e584541"
+        }
+      ]
+    },
+    {
+      "classification": "DIFFERENT_FILE",
+      "files": [
+        {
+          "rel": "Library\\Electronic\\Disco Bunny - Original Mix - Ajja_1.mp3",
+          "sha256": "8b326a45673c537bb29f5ba1e341b538a571defaa6f87414f2747abb49c05da9"
+        },
+        {
+          "rel": "Library\\Electronic\\Ninja Wobble - Original Mix - Ajja_1.mp3",
+          "sha256": "abfb03a4a2bba66b1460e2461f17eee900036d87b043f10f1efd9e3bdeb89c84"
+        },
+        {
+          "rel": "Library\\Electronic\\Not What - Original Mix - Ajja_1.mp3",
+          "sha256": "8198354c89ce53ab6ac61cb9d9dda447443edf3bb25ed1361c4a75f69c38378b"
+        },
+        {
+          "rel": "Library\\Electronic\\Original Spin - Original Mix - Ajja_1.mp3",
+          "sha256": "67d466656060d10169930e6260e830848b5076ae43fc3ea95ee2354992cffdca"
+        }
+      ]
+    },
+    {
+      "classification": "DIFFERENT_FILE",
+      "files": [
+        {
+          "rel": "Library\\Electronic\\Ingrained - Ajja.mp3",
+          "sha256": "4c018db0075818cec1b0fa65714f84a61e7dca69f88971a09a67abb3e91408ae"
+        },
+        {
+          "rel": "Library\\Electronic\\Widdershins - Ajja.mp3",
+          "sha256": "9d465ec7229afe58ff26a736ce5311ab0df06b190398f76ed84de36e5c2cf3f3"
+        }
+      ]
+    },
+    {
+      "classification": "DIFFERENT_FILE",
+      "files": [
+        {
+          "rel": "Library\\Electronic\\Surge - Ajja.mp3",
+          "sha256": "d4d0116aa0aa7ebfa89f8875cf69c6eb1ac84cb69def1b3be83a0b974026fdcd"
+        },
+        {
+          "rel": "Library\\Electronic\\Three Dots - Ajja.mp3",
+          "sha256": "0b412adc3c6d35332adaf43314a7e2873c09831b75c48f5e63b43e71b5014f27"
+        }
+      ]
+    },
+    {
+      "classification": "DIFFERENT_FILE",
+      "files": [
+        {
+          "rel": "Library\\Hip Hop\\BUN MASKA.mp3",
+          "sha256": "958abe5340a3dd88aa9b9d04cc2cbf5fc5efdc949347182b13e4b12208ef312b"
+        },
+        {
+          "rel": "Library\\Hip Hop\\PISHA - Calm.mp3",
+          "sha256": "dbcf9c0734a2285638a8d5978bb127b8da344a91bb44b3d8ea7badeb03677e14"
+        }
+      ]
+    },
+    {
+      "classification": "TRUE_BYTE_DUPLICATE",
+      "files": [
+        {
+          "rel": "Library\\PSY\\03_-_Yoshua_Em_-_Cuentame_Tus_Penas_KLICKAUD.mp3",
+          "sha256": "27fc1807f09de6ad6cf4be87d26b653a7c4e01f3c5c431916246867c4eeb1c95"
+        },
+        {
+          "rel": "Library\\Trance\\03_-_Yoshua_Em_-_Cuentame_Tus_Penas_KLICKAUD.mp3",
+          "sha256": "27fc1807f09de6ad6cf4be87d26b653a7c4e01f3c5c431916246867c4eeb1c95"
+        }
+      ]
+    },
+    {
+      "classification": "TRUE_BYTE_DUPLICATE",
+      "files": [
+        {
+          "rel": "Library\\PSY\\ARRACK-SHANTHI_DEVIL-EXPERIMENTAL_DARKPSY_KLICKAUD.mp3",
+          "sha256": "8cfc19ffbc93db27efdca5c689e32d155f3a3dff82b3ddcb9b74055922433325"
+        },
+        {
+          "rel": "Library\\Trance\\ARRACK-SHANTHI_DEVIL-EXPERIMENTAL_DARKPSY_KLICKAUD.mp3",
+          "sha256": "8cfc19ffbc93db27efdca5c689e32d155f3a3dff82b3ddcb9b74055922433325"
+        }
+      ]
+    },
+    {
+      "classification": "TRUE_BYTE_DUPLICATE",
+      "files": [
+        {
+          "rel": "Library\\PSY\\Demoniac_Insomniac_-_Nataraja_170_Bpm_KLICKAUD.mp3",
+          "sha256": "9dedc87aca4fe91f07f8371ddf1337a86c8bc43b7e09276b942766854a1d2c86"
+        },
+        {
+          "rel": "Library\\Trance\\Demoniac_Insomniac_-_Nataraja_170_Bpm_KLICKAUD.mp3",
+          "sha256": "9dedc87aca4fe91f07f8371ddf1337a86c8bc43b7e09276b942766854a1d2c86"
+        }
+      ]
+    },
+    {
+      "classification": "TRUE_BYTE_DUPLICATE",
+      "files": [
+        {
+          "rel": "Library\\PSY\\Natalia_Lafourcade_Ft_Julieta_Venegas_-_Hu_Hu_Hu_Biogenetic_Remix_CLICK_BUY_TO_FREE_DL_KLICKAUD.mp3",
+          "sha256": "80ce29f191b21691f16b0df1edc5a76a5388e4bc1c762b49fb45e25900d011c4"
+        },
+        {
+          "rel": "Library\\Trance\\Natalia_Lafourcade_Ft_Julieta_Venegas_-_Hu_Hu_Hu_Biogenetic_Remix_CLICK_BUY_TO_FREE_DL_KLICKAUD.mp3",
+          "sha256": "80ce29f191b21691f16b0df1edc5a76a5388e4bc1c762b49fb45e25900d011c4"
+        }
+      ]
+    },
+    {
+      "classification": "TRUE_BYTE_DUPLICATE",
+      "files": [
+        {
+          "rel": "Library\\PSY\\Shamanic_Ritual_Unmasterd_experimental_track_wav_file_KLICKAUD.mp3",
+          "sha256": "06556f57e47413cfd5aee67361f1b136196c0b0f69e0341599eed72358a61726"
+        },
+        {
+          "rel": "Library\\Trance\\Shamanic_Ritual_Unmasterd_experimental_track_wav_file_KLICKAUD.mp3",
+          "sha256": "06556f57e47413cfd5aee67361f1b136196c0b0f69e0341599eed72358a61726"
+        }
+      ]
+    }
+  ],
+  "audio_analysis": {
+    "targets": 1953,
+    "elapsed_sec": 1634.7,
+    "stats": {
+      "persisted": 1933,
+      "field::rms_energy": 1933,
+      "field::spectral_centroid_mean": 1933,
+      "field::zero_crossing_rate": 1933,
+      "field::duration_sec": 1933,
+      "field::confidence": 1933,
+      "analysis_failed": 20
+    },
+    "tag_vs_fresh_agreement": {
+      "bpm_exact": 843,
+      "camelot_exact": 1306,
+      "bpm_differs": 1074,
+      "camelot_differs": 611
+    },
+    "failures": [
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Bollywood\\Jungle.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\Fine Day Anthem.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\fuze.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\Leave Me Like This.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\Make It Bun Dem.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\Mix Weapon Part Two.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\Never Let You Go Edit (Original by Sammy Virji).mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\Nightmares (feat. Issey Cross).mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\Purple Lamborghini (with Rick Ross).mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\Recess (with Kill The Noise Fatman Scoop and Michael Angelakos).mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Dubstep\\Try It Out (with Alvin Risk) - Neon Mix.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Hip Hop\\White Lines - Deco (BE).mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Hip Hop\\Wild for the Night (feat. Skrillex & Birdy Nam Nam).mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\House\\Shake.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Latin\\Fire Fire.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Pop\\Tunnel Vision - Two by Four.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\Punjabi\\Heartless.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\R&B\\High For This.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\UK Garage\\F\u00f3n P\u00f3ca (feat. Travy) - MUCKANIKS Remix.mp3",
+        "error": ""
+      },
+      {
+        "path": "C:\\Users\\Aswin-pc\\Desktop\\DJ music\\Library\\UK Garage\\No Bad Vibes.mp3",
+        "error": ""
+      }
+    ],
+    "failure_count": 20
+  },
+  "before": {
+    "physical_files": 2003,
+    "mongo_total_docs": 2481,
+    "mongo_live_docs": 2310,
+    "mongo_soft_deleted": 171,
+    "shadow_records_remaining": 356,
+    "physical_orphans": 48,
+    "mongo_orphans": 0,
+    "coverage": {
+      "spotify_id": 958,
+      "title": 420,
+      "artist": 422,
+      "album": 0,
+      "bpm": 410,
+      "key": 410,
+      "camelot": 410,
+      "rms_energy": 2,
+      "spectral_centroid_mean": 2,
+      "zero_crossing_rate": 2,
+      "confidence": 2,
+      "duration_sec": 2,
+      "content_hash": 419,
+      "audio_fingerprint": 2310,
+      "gemini_genre_any": 1635,
+      "lastfm_any": 7
+    },
+    "recommendation_engine_scoreable": 410,
+    "recommendation_engine_fully_usable": 410
+  },
+  "after": {
+    "physical_files": 2003,
+    "mongo_total_docs": 2126,
+    "mongo_live_docs": 1955,
+    "mongo_soft_deleted": 171,
+    "shadow_records_remaining": 0,
+    "physical_orphans": 48,
+    "mongo_orphans": 0,
+    "coverage": {
+      "spotify_id": 1437,
+      "title": 1918,
+      "artist": 1913,
+      "album": 911,
+      "bpm": 1919,
+      "key": 1919,
+      "camelot": 1919,
+      "rms_energy": 1935,
+      "spectral_centroid_mean": 1935,
+      "zero_crossing_rate": 1935,
+      "confidence": 1935,
+      "duration_sec": 1935,
+      "content_hash": 1912,
+      "audio_fingerprint": 1955,
+      "gemini_genre_any": 1893,
+      "lastfm_any": 7
+    },
+    "recommendation_engine_scoreable": 1919,
+    "recommendation_engine_fully_usable": 1910
+  }
+}

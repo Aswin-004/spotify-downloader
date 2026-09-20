@@ -85,7 +85,7 @@ BASE_DOWNLOAD_DIR=C:\Users\You\DJ Music
 INGEST_PLAYLIST_ID=your_playlist_id
 
 # How often to check for new tracks (milliseconds)
-CHECK_INTERVAL=500
+CHECK_INTERVAL=60
 ```
 
 ---
