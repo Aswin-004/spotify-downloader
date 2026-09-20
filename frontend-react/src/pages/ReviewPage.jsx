@@ -105,7 +105,7 @@ export default function ReviewPage() {
       const result = await api.retagCatchallTrack(buildFilepath(item));
       if (result.moved || result.confirmed) {
         addToast({ type: 'success', title: result.moved ? 'Reclassified' : 'Confirmed', description: `${item.title} → ${result.new_folder}`, duration: 5000 });
-        clearNeedsReviewItem(item.title);
+        clearNeedsReviewItem(item.title, item.artist);
       } else if (result.quota_exhausted) {
         addToast({ type: 'error', title: 'AI quota exhausted', description: 'Retried tomorrow automatically.', duration: 8000 });
       } else {
@@ -124,7 +124,7 @@ export default function ReviewPage() {
       setRetryAllProgress({ current: i + 1, total: items.length });
       try {
         const result = await api.retagCatchallTrack(buildFilepath(items[i]));
-        if (result.moved || result.confirmed) { clearNeedsReviewItem(items[i].title); processed++; }
+        if (result.moved || result.confirmed) { clearNeedsReviewItem(items[i].title, items[i].artist); processed++; }
         else if (result.quota_exhausted) { addToast({ type: 'error', title: 'AI quota hit mid-run', description: `${processed} moved so far.`, duration: 8000 }); break; }
         else { unresolved++; }
       } catch (err) {
@@ -147,7 +147,7 @@ export default function ReviewPage() {
       const result = await api.moveAndRemember(buildFilepath(item), genre, item.artist || '');
       if (result.moved) {
         addToast({ type: 'success', title: `Moved to ${genre}`, description: item.artist ? `${item.artist} will auto-route to ${genre}` : item.title, duration: 5000 });
-        clearNeedsReviewItem(item.title);
+        clearNeedsReviewItem(item.title, item.artist);
       } else {
         addToast({ type: 'error', title: 'Move failed', description: result.error, duration: 5000 });
       }

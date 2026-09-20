@@ -134,35 +134,39 @@ export default function Analytics() {
   const [retrying, setRetrying] = useState({});
 
   const fetchAll = useCallback(async () => {
-    setFetchError(false);
-    try {
-      const [ov, pd, ta, sb, tb, rd, fd, ca, fs, ws] = await Promise.all([
-        api.getAnalyticsOverview(),
-        api.getAnalyticsDownloadsPerDay(dayRange),
-        api.getAnalyticsTopArtists(),
-        api.getAnalyticsSourceBreakdown(),
-        api.getAnalyticsTaggingBreakdown(),
-        api.getAnalyticsRecent(),
-        api.getAnalyticsFailed(),
-        api.getCacheAnalytics(),
-        api.getTaggingFailuresSummary(),
-        api.getDownloadHistoryStats(),
-      ]);
-      setOverview(ov);
-      setPerDay(pd);
-      setTopArtists(ta);
-      setSourceBreakdown(sb);
-      setTaggingBreakdown(tb);
-      setRecentDownloads(rd);
-      setFailedDownloads(fd);
-      setCacheAnalytics(ca);
-      setFailureSummary(fs);
-      setWeeklyStats(ws);
-    } catch {
-      setFetchError(true);
-    } finally {
-      setLoading(false);
+    const results = await Promise.allSettled([
+      api.getAnalyticsOverview(),
+      api.getAnalyticsDownloadsPerDay(dayRange),
+      api.getAnalyticsTopArtists(),
+      api.getAnalyticsSourceBreakdown(),
+      api.getAnalyticsTaggingBreakdown(),
+      api.getAnalyticsRecent(),
+      api.getAnalyticsFailed(),
+      api.getCacheAnalytics(),
+      api.getTaggingFailuresSummary(),
+      api.getDownloadHistoryStats(),
+    ]);
+    const [ov, pd, ta, sb, tb, rd, fd, ca, fs, ws] = results;
+    if (ov.status === 'fulfilled') setOverview(ov.value);
+    if (pd.status === 'fulfilled') setPerDay(pd.value);
+    if (ta.status === 'fulfilled') setTopArtists(ta.value);
+    if (sb.status === 'fulfilled') setSourceBreakdown(sb.value);
+    if (tb.status === 'fulfilled') setTaggingBreakdown(tb.value);
+    if (rd.status === 'fulfilled') setRecentDownloads(rd.value);
+    if (fd.status === 'fulfilled') setFailedDownloads(fd.value);
+    if (ca.status === 'fulfilled') setCacheAnalytics(ca.value);
+    if (fs.status === 'fulfilled') setFailureSummary(fs.value);
+    if (ws.status === 'fulfilled') setWeeklyStats(ws.value);
+
+    const rejected = results.filter(r => r.status === 'rejected');
+    if (rejected.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(`[Analytics] ${rejected.length}/${results.length} endpoint(s) failed`, rejected.map(r => r.reason));
     }
+    // Only show the page-level error state if EVERY endpoint failed —
+    // a single flaky endpoint shouldn't blank panels that loaded fine.
+    setFetchError(rejected.length === results.length);
+    setLoading(false);
   }, [dayRange]);
 
   useEffect(() => {
@@ -171,20 +175,16 @@ export default function Analytics() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  useEffect(() => {
-    api.getAnalyticsDownloadsPerDay(dayRange).then(setPerDay).catch(() => {});
-  }, [dayRange]);
-
-  async function handleRetry(trackId, idx) {
-    setRetrying(prev => ({ ...prev, [idx]: true }));
+  async function handleRetry(trackId) {
+    setRetrying(prev => ({ ...prev, [trackId]: true }));
     try {
       await api.retryDownload(trackId);
       addToast({ type: 'success', title: 'Retry Queued', description: 'Track re-queued for download' });
-      setFailedDownloads(prev => prev.filter((_, i) => i !== idx));
+      setFailedDownloads(prev => prev.filter(item => (item.track_id || item._id) !== trackId));
     } catch {
       addToast({ type: 'error', title: 'Retry Failed', description: 'Could not re-queue the track' });
     } finally {
-      setRetrying(prev => ({ ...prev, [idx]: false }));
+      setRetrying(prev => ({ ...prev, [trackId]: false }));
     }
   }
 
@@ -423,8 +423,8 @@ export default function Analytics() {
               </div>
             ) : (
               <div className="px-2 pb-2">
-                {failedDownloads.map((item, i) => (
-                  <div key={item._id || i} className="tbl-row">
+                {failedDownloads.map((item) => (
+                  <div key={item.track_id || item._id} className="tbl-row">
                     <div className="tbl-thumb" style={{ width: 32, height: 32, background: 'linear-gradient(135deg, rgba(244,63,94,0.2), rgba(244,63,94,0.06))' }}>
                       <XCircle className="w-3.5 h-3.5" style={{ color: CHART.rose }} />
                     </div>
@@ -438,12 +438,12 @@ export default function Analytics() {
                       {formatTime(item.timestamp)}
                     </span>
                     <button
-                      disabled={retrying[i]}
-                      onClick={() => handleRetry(item.track_id, i)}
+                      disabled={retrying[item.track_id]}
+                      onClick={() => handleRetry(item.track_id)}
                       className="btn-s flex-shrink-0"
                       style={{ padding: '4px 10px', fontSize: 11 }}
                     >
-                      {retrying[i]
+                      {retrying[item.track_id]
                         ? <Loader2 className="w-3 h-3 animate-spin inline" />
                         : <RotateCw className="w-3 h-3 inline" />
                       }

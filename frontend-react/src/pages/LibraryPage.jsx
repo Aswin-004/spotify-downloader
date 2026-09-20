@@ -84,6 +84,7 @@ export default function LibraryPage() {
   const [savingTags, setSavingTags] = useState(false);
   const { nowPlaying, playing, toggle, setQueueAndPlay } = usePlayer();
   const retagTimerRef = useRef(null);
+  const socketUpdateReceivedRef = useRef(false);
   const [retagging, setRetagging] = useState(false);
   const [folderTags, setFolderTags] = useState({});   // { "Library/House": { "Song.mp3": {bpm,camelot_key,...} } }
   const { retagProgress } = useSocket();
@@ -140,13 +141,23 @@ export default function LibraryPage() {
     setLoading(true);
     setError('');
     api.getFiles()
-      .then(data => { if (data.files) setFiles(data.files); })
+      .then(data => {
+        // A socket-sourced update may have already landed while this REST
+        // fetch was in flight — don't let a slower, now-stale response
+        // clobber it (e.g. a file deleted/moved elsewhere mid-fetch).
+        if (data.files && !socketUpdateReceivedRef.current) setFiles(data.files);
+      })
       .catch(() => setError('Failed to load library. Check that the backend is running.'))
       .finally(() => setLoading(false));
   }
 
   useEffect(() => { loadFiles(); }, []);
-  useEffect(() => { if (socketFiles.length > 0) setFiles(socketFiles); }, [socketFiles]);
+  useEffect(() => {
+    if (socketFiles.length > 0) {
+      socketUpdateReceivedRef.current = true;
+      setFiles(socketFiles);
+    }
+  }, [socketFiles]);
 
   const grouped = useMemo(() => {
     const q = search.toLowerCase();

@@ -11,6 +11,7 @@ import ReviewPage from '@/pages/ReviewPage';
 import MaintenancePage from '@/pages/MaintenancePage';
 import Settings from '@/pages/Settings';
 import GettingStarted from '@/pages/GettingStarted';
+import DjCoach from '@/pages/DjCoach';
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/review" element={<ReviewPage />} />
+              <Route path="/dj" element={<DjCoach />} />
               <Route path="/maintenance" element={<MaintenancePage />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/getting-started" element={<GettingStarted />} />

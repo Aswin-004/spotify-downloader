@@ -4,7 +4,7 @@ import {
   Download, History, ListMusic, BarChart3,
   AlertTriangle, Wrench, Settings, BookOpen, Disc3,
   ChevronLeft, ChevronRight, Radio, Loader2,
-  CheckCircle2,
+  CheckCircle2, Headphones,
 } from 'lucide-react';
 import { useSocket } from '@/hooks/useSocket';
 import { cn, capitalize } from '@/lib/utils';
@@ -16,6 +16,7 @@ const navItems = [
   { to: '/library',         icon: ListMusic,     label: 'Library'             },
   { to: '/analytics',       icon: BarChart3,     label: 'Analytics'           },
   { to: '/review',          icon: AlertTriangle, label: 'Review',  badge: true },
+  { to: '/dj',              icon: Headphones,    label: 'DJ Coach'            },
   { to: '/maintenance',     icon: Wrench,        label: 'Maintenance'         },
   { to: '/settings',        icon: Settings,      label: 'Settings'            },
   { to: '/getting-started', icon: BookOpen,      label: 'Guide'               },

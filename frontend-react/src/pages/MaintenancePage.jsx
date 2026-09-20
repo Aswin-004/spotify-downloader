@@ -394,9 +394,9 @@ export default function MaintenancePage() {
       await api.runMaintenance(taskId, opts);
     } catch (err) {
       const safeMsg =
-        err?.response?.data?.error ||
-        err?.response?.data?.message ||
-        (err?.response?.status ? `Server error (${err.response.status})` : 'Failed to start task');
+        err?.data?.error ||
+        err?.message ||
+        (err?.status ? `Server error (${err.status})` : 'Failed to start task');
       setError(safeMsg);
       setActiveTask(null);
       stopMaintenance();

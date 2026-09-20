@@ -355,8 +355,10 @@ export function SocketProvider({ children }) {
     socketRef.current?.emit('request_status');
   }, []);
 
-  const clearNeedsReviewItem = useCallback((title) => {
-    setNeedsReviewItems((prev) => prev.filter((item) => item.title !== title));
+  const clearNeedsReviewItem = useCallback((title, artist) => {
+    // Match on title+artist together — two different tracks (e.g. a remix/cover)
+    // can share a title, and matching on title alone would clear both.
+    setNeedsReviewItems((prev) => prev.filter((item) => !(item.title === title && item.artist === artist)));
   }, []);
 
   const clearDownloads = useCallback((bucket) => {

@@ -133,7 +133,7 @@ export default function Settings() {
           fpcalc_path:           data.fpcalc_path || '',
           telegram_bot_token:    '',
           telegram_chat_id:      data.telegram_chat_id || '',
-          check_interval:        data.check_interval || 500,
+          check_interval:        data.check_interval || 60,
         });
       })
       .catch(() => {})
@@ -513,7 +513,7 @@ export default function Settings() {
                   <Input
                     type="number"
                     value={draft.check_interval}
-                    onChange={e => set('check_interval', parseInt(e.target.value) || 500)}
+                    onChange={e => set('check_interval', parseInt(e.target.value) || 60)}
                     className="w-36"
                   />
                 </div>

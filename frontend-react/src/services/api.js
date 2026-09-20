@@ -12,7 +12,18 @@ function apiFetch(path, opts) {
 }
 
 async function handleResponse(res) {
-  const data = await res.json();
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    // Body wasn't valid JSON (e.g. HTML error page from a proxy/host during
+    // a cold start, or an empty body) — surface a meaningful error instead
+    // of letting the raw SyntaxError propagate.
+    const error = new Error(`Server error (${res.status} ${res.statusText || ''})`.trim());
+    error.status = res.status;
+    error.data = null;
+    throw error;
+  }
   if (!res.ok) {
     const error = new Error(data.error || `HTTP ${res.status}`);
     error.status = res.status;
@@ -376,6 +387,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename, genre }),
     }).then(handleResponse);
+  },
+
+  // DJ COACH (Phase 3) — deterministic daily practice session
+  getDjCoachToday(date = null) {
+    const qs = date ? `?date=${encodeURIComponent(date)}` : '';
+    return apiFetch(`/api/dj/coach/today${qs}`).then(handleResponse);
   },
 
   rekordboxExportUrl(folder = 'all', name = '') {
