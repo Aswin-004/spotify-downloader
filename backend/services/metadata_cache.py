@@ -70,13 +70,18 @@ class MetadataCache:
 
     # ── playlist snapshot cache ──
 
-    def get_playlist_snapshot(self, playlist_id):
-        """Return cached playlist tracks list or None if missing/expired."""
+    def get_playlist_snapshot(self, playlist_id, allow_stale=False):
+        """Return cached playlist tracks list, or None if missing (or expired, unless allow_stale).
+
+        allow_stale=True returns the last snapshot however old it is. It exists for callers that
+        cannot refresh — e.g. while Spotify has rate-limited the app for ~23 h — where an old
+        playlist is far more useful than none (the playlist rarely changes).
+        """
         with self._playlist_lock:
             entry = self._playlists.get(playlist_id)
             if not entry:
                 return None
-            if time.time() - entry.get("fetched_at", 0) > PLAYLIST_SNAPSHOT_TTL:
+            if not allow_stale and time.time() - entry.get("fetched_at", 0) > PLAYLIST_SNAPSHOT_TTL:
                 return None
             return entry.get("tracks")
 

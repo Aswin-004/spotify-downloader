@@ -128,6 +128,68 @@ _KEY_CONFIDENCE_THRESHOLD = 0.5
 # A candidate must have both of these to be scoreable at all.
 _REQUIRED_FIELDS = ("bpm", "camelot")
 
+# Placeholder artist values (Phase 1E hardening). 201 tracks in this library
+# carry artist="Unknown" and 42 carry an empty string — neither identifies a
+# real artist. Without this exclusion, every one of those 201+42 tracks
+# reads as "the same artist" to _ARTIST_WINDOW, so playing one blocks the
+# other ~240 for the next _ARTIST_WINDOW steps for no musical reason. This
+# does not touch what is stored in Mongo — it only changes which stored
+# artist strings are treated as a repeatable identity in this module's
+# artist-repetition guard.
+_PLACEHOLDER_ARTISTS = {"unknown"}
+
+
+def _is_known_artist(artist) -> bool:
+    """True if `artist` identifies a real artist for repetition-protection
+    purposes — false for None, empty/whitespace-only strings, and known
+    placeholder values ("Unknown" in any case). Recommendation-layer only;
+    does not change stored data or reject a track from the candidate pool."""
+    if not artist or not isinstance(artist, str):
+        return False
+    stripped = artist.strip()
+    if not stripped:
+        return False
+    return stripped.lower() not in _PLACEHOLDER_ARTISTS
+
+
+# ---------------------------------------------------------------------------
+# NEW in this module (Phase 1E hardening): track-length classification
+# ---------------------------------------------------------------------------
+
+# A handful of library_index documents are full DJ mixes/sets, not individual
+# tracks, but carry no distinguishing field — they score and sequence like
+# any other track. A direct read-only query of the real duration_sec
+# distribution (Phase 1E audit, 1,938 live docs with a duration_sec value)
+# found exactly 6 documents at 1,981.5s (33.0 min) or longer, and every one
+# of the other 1,932 is under 780.5s (13.0 min) — a completely empty gap
+# from 780.5s to 1,981.5s, with nothing in between. This is not an invented
+# cutoff: any threshold within that empty gap classifies the same 6
+# documents identically. 1,200s (20 min) is used because it sits well inside
+# that gap (420s of margin below the lowest mix, 780s above the highest
+# normal track).
+_DJ_MIX_DURATION_THRESHOLD_SEC = 1200.0  # 20 minutes — see comment above
+
+
+def classify_track_length(duration_sec) -> str:
+    """Classify a track's audio_features.duration_sec as "track", "dj_mix",
+    or "unknown" (missing/non-numeric duration — cannot classify).
+
+    Presentation/metadata only: does not affect candidate-pool membership,
+    scoring, ranking, or the artist-repetition guard. Existing recommend/
+    sequence behavior for DJ mixes is unchanged by this function — it only
+    makes the distinction available (Phase 1E hardening; consumed by a
+    future Phase 2, not by this module's own filtering).
+    """
+    if duration_sec is None or not isinstance(duration_sec, (int, float)):
+        return "unknown"
+    if isinstance(duration_sec, bool):
+        return "unknown"
+    if isinstance(duration_sec, float) and math.isnan(duration_sec):
+        return "unknown"
+    if duration_sec < 0:
+        return "unknown"
+    return "dj_mix" if duration_sec >= _DJ_MIX_DURATION_THRESHOLD_SEC else "track"
+
 
 # ---------------------------------------------------------------------------
 # Camelot wheel — verbatim from the recovered original
@@ -208,6 +270,26 @@ def _confidence_factor(confidence) -> float:
     """Map a key-detection confidence value to a trust multiplier in [0, 1]
     for the camelot-compatibility term.
 
+    SEMANTICS (Phase 1E clarification — see docs/PHASE_1E_RECOMMENDATION_HARDENING.md
+    Issue 3 for the full analysis): `confidence` is librosa's own Krumhansl-
+    Schmuckler correlation strength for the key IT independently detected in
+    bpm_key_service.detect_bpm_and_key() — it is NOT a confidence score for
+    whatever value happens to be stored in this document's `camelot` field.
+    For a large share of this library, `camelot` was recovered from the
+    file's embedded ID3 tag (Phase 1C policy: "embedded ID3 BPM/key are
+    metadata truth"), while `confidence` comes from a separate, independent
+    librosa run whose own camelot output was deliberately discarded and
+    never written. Those two values agree only ~68% of the time (Phase 1D
+    audit). Using `confidence` to gate trust in the *stored* camelot is
+    therefore an approximation, not an exact provenance match — accepted
+    here because Phase 0/1D found no correctness violation from it (99%
+    strong recommendations, 99.6% harmonic-compatible transitions) and
+    because building a provenance-aware alternative would require either a
+    new persistent field per track or a full re-analysis, both out of scope
+    for hardening (see report). Do not read `confidence` as "how sure are we
+    that this track's key tag is right" — it answers "how sure was the
+    audio-analysis detector about the key it independently found."
+
     Rule (smallest deterministic rule that satisfies the requirement):
       - confidence missing / non-numeric / NaN -> 0.5
         (neutral: we cannot verify trust either way, so neither fully
@@ -235,6 +317,10 @@ def _compute_similarity_confidence_aware(af_a: dict, af_b: dict) -> dict:
     two tracks' key-detection confidences — a harmonic match is only as
     trustworthy as its less-confident half. bpm/energy/spectral terms are
     untouched.
+
+    See `_confidence_factor`'s docstring: `confidence` is the audio
+    detector's confidence in the key IT found, not a confidence score for
+    the specific `camelot` value stored on the document.
 
     Returns everything `_compute_similarity` returns, plus:
       camelot_score_base : the original, unadjusted camelot score (0/0.75/1.0)
@@ -419,6 +505,9 @@ def _pick_next(current: dict, pool: list, used_keys: set, recent_artists: list,
     cur_af = current.get("audio_features", {})
     cur_bpm = cur_af.get("bpm")
     bpm_limit = _BPM_JUMP_SOFT if relax else _BPM_JUMP_HARD
+    # Placeholder artists ("Unknown", empty, ...) never count as a repeat —
+    # see _is_known_artist(). A real artist's window membership is unchanged.
+    recent_known_artists = [a for a in recent_artists[-_ARTIST_WINDOW:] if _is_known_artist(a)]
 
     best = None
     for doc in pool:
@@ -426,7 +515,7 @@ def _pick_next(current: dict, pool: list, used_keys: set, recent_artists: list,
         if ik in used_keys:
             continue
         artist = doc.get("artist", "")
-        if not relax and artist and artist in recent_artists[-_ARTIST_WINDOW:]:
+        if not relax and _is_known_artist(artist) and artist in recent_known_artists:
             continue
 
         af = doc.get("audio_features", {})
@@ -474,7 +563,11 @@ def generate_playlist_sequence(seed_identity_key: str, length: int = 20,
     used_keys = {seed_identity_key}
     recent_artists = [seed.get("artist", "")]
     transitions = []
-    pool = [d for d in _docs if d.get("identity_key") != seed_identity_key]
+    # Exclude candidates missing bpm/camelot (same completeness filter used by
+    # recommend_next(), via get_candidate_pool()/_is_scoreable()) so a track
+    # with no BPM data can't sail through _pick_next()'s BPM-jump guard, which
+    # only compares bpm when both current and candidate values are present.
+    pool = get_candidate_pool(exclude_identity_keys={seed_identity_key}, docs=_docs)
 
     for step in range(length - 1):
         current = sequence[-1]
@@ -597,11 +690,14 @@ def _rank_candidates(current: dict, pool: list, flow: str, recent_artists_window
     cur_af = current.get("audio_features", {})
     cur_bpm = cur_af.get("bpm")
     bpm_limit = _BPM_JUMP_SOFT if relax else _BPM_JUMP_HARD
+    # Placeholder artists ("Unknown", empty, ...) never count as a repeat —
+    # see _is_known_artist(). A real artist's window membership is unchanged.
+    recent_known_artists = [a for a in recent_artists_window if _is_known_artist(a)]
 
     scored = []
     for doc in pool:
         artist = doc.get("artist", "")
-        if not relax and artist and artist in recent_artists_window:
+        if not relax and _is_known_artist(artist) and artist in recent_known_artists:
             continue
 
         af = doc.get("audio_features", {})
@@ -645,6 +741,7 @@ def recommend_next(current_identity_key: str, top_n: int = 5, flow: str = "mixed
         "current_identity_key": str,
         "current_title": str,
         "current_artist": str,
+        "current_length_class": "track" | "dj_mix" | "unknown",  # Phase 1E
         "flow": str,
         "top_n_requested": int,
         "recommendations": [
@@ -652,6 +749,7 @@ def recommend_next(current_identity_key: str, top_n: int = 5, flow: str = "mixed
             "identity_key", "title", "artist", "genre",
             "camelot", "bpm", "rms_energy", "energy_normalized",
             "spectral_centroid",
+            "length_class",          # "track" | "dj_mix" | "unknown" (Phase 1E)
             "score",                 # confidence-adjusted similarity (0-1ish)
             "flow_bonus", "adjusted_score",  # score + flow_bonus
             "camelot_score",         # confidence-adjusted camelot term
@@ -681,6 +779,9 @@ def recommend_next(current_identity_key: str, top_n: int = 5, flow: str = "mixed
     if flow not in _FLOW_MODES:
         raise ValueError(f"flow must be one of {_FLOW_MODES}")
 
+    if not isinstance(top_n, int) or isinstance(top_n, bool) or top_n < 1:
+        raise ValueError(f"top_n must be a positive integer, got {top_n!r}")
+
     if docs is None:
         from database import get_library_index_collection
         col = get_library_index_collection()
@@ -706,12 +807,17 @@ def recommend_next(current_identity_key: str, top_n: int = 5, flow: str = "mixed
     current = next((d for d in docs if d.get("identity_key") == current_identity_key), None)
     if current is None:
         return {**base_result, "current_title": "", "current_artist": "",
+                "current_length_class": "unknown",
                 "error": f"identity_key '{current_identity_key}' not found in supplied library data."}
+
+    current_length_class = classify_track_length(
+        (current.get("audio_features") or {}).get("duration_sec"))
 
     if not _is_scoreable(current):
         return {**base_result,
                 "current_title": current.get("title", ""),
                 "current_artist": current.get("artist", ""),
+                "current_length_class": current_length_class,
                 "error": "current track is missing bpm and/or camelot — cannot score recommendations."}
 
     recently_played_set = set(recently_played or ())
@@ -731,6 +837,7 @@ def recommend_next(current_identity_key: str, top_n: int = 5, flow: str = "mixed
         return {**base_result,
                 "current_title": current.get("title", ""),
                 "current_artist": current.get("artist", ""),
+                "current_length_class": current_length_class,
                 "candidates_excluded_missing_flag": missing_flagged,
                 "candidates_excluded_incomplete_metadata": incomplete_excluded,
                 "candidates_excluded_recently_played": len(recently_played_set),
@@ -779,6 +886,7 @@ def recommend_next(current_identity_key: str, top_n: int = 5, flow: str = "mixed
             "rms_energy": af.get("rms_energy"),
             "energy_normalized": energy_norm.get(cand_ik),
             "spectral_centroid": af.get("spectral_centroid_mean"),
+            "length_class": classify_track_length(af.get("duration_sec")),
             "score": sim["score"],
             "flow_bonus": bonus,
             "adjusted_score": adjusted_score,
@@ -798,6 +906,7 @@ def recommend_next(current_identity_key: str, top_n: int = 5, flow: str = "mixed
         **base_result,
         "current_title": current.get("title", ""),
         "current_artist": current.get("artist", ""),
+        "current_length_class": current_length_class,
         "recommendations": recommendations,
         "candidates_considered": len(pool),
         "candidates_excluded_missing_flag": missing_flagged,

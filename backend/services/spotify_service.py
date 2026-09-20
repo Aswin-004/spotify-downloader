@@ -385,7 +385,10 @@ class SpotifyService:
 
         # Rate-limited? Serve stale cache if available
         if is_rate_limited():
-            stale = cache.get_playlist_snapshot(clean_id)
+            # The comment above always promised a STALE snapshot here, but the plain getter drops
+            # anything older than its 30-minute TTL — so during a rate-limit block (~23 h) it
+            # returned nothing and raised instead. allow_stale makes it do what it says.
+            stale = cache.get_playlist_snapshot(clean_id, allow_stale=True)
             if stale:
                 logger.info(f"Rate-limited — serving stale cache for {clean_id}")
                 return stale
@@ -411,6 +414,11 @@ class SpotifyService:
                             "artist_id": track["artists"][0]["id"] if track.get("artists") else "",
                             "duration_ms": track.get("duration_ms"),
                             "album_art_url": (track.get("album", {}).get("images") or [{}])[0].get("url"),
+                            # release_date lives under album, not on the track object itself —
+                            # feeds downloader_service.download_track()'s spotify_release_date
+                            # param, which persists it as a MusicBrainz-miss fallback release
+                            # year (see tagger_service.py).
+                            "release_date": (track.get("album") or {}).get("release_date", ""),
                         })
                 if results.get("next"):
                     results = self._call_with_backoff(sp_client.next, results)

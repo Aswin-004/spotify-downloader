@@ -8,7 +8,7 @@ Public API:
   save_config(config_path, data) -> None
   migrate_library(source, dest, config_path, *, interactive, dry_run, logs_dir, progress_cb) -> MigrationResult
   build_report_text(category_stats, errors, skipped_artists, undo_log_path, duration_seconds, html) -> str
-  undo_migration(undo_log_path) -> None
+  undo_migration(undo_log_path) -> Dict
 """
 
 import hashlib
@@ -337,25 +337,37 @@ def migrate_library(
                     "from": str(dest_path),
                     "to": str(src_file),
                 })
-                result.category_stats[category]["files"] += 1
-                result.category_stats[category]["bytes"] += src_bytes
+                # category_stats is pre-seeded from the fixed CATEGORIES_ORDER
+                # display list, but artist_categories.json can map an artist to
+                # any category name (e.g. "English") — fall back to a fresh
+                # entry instead of raising KeyError for categories outside that
+                # fixed list.
+                cat_entry = result.category_stats.setdefault(category, {"files": 0, "bytes": 0})
+                cat_entry["files"] += 1
+                cat_entry["bytes"] += src_bytes
                 logger.info(f"[migrator] ✓ {src_file.name} → {category}/")
+
+                try:
+                    from database import _get_db
+                    db = _get_db()
+                    db.download_history.update_one(
+                        {"filename": src_file.name},
+                        {"$set": {"folder": category, "relative_path": str(dest_path)}},
+                    )
+                except Exception as db_err:
+                    logger.debug(f"[migrator] MongoDB update skipped: {db_err}")
             else:
+                # Copy was not verified — file was left at src_file, so the DB
+                # record must keep pointing there. Do NOT touch it.
                 result.errors.append({"file": str(src_file), "error": "MD5 mismatch"})
+                logger.error(
+                    f"[migrator] ✗ {src_file.name} — MD5 mismatch, file remains at "
+                    f"source; DB record left untouched"
+                )
 
             files_done += 1
             if progress_cb:
                 progress_cb(files_done, total_files)
-
-            try:
-                from database import _get_db
-                db = _get_db()
-                db.download_history.update_one(
-                    {"filename": src_file.name},
-                    {"$set": {"folder": category, "relative_path": str(dest_path)}},
-                )
-            except Exception as db_err:
-                logger.debug(f"[migrator] MongoDB update skipped: {db_err}")
 
     if not dry_run:
         for artist in resolved:
@@ -381,10 +393,15 @@ def migrate_library(
     return result
 
 
-def undo_migration(undo_log_path: Path) -> None:
+def undo_migration(undo_log_path: Path) -> Dict:
     """
     Reverse a migration using its undo log.
     Each entry: {"from": "<dest path>", "to": "<original source path>"}
+
+    Each entry is restored independently — a failure on one entry (already
+    restored, deleted, permission error, or the original location now
+    occupied by a newer file) is logged and does not abort the remaining
+    entries. Returns a report: {restored, skipped, errors}.
     """
     undo_log_path = Path(undo_log_path)
     if not undo_log_path.exists():
@@ -392,10 +409,33 @@ def undo_migration(undo_log_path: Path) -> None:
     with open(undo_log_path, "r", encoding="utf-8") as f:
         entries = json.load(f)
     logger.info(f"[migrator] Undoing {len(entries)} moves from {undo_log_path.name}")
+
+    report: Dict = {"restored": [], "skipped": [], "errors": []}
+
     for entry in entries:
         src = Path(entry["from"])
         dest = Path(entry["to"])
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dest))
-        logger.info(f"[migrator] Restored: {src.name} → {dest.parent.name}/")
-    print(f"Undo complete: {len(entries)} files restored.")
+        try:
+            if not src.exists():
+                msg = "source (migrated file) no longer exists"
+                logger.warning(f"[migrator] Skipped undo for {src.name}: {msg}")
+                report["skipped"].append({"from": str(src), "to": str(dest), "reason": msg})
+                continue
+            if dest.exists():
+                msg = "destination occupied — not overwriting"
+                logger.warning(f"[migrator] Skipped undo for {src.name}: {msg}")
+                report["skipped"].append({"from": str(src), "to": str(dest), "reason": msg})
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+            logger.info(f"[migrator] Restored: {src.name} → {dest.parent.name}/")
+            report["restored"].append({"from": str(src), "to": str(dest)})
+        except Exception as e:
+            logger.error(f"[migrator] Undo failed for {src.name}: {e}")
+            report["errors"].append({"from": str(src), "to": str(dest), "error": str(e)})
+
+    print(
+        f"Undo complete: {len(report['restored'])} files restored, "
+        f"{len(report['skipped'])} skipped, {len(report['errors'])} errors."
+    )
+    return report

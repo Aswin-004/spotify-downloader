@@ -192,9 +192,18 @@ def _load_history_titles() -> set[str]:
 # ── Repair helpers ────────────────────────────────────────────────────────────
 
 def _reindex_file(filepath: str, dry_run: bool) -> bool:
-    """Add a missing library_index entry for an on-disk file."""
+    """
+    Add a missing library_index entry for an on-disk file.
+
+    Guards against clobbering an existing, still-valid index entry:
+    index_track() upserts purely by identity_key with no existence check on
+    the previous final_path, so a naive reindex can silently repoint a
+    correct entry at this orphan (see _detect_spotify_id_collisions, which
+    proves this situation genuinely occurs). If a document already exists
+    for this identity_key AND its final_path still points to a different
+    file that exists on disk, skip and report instead of overwriting.
+    """
     try:
-        from mutagen.id3 import ID3, ID3NoHeaderError
         tags_data = _read_id3(filepath)
         spotify_id = (tags_data or {}).get("spotify_id", "") or ""
         # Fall back to filename stem / parent folder when tags are empty strings
@@ -205,13 +214,33 @@ def _reindex_file(filepath: str, dry_run: bool) -> bool:
         # Preserve full taxonomy depth (e.g. Library/Electronic/House), not just parts[0]
         genre_folder = "/".join(parts[:-1]) if len(parts) > 1 else "Unknown"
 
+        from services.dedup_service import duplicate_identity_key, content_hash
+        identity_key = duplicate_identity_key(spotify_id, title, artist)
+        ch = content_hash(title, artist)
+
+        from database import lookup_by_identity_key
+        existing = lookup_by_identity_key(identity_key)
+        if existing:
+            existing_path = existing.get("final_path", "")
+            is_same_file = False
+            if existing_path:
+                try:
+                    is_same_file = os.path.samefile(existing_path, filepath)
+                except OSError:
+                    is_same_file = os.path.abspath(existing_path) == os.path.abspath(filepath)
+            if existing_path and not is_same_file and os.path.isfile(existing_path):
+                logger.warning(
+                    f"  [reindex-collision] {rel}: identity_key={identity_key!r} is "
+                    f"already indexed at {existing_path!r}, which still exists on disk "
+                    f"— refusing to repoint it at this orphan. Skipped; investigate "
+                    f"manually (see --pre-migration-checks spotify_id collisions)."
+                )
+                return False
+
         if dry_run:
             logger.info(f"  [DRY] would reindex: {rel}")
             return True
 
-        from services.dedup_service import duplicate_identity_key, content_hash
-        identity_key = duplicate_identity_key(spotify_id, title, artist)
-        ch = content_hash(title, artist)
         from database import index_track
         index_track(
             identity_key=identity_key,
@@ -587,8 +616,21 @@ def reconcile(
                     if not dry_run:
                         dead = RETRY_QUEUE_DIR / "dead"
                         dead.mkdir(exist_ok=True)
-                        Path(mp).rename(dead / Path(mp).name)
-                        logger.info(f"  [moved to dead] {Path(mp).name}")
+                        dest = dead / Path(mp).name
+                        try:
+                            if dest.exists():
+                                # A same-named manifest is already dead-lettered
+                                # (e.g. --repair run twice) — Path.rename() would
+                                # raise FileExistsError uncaught on Windows.
+                                # Disambiguate with a timestamp suffix instead of
+                                # crashing the whole --repair invocation.
+                                ts = datetime.now().strftime("%Y%m%d_%H%M%S%f")
+                                dest = dead / f"{Path(mp).stem}_{ts}{Path(mp).suffix}"
+                            Path(mp).rename(dest)
+                            logger.info(f"  [moved to dead] {dest.name}")
+                        except (OSError, FileExistsError) as e:
+                            logger.warning(f"  [dead-letter-fail] {Path(mp).name}: {e}")
+                            repair_errors += 1
                     else:
                         logger.info(f"  [DRY] would move orphan manifest to dead/: {Path(mp).name}")
 

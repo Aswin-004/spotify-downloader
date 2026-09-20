@@ -39,6 +39,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mutagen.mp3 import MP3
 from mutagen.id3 import ID3, ID3NoHeaderError, TPE1, TIT2
 
+from services.organizer_service import safe_move
+
 # ── Known ID3-corrupt files ───────────────────────────────────────────────────
 # Maps lowercase filename stem → dict of fields to overwrite.
 # These files have wrong artist tags written by a bad MusicBrainz lookup.
@@ -248,21 +250,19 @@ def execute_moves(moves: list[dict], library_path: str) -> tuple[int, int]:
     success = fail = 0
 
     for m in moves:
-        dest_dir  = os.path.join(lib_dir, m["expected_genre"])
-        dest_path = os.path.join(dest_dir, m["filename"])
-
-        # Resolve filename conflicts
-        if os.path.exists(dest_path):
-            stem, ext = os.path.splitext(m["filename"])
-            i = 1
-            while os.path.exists(dest_path):
-                dest_path = os.path.join(dest_dir, f"{stem}_{i}{ext}")
-                i += 1
+        dest_dir = os.path.join(lib_dir, m["expected_genre"])
 
         try:
-            os.makedirs(dest_dir, exist_ok=True)
-            os.replace(m["src_path"], dest_path)
-            _update_index(m, dest_path)
+            # safe_move() picks a collision-safe destination name and performs
+            # the move under a process-wide lock, so a file landing at the
+            # destination between the old exists()-check and the actual move
+            # can no longer be silently clobbered.
+            dest_path = safe_move(
+                m["src_path"], dest_dir,
+                filename=m["filename"],
+                artist_name=m.get("artist", ""),
+            )
+            _update_index(m, str(dest_path))
             success += 1
             print(f"  MOVED  {m['filename']}")
             print(f"         {m['current_genre']} → {m['expected_genre']}")

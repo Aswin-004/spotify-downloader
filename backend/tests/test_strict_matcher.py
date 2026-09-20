@@ -363,7 +363,7 @@ class TestSearchStageSelection_DownloaderLevel(unittest.TestCase):
         }
         call_log = []
 
-        def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None):
+        def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None, exclude_urls=None):
             call_log.append(source_name)
             cand, score, reason = stage_results.get(source_name, (None, 0.0, "no results"))
             return cand, score, reason
@@ -394,7 +394,7 @@ class TestSearchStageSelection_DownloaderLevel(unittest.TestCase):
             "Stage 5 (SC)":        (None, 0.0, "nothing usable"),
         }
 
-        def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None):
+        def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None, exclude_urls=None):
             return stage_results[source_name]
 
         self.svc._score_stage_candidates = fake_score
@@ -409,7 +409,7 @@ class TestSearchStageSelection_DownloaderLevel(unittest.TestCase):
         self.assertEqual(self.finalize_calls[0][0]["title"], "Best Marginal")
 
     def test_no_acceptable_candidate_across_all_stages_raises(self):
-        def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None):
+        def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None, exclude_urls=None):
             return None, 0.0, "nothing usable"
 
         self.svc._score_stage_candidates = fake_score
@@ -424,3 +424,88 @@ class TestSearchStageSelection_DownloaderLevel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestKaraokeChannelAndVariantGaps(unittest.TestCase):
+    """Regression tests for the karaoke/instrumental leaks found on 2026-09-19.
+
+    The old filter looked at the VIDEO TITLE only, with \bword\b matching, so:
+      - a karaoke re-recording titled exactly like the original (artist + title
+        copied verbatim, right duration) on a karaoke CHANNEL scored a perfect 1.0;
+      - "Instrumentals" (plural) and misspellings like "Karoke" slipped through.
+    """
+
+    SP_TITLE = "Make Some Noise For The Desi Boyz"
+    ARTIST = "Pritam"
+    DUR = 244
+
+    def test_unlabelled_karaoke_on_karaoke_channel_is_rejected(self):
+        score, rejections = score_candidate(
+            "Pritam - Make Some Noise For The Desi Boyz", 245, self.SP_TITLE, self.ARTIST,
+            self.DUR, uploader="Bollywood Karaoke Studio",
+        )
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("channel" in r.lower() for r in rejections), rejections)
+
+    def test_backing_track_channel_is_rejected(self):
+        score, _ = score_candidate(
+            "Make Some Noise For The Desi Boyz (Pritam)", 244, self.SP_TITLE, self.ARTIST,
+            self.DUR, uploader="Hindi Backing Tracks",
+        )
+        self.assertEqual(score, 0.0)
+
+    def test_plural_instrumentals_rejected(self):
+        score, rejections = score_candidate(
+            "Make Some Noise For The Desi Boyz - Instrumentals", 244, self.SP_TITLE, self.ARTIST,
+            self.DUR, uploader="Pritam",
+        )
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("forbidden keyword" in r for r in rejections), rejections)
+
+    def test_misspelled_karoke_rejected(self):
+        score, _ = score_candidate(
+            "Make Some Noise For The Desi Boyz Karoke", 244, self.SP_TITLE, self.ARTIST,
+            self.DUR, uploader="Pritam",
+        )
+        self.assertEqual(score, 0.0)
+
+    def test_without_vocals_and_vocals_removed_rejected(self):
+        for suffix in ("(Without Vocals)", "(Vocals Removed)", "[Off Vocal]", "(Sing Along)"):
+            score, _ = score_candidate(
+                f"Make Some Noise For The Desi Boyz {suffix}", 244, self.SP_TITLE, self.ARTIST,
+                self.DUR, uploader="Pritam",
+            )
+            self.assertEqual(score, 0.0, suffix)
+
+    def test_official_topic_channel_still_accepted(self):
+        score, rejections = score_candidate(
+            "Make Some Noise For The Desi Boyz", 244, self.SP_TITLE, self.ARTIST,
+            self.DUR, uploader="Pritam - Topic",
+        )
+        self.assertEqual(rejections, [])
+        self.assertGreaterEqual(score, 0.90)
+
+    def test_topic_channel_bonus_breaks_ties_in_favour_of_studio_audio(self):
+        # Same title/duration; only the uploader differs. Use a duration off by a few
+        # seconds so the raw score sits below the 1.0 clamp and the bonus is visible.
+        common = dict(actual_duration_sec=249, spotify_title=self.SP_TITLE, artist=self.ARTIST,
+                      expected_duration_sec=self.DUR)
+        topic, _ = score_candidate("Make Some Noise For The Desi Boyz", uploader="Pritam - Topic", **common)
+        plain, _ = score_candidate("Make Some Noise For The Desi Boyz", uploader="Pritam Fan Uploads", **common)
+        self.assertGreater(topic, plain)
+
+    def test_legit_track_that_is_itself_an_instrumental_is_still_allowed(self):
+        # If the Spotify title asks for "Instrumentals", the exemption still applies.
+        score, rejections = score_candidate(
+            "Skyline (Instrumentals)", 200, "Skyline (Instrumentals)", "Some Artist",
+            200, uploader="Some Artist",
+        )
+        self.assertNotIn("forbidden keyword", " ".join(rejections))
+
+    def test_word_boundaries_still_avoid_false_positives(self):
+        # "Discovery" / "Undercover" must not trip the 'cover' keyword or channel rule.
+        score, rejections = score_candidate(
+            "Discovery", 200, "Discovery", "Daft Punk", 200, uploader="Discovery Music Group",
+        )
+        self.assertEqual(rejections, [])
+        self.assertGreater(score, 0.5)

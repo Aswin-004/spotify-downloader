@@ -62,12 +62,24 @@ class _Task:
     _error_count: int = field(default=0, init=False)
     _last_error: str = field(default="", init=False)
     _runs: int = field(default=0, init=False)
+    # Guards against the background loop and any trigger() call (or two
+    # concurrent trigger() calls) executing this same task's run() at the
+    # same time — e.g. two overlapping runs of retag_catchall could
+    # shutil.move the same file twice.
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def is_ready(self) -> bool:
         backoff = min(self.cooldown_sec * (2 ** min(self._error_count, 5)), 1800.0)
         return (time.monotonic() - self._last_run) >= backoff
 
     def run(self) -> bool:
+        """Run this task's fn(), unless it's already running elsewhere.
+        Returns False both when fn() raises and when the run was skipped
+        because the task was already in progress — callers that need to
+        tell those apart should check `_lock.locked()` before calling."""
+        if not self._lock.acquire(blocking=False):
+            logger.debug(f"[maintenance] {self.name} skipped — already running")
+            return False
         try:
             self.fn()
             self._error_count = 0
@@ -80,6 +92,7 @@ class _Task:
             return False
         finally:
             self._last_run = time.monotonic()
+            self._lock.release()
 
     def as_dict(self) -> dict:
         return {
@@ -124,9 +137,20 @@ class MaintenanceWorker:
             self._thread.join(timeout=timeout)
 
     def trigger(self, task_name: str) -> bool:
-        """Force-run a named task immediately (useful for tests and manual repairs)."""
+        """Force-run a named task immediately (useful for tests and manual repairs).
+
+        Returns False if the task is unknown, fails, or — rather than
+        blocking or silently no-oping — is already running (via the
+        background loop or another trigger() call); that case is logged
+        explicitly so it's distinguishable from an actual failure.
+        """
         for task in self._tasks:
             if task.name == task_name:
+                if task._lock.locked():
+                    logger.warning(
+                        f"[maintenance] trigger({task_name}) skipped — task already running"
+                    )
+                    return False
                 task._last_run = 0.0  # bypass cooldown
                 ok = task.run()
                 if not ok:
@@ -369,6 +393,7 @@ class MaintenanceWorker:
         from mutagen.id3 import ID3 as _ID3
 
         from services.genre_router import normalize_artist_key as _nak
+        from services.genre_router import spotify_genres_available as _spotify_genres_available
 
         def _artist_lower(fp):
             try:
@@ -402,7 +427,10 @@ class MaintenanceWorker:
                     route_source = "artist_override"
 
                 # ── 2. Spotify artist search ─────────────────────────────────
-                if not genre_path and artist_lower not in ("unknown", "electronic", ""):
+                # Only useful for reading the artist's `genres`, which Spotify no longer
+                # returns for this app (see genre_router step 5) — skipped once observed.
+                if (not genre_path and artist_lower not in ("unknown", "electronic", "")
+                        and _spotify_genres_available()):
                     try:
                         from services.spotify_service import get_spotify_service as _get_sp, is_rate_limited as _is_rl
                         from services.genre_router import resolve_genre_folder_with_confidence as _rgfc
@@ -430,79 +458,87 @@ class MaintenanceWorker:
                         logger.debug(f"[maintenance] retag_catchall: Spotify artist search failed for {artist_name!r}: {_e2}")
 
                 # ── 3. Spotify title-only search ─────────────────────────────
-                if not genre_path and title_tag:
+                # SAFETY: this used to route on the genre of ANY artist Spotify returned for
+                # the title and then OVERWRITE this file's artist tag with that stranger's
+                # name — and it runs hourly on up to 30 files, unattended. Generic titles
+                # ("Takes", "scared", "Mana") matched unrelated tracks, so real techno got
+                # filed under Pop/Bollywood and its tag rewritten. A hit now has to be the
+                # SAME recording (near-exact title AND length within 3 s), and the tag is
+                # never touched. See services/catchall_reclassifier.py step 3.
+                if not genre_path and title_tag and _spotify_genres_available():
                     try:
                         from services.spotify_service import get_spotify_service as _get_sp, is_rate_limited as _is_rl
                         from services.genre_router import resolve_genre_folder_with_confidence as _rgfc
-                        from mutagen.id3 import TPE1 as _TPE1
+                        from services import strict_matcher as _sm
                         if _is_rl():
                             logger.debug(f"[maintenance] retag_catchall: Spotify rate-limited — skipping title search for {title_tag!r}")
                         else:
                             _sp = _get_sp()
                             if _sp:
+                                _file_secs = None
+                                try:
+                                    from mutagen.mp3 import MP3 as _MP3
+                                    _file_secs = float(_MP3(str(fp)).info.length)
+                                except Exception:
+                                    pass
+                                _clean_file_title = _sm.clean_title(title_tag)
                                 _res = _sp.sp.search(q=f"track:{title_tag}", type="track", limit=5)
                                 for _t in _res.get("tracks", {}).get("items", []):
                                     _sp_artist = _t.get("artists", [{}])[0].get("name", "")
                                     _sp_aid = _t.get("artists", [{}])[0].get("id", "")
                                     if not _sp_artist:
                                         continue
+                                    _sim = _sm._fuzzy_ratio(_clean_file_title, _sm.clean_title(_t.get("name", "")))
+                                    _cand_ms = _t.get("duration_ms") or 0
+                                    _same_len = _file_secs is not None and _cand_ms and abs(_file_secs - _cand_ms / 1000.0) <= 3.0
+                                    if _sim < 0.90 or not _same_len:
+                                        continue
                                     folder, conf, src = _rgfc(_sp_aid, _sp_artist, _sp.sp)
                                     if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
                                         genre_path = folder
                                         route_source = f"spotify_title/{src}"
-                                        try:
-                                            _tags["TPE1"] = _TPE1(encoding=3, text=_sp_artist)
-                                            _tags.save(str(fp))
-                                        except Exception:
-                                            pass
                                         break
                     except Exception as _e3:
                         logger.debug(f"[maintenance] retag_catchall: Spotify title search failed for {title_tag!r}: {_e3}")
 
-                # ── 4. Last.fm (free, no quota) ──────────────────────────────
-                if not genre_path and title_tag and artist_name:
+                # ── 4. Evidence vote (Last.fm + MusicBrainz + hints + BPM) ───
+                # Replaces the single-source Last.fm / MusicBrainz / AcoustID steps, each of
+                # which took the FIRST genre it saw. This job moves files unattended, so it
+                # only acts when the votes are strong and clearly ahead — see
+                # services/genre_evidence.py. The slow AcoustID fingerprint is only spent on
+                # tracks the cheap signals could not settle.
+                if not genre_path and (title_tag or artist_name):
                     try:
-                        from services.lastfm_service import lookup_genre as _lfm
-                        raw = _lfm(title_tag, artist_name)
-                        if raw:
-                            canonical = normalize_genre(raw)
-                            _lp = _library_path(canonical) if canonical else ""
-                            if _lp and _lp != "Library/Electronic":
-                                genre_path = _lp
-                                route_source = "lastfm"
-                    except Exception:
-                        pass
+                        from services import genre_evidence as _ge
+                        _bpm = None
+                        try:
+                            _bpm = float(str(_tags.get("TBPM", "")).strip())
+                            _bpm = _bpm if 40 <= _bpm <= 300 else None
+                        except Exception:
+                            _bpm = None
+                        _decision = _ge.classify_track(artist_name, title_tag, path=str(fp), bpm=_bpm, online=True)
+                        if _decision.abstain:
+                            from services.musicbrainz_service import _acoustid_key
+                            if _acoustid_key():
+                                _decision = _ge.classify_track(
+                                    artist_name, title_tag, path=str(fp), bpm=_bpm, online=True, use_fingerprint=True
+                                )
+                        if not _decision.abstain and _decision.genre not in ("", "Electronic") and _decision.verified:
+                            genre_path = f"Library/{_decision.genre}"
+                            route_source = "evidence:" + "+".join(_decision.sources)
+                        else:
+                            # Abstained, or the answer rests on artist-level tags / hints alone
+                            # (unverified): an unattended job leaves it for the review UI / batch tool.
+                            logger.debug(f"[maintenance] retag_catchall: {fp.name}: not moved — {_decision.explain()}")
+                    except Exception as _e4:
+                        logger.debug(f"[maintenance] retag_catchall: evidence vote failed for {fp.name}: {_e4}")
 
-                # ── 5. MusicBrainz search (free, no quota) ───────────────────
-                if not genre_path and title_tag:
-                    try:
-                        from services.musicbrainz_service import lookup_by_search as _mb_search
-                        mb_raw = _mb_search(title_tag, artist_name)
-                        if mb_raw:
-                            canonical = normalize_genre(mb_raw)
-                            _lp = _library_path(canonical) if canonical else ""
-                            if _lp and _lp != "Library/Electronic":
-                                genre_path = _lp
-                                route_source = "musicbrainz"
-                    except Exception:
-                        pass
-
-                # ── 6. AcoustID fingerprint (free with key) ───────────────────
-                if not genre_path:
-                    try:
-                        from services.musicbrainz_service import lookup_by_fingerprint as _mb_fp
-                        fp_raw = _mb_fp(str(fp))
-                        if fp_raw:
-                            canonical = normalize_genre(fp_raw)
-                            _lp = _library_path(canonical) if canonical else ""
-                            if _lp and _lp != "Library/Electronic":
-                                genre_path = _lp
-                                route_source = "acoustid"
-                    except Exception:
-                        pass
-
-                # ── 7. Gemini (last resort — costs daily quota) ───────────────
-                if not genre_path:
+                # ── 7. Groq text guess (last resort — UNVERIFIED) ─────────────
+                # A guess from title+artist text alone, not evidence, and it leans "House" for
+                # every unfamiliar electronic act. This job runs unattended, so it no longer
+                # acts on one unless ALLOW_UNVERIFIED_AI_MOVES=true; the file simply stays in
+                # Electronic (and is offered again next cycle / in the review UI).
+                if not genre_path and os.getenv("ALLOW_UNVERIFIED_AI_MOVES", "").strip().lower() == "true":
                     from services.gemini_service import remaining_quota as _rq
                     if _rq() > 0:
                         gemini = identify_audio(str(fp))
@@ -527,17 +563,37 @@ class MaintenanceWorker:
                     tags.save()
                 except Exception:
                     pass
-                # Update MongoDB library index
-                try:
-                    from database import get_library_index_collection
-                    col = get_library_index_collection()
-                    if col is not None:
-                        col.update_one(
-                            {"final_path": str(fp)},
-                            {"$set": {"final_path": str(dest_fp), "genre_folder": genre_path}},
-                        )
-                except Exception:
-                    pass
+                # Update MongoDB library index. The file has ALREADY been moved
+                # on disk at this point (irreversibly, from the caller's view),
+                # so a DB failure here leaves library_index pointing at the old
+                # (now-gone) path — invisible to anything that looks the track
+                # up by indexed path. A transient DB error is the realistic
+                # failure mode, so retry once before giving up; if it still
+                # fails, log loudly (not silently) with both paths so this is
+                # discoverable instead of invisible.
+                _db_updated = False
+                _db_exc = None
+                for _attempt in range(2):
+                    try:
+                        from database import get_library_index_collection
+                        col = get_library_index_collection()
+                        if col is not None:
+                            col.update_one(
+                                {"final_path": str(fp)},
+                                {"$set": {"final_path": str(dest_fp), "genre_folder": genre_path}},
+                            )
+                        _db_updated = True
+                        break
+                    except Exception as exc:
+                        _db_exc = exc
+                        if _attempt == 0:
+                            _time.sleep(0.5)  # brief pause before the retry
+                if not _db_updated:
+                    logger.error(
+                        f"[maintenance] retag_catchall: file MOVED {fp} -> {dest_fp} but "
+                        f"library_index update FAILED after retry — DB still points at the "
+                        f"old path; manual reindex required: {_db_exc}"
+                    )
                 logger.info(f"[maintenance] retag_catchall: {fp.name} → {genre_path} via {route_source}")
                 moved += 1
                 if route_source == "gemini":

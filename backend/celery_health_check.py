@@ -19,12 +19,15 @@ def check_redis():
     """Check if Redis is reachable."""
     print("1. Checking Redis connection...")
     try:
+        import re
         from celery_app import REDIS_URL, is_redis_available
+        # Hosted Redis URLs embed a password (redis://default:secret@host) — mask it.
+        safe_url = re.sub(r"(://)[^/@\s]+@", r"\g<1>***:***@", REDIS_URL or "")
         if is_redis_available():
-            print(f"   ✅ Redis is reachable at {REDIS_URL}")
+            print(f"   ✅ Redis is reachable at {safe_url}")
             return True
         else:
-            print(f"   ❌ Redis not reachable at {REDIS_URL}")
+            print(f"   ❌ Redis not reachable at {safe_url}")
             print("   → Run: docker-compose up -d redis")
             return False
     except Exception as e:

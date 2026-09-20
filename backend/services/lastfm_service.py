@@ -26,7 +26,25 @@ try:
 except ImportError:
     logger = logging.getLogger(__name__)
 
-_API_KEY = os.getenv("LASTFM_API_KEY", "")
+_API_KEY = os.getenv("LASTFM_API_KEY", "")   # import-time snapshot; prefer _api_key()
+
+
+def _api_key() -> str:
+    """Resolve the Last.fm key at CALL time.
+
+    The module-level snapshot above is "" whenever this module is imported before
+    .env has been loaded (any standalone script that imports the service first),
+    which silently turned every lookup into a no-op that returned "" with no
+    log line — indistinguishable from "track has no tags".
+    """
+    key = os.getenv("LASTFM_API_KEY", "")
+    if key:
+        return key
+    try:
+        from config import config
+        return getattr(config, "LASTFM_API_KEY", "") or ""
+    except Exception:
+        return ""
 _BASE_URL = "https://ws.audioscrobbler.com/2.0/"
 
 # (tag substring, genre folder) — checked in order, first match wins.
@@ -83,7 +101,7 @@ def lookup_genre(title: str, artist: str) -> str:
     Query Last.fm for the top community tags on a track and map to a genre folder.
     Returns a genre folder name (e.g. "House", "Bollywood") or "" on failure.
     """
-    if not _API_KEY:
+    if not _api_key():
         return ""
     if not title or not artist:
         return ""
@@ -93,7 +111,7 @@ def lookup_genre(title: str, artist: str) -> str:
             "method":      "track.getTopTags",
             "artist":      artist,
             "track":       title,
-            "api_key":     _API_KEY,
+            "api_key":     _api_key(),
             "format":      "json",
             "autocorrect": 1,
         })
@@ -130,7 +148,7 @@ def is_available() -> bool:
         from config import config
         return bool(config.LASTFM_API_KEY)
     except Exception:
-        return bool(_API_KEY)
+        return bool(_api_key())
 
 
 # ── Full enrichment (genre + mood + listeners + all tags) ──────────────────────
@@ -227,7 +245,7 @@ def enrich_from_lastfm(artist: str, title: str, mbid: str = "") -> dict:
         "dance", "punjabi", "house", "techno", "grime", "latin",
         "r&b", "pop", "rock", "metal", "classical", "jazz",
     }
-    if not _API_KEY or not artist or artist.lower().strip() in _PLACEHOLDER_ARTISTS:
+    if not _api_key() or not artist or artist.lower().strip() in _PLACEHOLDER_ARTISTS:
         return {}
 
     key = _enrich_cache_key(artist, title, mbid)
@@ -320,3 +338,77 @@ def enrich_cache_size() -> int:
     """Return number of entries in the enrichment cache."""
     with _CACHE_LOCK:
         return len(_enrich_cache)
+
+
+# ── Raw tag access (used by services/genre_evidence.py) ───────────────────────
+# lookup_genre() collapses a track's tags to ONE folder before the caller can weigh them
+# against other evidence. These return the tags themselves, with counts, plus the track /
+# artist Last.fm actually resolved the query to (autocorrect can silently substitute a
+# different one — the caller compares it with what it asked for).
+
+def _lastfm_json(params: dict) -> dict | None:
+    """One rate-limited Last.fm call → parsed JSON (API error bodies included); None when
+    there is no key or the transport failed."""
+    global _last_enrich_call
+    key = _api_key()
+    if not key:
+        return None
+    with _RATE_LOCK:
+        wait = _ENRICH_INTERVAL - (time.time() - _last_enrich_call)
+        if wait > 0:
+            time.sleep(wait)
+        _last_enrich_call = time.time()
+    try:
+        resp = requests.get(
+            _BASE_URL,
+            params={**params, "api_key": key, "format": "json", "autocorrect": 1},
+            headers={"User-Agent": "spotify-meta-downloader/1.0"},
+            timeout=10,
+        )
+        if resp.status_code >= 500:
+            return None
+        return resp.json()
+    except Exception as exc:
+        logger.debug(f"[lastfm] {params.get('method')} failed: {exc}")
+        return None
+
+
+def _tag_pairs(raw) -> list[tuple[str, int]]:
+    if isinstance(raw, dict):
+        raw = [raw]
+    out: list[tuple[str, int]] = []
+    for t in raw or []:
+        name = str(t.get("name", "")).lower().strip()
+        try:
+            count = int(t.get("count", 0))
+        except (TypeError, ValueError):
+            count = 0
+        if name:
+            out.append((name, count))
+    return out
+
+
+def _top_tags_result(data: dict | None) -> dict | None:
+    """Shared parsing: {"tags", "artist", "track"} ("" when Last.fm did not say), tags [] when
+    Last.fm has no such item (error 6), None when unavailable (transport/rate-limit/other)."""
+    if data is None:
+        return None
+    if "error" in data:
+        return {"tags": [], "artist": "", "track": ""} if data.get("error") == 6 else None
+    top = data.get("toptags") or {}
+    attr = top.get("@attr") or {}
+    return {"tags": _tag_pairs(top.get("tag")), "artist": attr.get("artist", ""), "track": attr.get("track", "")}
+
+
+def get_track_top_tags(artist: str, title: str) -> dict | None:
+    """Community tags for one track: {"tags": [(name, count), ...], "artist", "track"} or None."""
+    if not artist or not title:
+        return None
+    return _top_tags_result(_lastfm_json({"method": "track.getTopTags", "artist": artist, "track": title}))
+
+
+def get_artist_top_tags(artist: str) -> dict | None:
+    """Community tags for one artist: {"tags": [(name, count), ...], "artist", "track": ""} or None."""
+    if not artist:
+        return None
+    return _top_tags_result(_lastfm_json({"method": "artist.getTopTags", "artist": artist}))

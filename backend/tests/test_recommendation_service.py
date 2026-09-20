@@ -40,12 +40,16 @@ from services.recommendation_service import (
     _proximity_score,
     _confidence_factor,
     _normalize_energy_pool,
+    _is_known_artist,
+    classify_track_length,
+    _DJ_MIX_DURATION_THRESHOLD_SEC,
+    _compute_similarity_confidence_aware,
 )
 
 
 def track(identity_key, artist, bpm, camelot, rms_energy=0.15,
           spectral_centroid_mean=2000.0, confidence=0.8, missing=False,
-          title=None, genre_folder="house"):
+          title=None, genre_folder="house", duration_sec=None):
     """Build a library_index-shaped dict, matching the real schema written
     by bpm_key_service.persist_audio_features()."""
     doc = {
@@ -59,6 +63,7 @@ def track(identity_key, artist, bpm, camelot, rms_energy=0.15,
             "rms_energy": rms_energy,
             "spectral_centroid_mean": spectral_centroid_mean,
             "confidence": confidence,
+            "duration_sec": duration_sec,
         },
     }
     if missing:
@@ -401,6 +406,211 @@ class TestGeneratePlaylistSequence(unittest.TestCase):
     def test_invalid_flow_raises_value_error(self):
         with self.assertRaises(ValueError):
             generate_playlist_sequence("seed", flow="not_a_real_flow", _docs=self.docs)
+
+    def test_missing_metadata_candidate_excluded_from_sequence(self):
+        """A candidate missing bpm/camelot must never appear in the sequence —
+        it should be filtered out of the pool up front (same completeness
+        filter recommend_next() uses), not merely fail to be picked."""
+        docs = self.docs + [track("no_meta", "Z", None, None)]
+        seq = generate_playlist_sequence("seed", length=10, _docs=docs)
+        keys = [t["identity_key"] for t in seq["sequence"]]
+        self.assertNotIn("no_meta", keys)
+
+
+class TestRecommendNextTopNValidation(unittest.TestCase):
+    """recommend_next(top_n=...) rejects invalid input instead of silently
+    misbehaving (e.g. a negative top_n slicing from the end of the ranked
+    list via Python slice semantics)."""
+
+    def test_negative_top_n_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            recommend_next("cur", top_n=-1, docs=BASE_POOL)
+
+    def test_zero_top_n_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            recommend_next("cur", top_n=0, docs=BASE_POOL)
+
+    def test_non_integer_top_n_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            recommend_next("cur", top_n="5", docs=BASE_POOL)
+
+
+class TestUnknownArtistHandling(unittest.TestCase):
+    """Phase 1E Issue 1 — "Unknown"/empty/whitespace artists must not trigger
+    artist-repetition protection against each other, while real artists keep
+    the existing _ARTIST_WINDOW behavior unchanged. Recommendation-layer
+    only: no stored artist value is modified anywhere in these tests."""
+
+    def test_is_known_artist_classifies_placeholders(self):
+        self.assertFalse(_is_known_artist("Unknown"))
+        self.assertFalse(_is_known_artist("unknown"))
+        self.assertFalse(_is_known_artist("UNKNOWN"))
+        self.assertFalse(_is_known_artist(""))
+        self.assertFalse(_is_known_artist("   "))
+        self.assertFalse(_is_known_artist(None))
+
+    def test_is_known_artist_accepts_real_names(self):
+        self.assertTrue(_is_known_artist("Fred again.."))
+        self.assertTrue(_is_known_artist("Artist A"))
+
+    def test_real_artist_still_triggers_repeat_protection(self):
+        """REAL ARTIST -> same REAL ARTIST: existing protection preserved.
+        Pool sized so the strict pass alone satisfies top_n (matching
+        BASE_POOL's own convention) — otherwise the documented relax
+        fallback (TestRelaxFallback) would waive the artist window and
+        mask what this test is checking."""
+        docs = [
+            track("cur", "Real Artist", 128.0, "8A"),
+            track("same_real_artist", "Real Artist", 128.0, "8A"),
+            track("other1", "Someone Else", 128.0, "8A"),
+            track("other2", "Another One", 128.0, "8A"),
+            track("other3", "Fourth Person", 128.0, "8A"),
+        ]
+        result = recommend_next("cur", top_n=3, docs=docs)
+        keys = [r["identity_key"] for r in result["recommendations"]]
+        self.assertNotIn("same_real_artist", keys)
+        self.assertEqual(len(keys), 3)
+
+    def test_unknown_to_unknown_not_treated_as_same_artist(self):
+        """UNKNOWN -> UNKNOWN must NOT be excluded as a repeat."""
+        docs = [
+            track("cur", "Unknown", 128.0, "8A"),
+            track("also_unknown", "Unknown", 128.0, "8A"),
+            track("filler1", "Filler A", 90.0, "2B"),  # far bpm+key, ranks low
+        ]
+        result = recommend_next("cur", top_n=2, docs=docs)
+        keys = [r["identity_key"] for r in result["recommendations"]]
+        self.assertIn("also_unknown", keys)
+
+    def test_unknown_to_real_artist_never_matches(self):
+        """UNKNOWN -> REAL ARTIST: never blocked on artist grounds (the
+        strings are never equal in the first place, but confirm the new
+        placeholder handling doesn't introduce a false match either way)."""
+        docs = [
+            track("cur", "", 128.0, "8A"),
+            track("real", "Some Real Artist", 128.0, "8A"),
+        ]
+        result = recommend_next("cur", top_n=1, docs=docs)
+        keys = [r["identity_key"] for r in result["recommendations"]]
+        self.assertIn("real", keys)
+
+    def test_different_real_artists_remain_different(self):
+        docs = [
+            track("cur", "Artist X", 128.0, "8A"),
+            track("t1", "Artist Y", 128.0, "8A"),
+            track("t2", "Artist Z", 128.0, "8A"),
+        ]
+        result = recommend_next("cur", top_n=2, docs=docs)
+        keys = [r["identity_key"] for r in result["recommendations"]]
+        self.assertIn("t1", keys)
+        self.assertIn("t2", keys)
+
+    def test_many_unknown_artist_tracks_do_not_block_each_other(self):
+        """Regression for the exact Phase 1D finding: 201 "Unknown"-artist
+        tracks must be able to appear back-to-back in a sequence instead of
+        reading as one giant repeated artist."""
+        docs = [track("cur", "Unknown", 128.0, "8A")]
+        for i in range(6):
+            docs.append(track(f"u{i}", "Unknown", 128.0, "8A"))
+        result = recommend_next("cur", top_n=5, docs=docs,
+                                 recent_artists=["Unknown", "Unknown", "Unknown"])
+        self.assertEqual(len(result["recommendations"]), 5)
+
+    def test_case_variant_placeholders_also_excluded_from_each_other(self):
+        docs = [
+            track("cur", "UNKNOWN", 128.0, "8A"),
+            track("t1", "unknown", 128.0, "8A"),
+            track("t2", "  ", 128.0, "8A"),
+        ]
+        result = recommend_next("cur", top_n=2, docs=docs)
+        keys = [r["identity_key"] for r in result["recommendations"]]
+        self.assertIn("t1", keys)
+        self.assertIn("t2", keys)
+
+
+class TestDJMixClassification(unittest.TestCase):
+    """Phase 1E Issue 2 — classify_track_length() distinguishes normal
+    tracks from DJ mixes using duration_sec, without changing candidate-pool
+    membership, scoring, or ranking."""
+
+    def test_short_duration_classified_as_track(self):
+        self.assertEqual(classify_track_length(180.0), "track")
+        self.assertEqual(classify_track_length(0.0), "track")
+
+    def test_long_duration_classified_as_dj_mix(self):
+        self.assertEqual(classify_track_length(_DJ_MIX_DURATION_THRESHOLD_SEC), "dj_mix")
+        self.assertEqual(classify_track_length(11561.7), "dj_mix")  # real Phase 1D outlier
+
+    def test_just_below_threshold_is_track(self):
+        self.assertEqual(
+            classify_track_length(_DJ_MIX_DURATION_THRESHOLD_SEC - 0.1), "track")
+
+    def test_missing_or_invalid_duration_is_unknown(self):
+        self.assertEqual(classify_track_length(None), "unknown")
+        self.assertEqual(classify_track_length("not a number"), "unknown")
+        self.assertEqual(classify_track_length(float("nan")), "unknown")
+        self.assertEqual(classify_track_length(-5.0), "unknown")
+
+    def test_boolean_is_not_treated_as_numeric_duration(self):
+        # isinstance(True, int) is True in Python — guard against that trap.
+        self.assertEqual(classify_track_length(True), "unknown")
+
+    def test_recommend_next_reports_length_class_per_candidate(self):
+        docs = [
+            track("cur", "A", 128.0, "8A", duration_sec=200.0),
+            track("normal", "B", 128.0, "8A", duration_sec=210.0),
+            track("mix", "C", 128.0, "8A", duration_sec=11561.7),
+        ]
+        result = recommend_next("cur", top_n=2, docs=docs)
+        by_key = {r["identity_key"]: r for r in result["recommendations"]}
+        self.assertEqual(by_key["normal"]["length_class"], "track")
+        self.assertEqual(by_key["mix"]["length_class"], "dj_mix")
+        self.assertEqual(result["current_length_class"], "track")
+
+    def test_dj_mix_is_not_excluded_from_recommendations(self):
+        """DJ mixes must still be recommendable — Issue 2 only classifies,
+        it does not change filtering/ranking behavior."""
+        docs = [
+            track("cur", "A", 128.0, "8A", duration_sec=200.0),
+            track("mix", "B", 128.0, "8A", duration_sec=11561.7),
+        ]
+        result = recommend_next("cur", top_n=1, docs=docs)
+        keys = [r["identity_key"] for r in result["recommendations"]]
+        self.assertIn("mix", keys)
+
+    def test_unknown_current_track_reports_unknown_length_class(self):
+        result = recommend_next("does-not-exist", docs=BASE_POOL)
+        self.assertEqual(result["current_length_class"], "unknown")
+
+
+class TestConfidenceSemantics(unittest.TestCase):
+    """Phase 1E Issue 3 — documents (and pins) the existing, intentional
+    semantics: `confidence` is the audio detector's confidence in the key it
+    independently found, not a confidence score for whichever value is
+    stored in `camelot` (which may instead come from an ID3 tag with
+    different provenance — see _confidence_factor's docstring and
+    docs/PHASE_1E_RECOMMENDATION_HARDENING.md Issue 3). No scoring change:
+    these tests confirm behavior is unchanged, not that it was altered."""
+
+    def test_confidence_down_weights_camelot_regardless_of_its_source(self):
+        """The engine has no way to know (and this test doesn't pretend it
+        does) whether `camelot` came from a tag or from the detector — low
+        `confidence` down-weights the camelot term identically either way.
+        This is the documented, accepted approximation, not a bug."""
+        af_tag_sourced_camelot = {"camelot": "8A", "bpm": 128.0, "confidence": 0.1}
+        af_detector_sourced_camelot = {"camelot": "8A", "bpm": 128.0, "confidence": 0.1}
+        other = {"camelot": "8A", "bpm": 128.0, "confidence": 0.9}
+        r1 = _compute_similarity_confidence_aware(af_tag_sourced_camelot, other)
+        r2 = _compute_similarity_confidence_aware(af_detector_sourced_camelot, other)
+        self.assertEqual(r1["camelot_score"], r2["camelot_score"])
+        self.assertLess(r1["camelot_score"], r1["camelot_score_base"])
+
+    def test_high_confidence_camelot_fully_trusted(self):
+        af_a = {"camelot": "8A", "bpm": 128.0, "confidence": 0.95}
+        af_b = {"camelot": "8A", "bpm": 128.0, "confidence": 0.95}
+        result = _compute_similarity_confidence_aware(af_a, af_b)
+        self.assertEqual(result["camelot_score"], result["camelot_score_base"])
+        self.assertEqual(result["confidence_factor"], 1.0)
 
 
 if __name__ == "__main__":

@@ -4,12 +4,20 @@ Uses librosa to analyze downloaded MP3 files.
 Writes results to ID3 tags and MongoDB.
 """
 from datetime import datetime, timezone
+import os
 import numpy as np
 from pathlib import Path
 from loguru import logger
 from mutagen.id3 import ID3, TBPM, TKEY, error as ID3Error
 
 ANALYSIS_VERSION = "librosa-1.0"
+
+# Fields persist_audio_features() owns inside the audio_features sub-document.
+# Anything NOT listed here (lastfm_*, gemini_*, or any future enrichment) is
+# written by other services and must survive a BPM/key write untouched.
+_CORE_FEATURE_FIELDS = ("bpm", "key", "key_root", "key_mode", "camelot", "confidence")
+_OPTIONAL_FEATURE_FIELDS = ("duration_sec", "rms_energy",
+                            "spectral_centroid_mean", "zero_crossing_rate")
 
 # Key detection constants
 PITCH_CLASSES = ['C', 'C#', 'D', 'D#', 'E', 'F',
@@ -194,8 +202,14 @@ def detect_bpm_and_key(filepath: str, genre_hint: str = "") -> dict:
                 key_mode = "min"
                 confidence = float(best_minor)
 
-        key_root = PITCH_CLASSES[key_idx]
-        key_str  = f"{key_root} {key_mode}"
+            # Moved inside this else (was unconditional below): key_idx is only ever
+            # an int here — in the "both invalid" branch above it stays None, and
+            # PITCH_CLASSES[None] raised TypeError, which the outer except caught and
+            # discarded the ALREADY-COMPUTED bpm from earlier in this function along
+            # with everything else, returning analyzed=False for the whole call
+            # instead of "BPM known, key unknown".
+            key_root = PITCH_CLASSES[key_idx]
+            key_str  = f"{key_root} {key_mode}"
 
         logger.info(f"Key detected: {key_str} (confidence: {confidence:.2f})")
 
@@ -230,48 +244,165 @@ def detect_bpm_and_key(filepath: str, genre_hint: str = "") -> dict:
     return result
 
 
-def persist_audio_features(identity_key: str, result: dict) -> bool:
+def persist_audio_features(identity_key: str, result: dict, _col=None) -> bool:
     """
     Write audio analysis features to library_index as an additive sub-document.
     Never touches final_path, genre_folder, routing, or identity fields.
     Returns True on successful write, False if skipped or failed.
+
+    Writes field-scoped dotted paths (``audio_features.bpm`` etc.) rather than
+    replacing the whole ``audio_features`` sub-document.  Replacing it deleted
+    every key this function does not itself produce — in particular the
+    ``lastfm_*`` and ``gemini_*`` enrichment written by tagger_service /
+    backfill_lastfm / backfill_gemini.  That was reachable in normal ingest:
+    auto_downloader enriches a track (Last.fm, then Gemini) and *then*
+    re-persists BPM for DnB/Techno half-time correction, which wiped the
+    enrichment it had just written.
+
+    A field is only written when the incoming *result* actually carries a
+    value for it, so a partial write (e.g. a manual BPM-only correction) can
+    no longer null out an existing camelot/confidence/energy reading.  This
+    mirrors the convention already used for the optional feature fields and
+    for the fingerprint fields in database.index_track().
+
+    Pass *_col* to inject a collection object instead of resolving the real
+    one (tests only) — matches the `docs=`/`_docs=` injection convention used
+    by services/recommendation_service.py.
     """
     if not result.get("analyzed") or not identity_key:
         return False
     try:
-        from database import get_library_index_collection
-        col = get_library_index_collection()
+        col = _col
+        if col is None:
+            from database import get_library_index_collection
+            col = get_library_index_collection()
 
         if not col.count_documents({"identity_key": identity_key}, limit=1):
             logger.debug(f"[bpm_key_service] identity_key not in library_index — skip persist: {identity_key}")
             return False
 
         now = datetime.now(timezone.utc)
-        audio_features: dict = {
-            "bpm":              result.get("bpm"),
-            "key":              result.get("key"),
-            "key_root":         result.get("key_root"),
-            "key_mode":         result.get("key_mode"),
-            "camelot":          result.get("camelot"),
-            "confidence":       result.get("confidence"),
-            "analysis_source":  "librosa",
-            "analysis_version": ANALYSIS_VERSION,
-            "analysis_timestamp": now.isoformat(),
+        updates: dict = {
+            "audio_features.analysis_source":    "librosa",
+            "audio_features.analysis_version":   ANALYSIS_VERSION,
+            "audio_features.analysis_timestamp": now.isoformat(),
         }
-        for opt in ("duration_sec", "rms_energy", "spectral_centroid_mean", "zero_crossing_rate"):
-            val = result.get(opt)
+        for field in _CORE_FEATURE_FIELDS + _OPTIONAL_FEATURE_FIELDS:
+            val = result.get(field)
             if val is not None:
-                audio_features[opt] = val
+                updates[f"audio_features.{field}"] = val
 
         col.update_one(
             {"identity_key": identity_key},
-            {"$set": {"audio_features": audio_features}},
+            {"$set": updates},
         )
         logger.debug(f"[bpm_key_service] audio_features persisted for {identity_key}")
         return True
     except Exception as e:
         logger.error(f"[bpm_key_service] persist_audio_features failed for {identity_key}: {e}")
         return False
+
+
+def _norm_path(p: str) -> str:
+    """Platform-correct path normalisation for comparison.
+
+    library_index.final_path is stored with MIXED separators on Windows
+    (e.g. ``C:\\...\\DJ music\\Library/Bollywood\\Track.mp3``), so an exact
+    string match against a resolved Path fails for a large share of rows.
+    os.path.normcase collapses separators and case on Windows and is a no-op
+    on POSIX.
+    """
+    if not p:
+        return ""
+    return os.path.normcase(os.path.normpath(str(p)))
+
+
+def resolve_identity_key(final_path: str = "", filename: str = "", _col=None) -> str:
+    """Resolve an existing library_index document's identity_key for a file.
+
+    identity_key is ``sp:<spotify_id>`` — never a filename stem — so callers
+    holding only a path must look the document up rather than synthesising a
+    key.  Resolution order, most reliable first:
+
+      1. exact final_path match (native and posix spelling)
+      2. separator/case-normalised final_path match
+      3. unique basename-of-final_path match
+      4. unique library_index.filename match — final_path carries the
+         on-disk collision suffix (``Track_1.mp3``) while filename keeps the
+         un-suffixed name, so this is a distinct lookup, not a duplicate of 3
+
+    Steps 3 and 4 require exactly ONE live match: 382 final_path basenames and
+    8 filenames are ambiguous in the live index, and persisting BPM onto the
+    wrong track is worse than not persisting at all.  Soft-deleted rows
+    (``missing: True``) are excluded.  Returns "" when nothing resolves
+    unambiguously — callers must treat that as "not persisted".
+    """
+    if not final_path and not filename:
+        return ""
+    try:
+        col = _col
+        if col is None:
+            from database import get_library_index_collection
+            col = get_library_index_collection()
+
+        live = {"missing": {"$ne": True}}
+        proj = {"_id": 0, "identity_key": 1, "final_path": 1}
+
+        if final_path:
+            spellings = {str(final_path), str(final_path).replace("\\", "/")}
+            doc = col.find_one({**live, "final_path": {"$in": list(spellings)}}, proj)
+            if doc and doc.get("identity_key"):
+                return doc["identity_key"]
+
+            target = _norm_path(final_path)
+            target_base = target.rsplit(os.sep, 1)[-1]
+            norm_hits, base_hits = [], []
+            for d in col.find(live, proj):
+                ik = d.get("identity_key")
+                if not ik:
+                    continue
+                cand = _norm_path(d.get("final_path") or "")
+                if not cand:
+                    continue
+                if cand == target:
+                    norm_hits.append(ik)
+                elif cand.rsplit(os.sep, 1)[-1] == target_base:
+                    base_hits.append(ik)
+            if len(set(norm_hits)) == 1:
+                return norm_hits[0]
+            if norm_hits:
+                logger.warning(
+                    f"[bpm_key_service] ambiguous final_path ({len(set(norm_hits))} matches) "
+                    f"— refusing to guess: {final_path}"
+                )
+                return ""
+            if len(set(base_hits)) == 1:
+                return base_hits[0]
+            if base_hits:
+                logger.warning(
+                    f"[bpm_key_service] ambiguous basename ({len(set(base_hits))} matches) "
+                    f"— refusing to guess: {final_path}"
+                )
+                return ""
+
+        if filename:
+            name_hits = [
+                d["identity_key"]
+                for d in col.find({**live, "filename": filename}, proj)
+                if d.get("identity_key")
+            ]
+            if len(set(name_hits)) == 1:
+                return name_hits[0]
+            if name_hits:
+                logger.warning(
+                    f"[bpm_key_service] ambiguous filename ({len(set(name_hits))} matches) "
+                    f"— refusing to guess: {filename}"
+                )
+
+        return ""
+    except Exception as e:
+        logger.error(f"[bpm_key_service] resolve_identity_key failed for {final_path or filename}: {e}")
+        return ""
 
 
 def write_bpm_key_to_tags(filepath: str, bpm: int, key: str) -> bool:

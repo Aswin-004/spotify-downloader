@@ -73,7 +73,7 @@ class Config:
     )
 
     # Auto-sync interval in seconds
-    CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "500"))
+    CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
     
     # Download settings
     BASE_DOWNLOAD_DIR = os.getenv("BASE_DOWNLOAD_DIR", os.path.join(os.path.dirname(__file__), "downloads"))
@@ -139,7 +139,7 @@ class Config:
         "tribal house":         "Afro House",
         "south african house":  "Afro House",
         "afro melodic":         "Afro House",
-        "melodic techno":       "Afro House",
+        "melodic techno":       "Techno",   # was "Afro House" -> filed into the House crate
         # ── House ─────────────────────────────────────────────
         "tech house":           "House",
         "deep house":           "House",
@@ -584,11 +584,14 @@ class Config:
         "conducta":             "UK Garage",
         "unknown t":            "Grime",
         # ── Electronic / Techno additions ─────────────────────────────────
-        "anyma":                "Electronic",
-        "chris liebing":        "Electronic",
-        "charlotte de witte":   "Electronic",
-        "amelie lens":          "Electronic",
-        "adam beyer":           "Electronic",
+        # (section says Techno but these were assigned the generic "Electronic"
+        # catch-all at confidence 1.0 — which outranks every other signal — so
+        # every track by these artists was filed away from the Techno crate)
+        "anyma":                "Techno",
+        "chris liebing":        "Techno",
+        "charlotte de witte":   "Techno",
+        "amelie lens":          "Techno",
+        "adam beyer":           "Techno",
         "jon hopkins":          "Electronic",
         "moderat":              "Electronic",
         # ── Afrobeats additions ────────────────────────────────────────────
@@ -714,13 +717,13 @@ class Config:
         "dum k":                  "Punjabi",
         # ── Electronic / Dance additions (2026-05-25 run 5) ───────────────
         "sash":                   "Electronic",
-        "1200 micrograms":        "Electronic",
-        "markus schulz":          "Electronic",
+        "1200 micrograms":        "Trance",     # psy/goa trance
+        "markus schulz":          "Trance",
         "protoculture":           "Electronic",
         "cafe de anatolia":       "Electronic",
         "anton powers":           "Electronic",
         "daniel rateuke":         "Electronic",
-        "techno project":         "Electronic",
+        "techno project":         "Techno",
         "azzecca":                "Electronic",
         "dan tanev":              "Electronic",
         "andi vegas":             "Electronic",
@@ -759,8 +762,8 @@ class Config:
         "buckshot":               "Hip Hop",
         "king":                   "Indian Hip Hop",
         # ── Electronic / House additions ──────────────────────────────────
-        "ben böhmer":             "Electronic",
-        "ben bohmer":             "Electronic",
+        "ben böhmer":             "House",      # melodic house (section: "House additions")
+        "ben bohmer":             "House",
         "radiohead":              "Electronic",
         "umwelt":                 "Electronic",
         "william deep":           "Electronic",

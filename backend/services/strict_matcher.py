@@ -18,11 +18,12 @@ except ImportError:
 
 # Use thefuzz for better token-order-independent fuzzy matching;
 # fall back to SequenceMatcher if not installed.
+from difflib import SequenceMatcher as _SequenceMatcher  # used by the stdlib fallback below
+
 try:
     from thefuzz import fuzz as _fuzz
     _FUZZY_AVAILABLE = True
 except ImportError:
-    from difflib import SequenceMatcher as _SequenceMatcher  # type: ignore
     _FUZZY_AVAILABLE = False
 
 # ═══════════════════════════════════════════════════════════════════
@@ -73,6 +74,17 @@ REJECT_KEYWORDS = [
     # "instrumental" in title but are still vocal-free
     "bgm", "background music", "ringtone", "no vocals",
     "minus one", "backing track", "music only",
+    # Spelling / plural variants. Matching is word-boundary based (\bword\b), so
+    # "instrumental" does NOT match "Instrumentals" and "karaoke" does NOT match
+    # the common misspellings below — each needs its own entry.
+    "instrumentals", "karaokes", "karoke", "kareoke", "karaoké",
+    "off vocal", "off-vocal", "vocals removed", "vocal removed",
+    "without vocals", "without vocal", "no vocal", "vocal free", "vocalless",
+    "sing along", "singalong", "beat only",
+    # Desi-catalog re-recordings that are sold/uploaded as the "same" song
+    "jhankar", "unplugged", "recreated", "recreation", "remake",
+    "female version", "male version", "reprise",
+    "piano version", "flute version", "guitar version", "violin version", "sitar version",
 ]
 
 
@@ -83,16 +95,44 @@ BLACKLISTED_KEYWORDS = [
     'mashup', 'parody',
     # Instrumental detection (pre-score, catches obvious cases before scoring)
     'instrumental', 'bgm', 'ringtone', 'no vocals', 'minus one',
+    'instrumentals', 'karaokes', 'karoke', 'kareoke', 'karaoké',
+    'off vocal', 'vocals removed', 'without vocals', 'vocal free', 'sing along',
 ]
+
+# CHANNEL-NAME rejection. Karaoke / backing-track uploaders very often copy the
+# original artist and song title verbatim (for search reach) and leave "karaoke"
+# out of the VIDEO title entirely — the tell is the CHANNEL name. Title-only
+# filtering can't see that, and the artist gate is *satisfied* by it (the artist
+# name is in the title) while the duration matches within a couple of seconds
+# (it's a re-recording of the same arrangement). Exempted, like the title
+# keywords, when the Spotify title itself asks for the word.
+REJECT_CHANNEL_KEYWORDS = [
+    "karaoke", "karaokes", "instrumental", "instrumentals", "backing track",
+    "backing tracks", "minus one", "sing king", "karafun", "ameritz",
+    "vocal free", "cover", "covers",
+]
+
+# YouTube auto-generates "<Artist> - Topic" channels from the distributor/label's
+# own delivery, so they carry the actual studio release audio — not a
+# re-recording. A modest, capped bonus: it must never rescue a wrong-song match
+# (the title/artist/duration gates still run first).
+TOPIC_CHANNEL_BONUS = 0.10
 
 
 def is_blacklisted(title, original_track_title):  # QUALITY UPGRADE
     """Return True if the candidate title contains a blacklisted keyword
-    that does NOT appear in the original Spotify title."""  # QUALITY UPGRADE
+    that does NOT appear in the original Spotify title.
+
+    Uses word-boundary regex matching (same approach as has_reject_keyword()
+    above) instead of plain substring containment — plain `keyword in title_lower`
+    made 'cover' match inside ordinary words like "Discovery", "Undercover", or
+    "Recovered", silently rejecting legitimate results before scoring ever ran.
+    """  # QUALITY UPGRADE
     title_lower = title.lower()  # QUALITY UPGRADE
     original_lower = original_track_title.lower() if original_track_title else ""  # QUALITY UPGRADE
     for keyword in BLACKLISTED_KEYWORDS:  # QUALITY UPGRADE
-        if keyword in title_lower and keyword not in original_lower:  # QUALITY UPGRADE
+        pattern = r'\b' + re.escape(keyword) + r'\b'
+        if re.search(pattern, title_lower) and not re.search(pattern, original_lower):  # QUALITY UPGRADE
             return True  # QUALITY UPGRADE
     return False  # QUALITY UPGRADE
 
@@ -202,7 +242,7 @@ def clean_title(title: str) -> str:
     return cleaned
 
 
-def has_reject_keyword(title: str, exempt_from: str = "") -> Optional[str]:
+def has_reject_keyword(title: str, exempt_from: str = "", keywords: Optional[List[str]] = None) -> Optional[str]:
     """
     Check if title contains any reject keyword.
     Case-insensitive, word-boundary matching to avoid false positives.
@@ -212,8 +252,9 @@ def has_reject_keyword(title: str, exempt_from: str = "") -> Optional[str]:
     YouTube results that naturally include the same word.
 
     Args:
-        title: YouTube title to check
+        title: YouTube title (or channel name) to check
         exempt_from: Reference text (e.g. Spotify title) whose keywords are allowed
+        keywords: Keyword list to check against (default: REJECT_KEYWORDS)
 
     Returns:
         Matched keyword if found, None otherwise
@@ -224,7 +265,7 @@ def has_reject_keyword(title: str, exempt_from: str = "") -> Optional[str]:
     title_lower = title.lower()
     exempt_lower = exempt_from.lower() if exempt_from else ""
 
-    for keyword in REJECT_KEYWORDS:
+    for keyword in (REJECT_KEYWORDS if keywords is None else keywords):
         pattern = r'\b' + re.escape(keyword) + r'\b'
         if re.search(pattern, title_lower):
             # Skip this keyword if the Spotify title itself contains it
@@ -235,12 +276,53 @@ def has_reject_keyword(title: str, exempt_from: str = "") -> Optional[str]:
     return None
 
 
+_NON_WORD_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def _token_set_ratio_fallback(a: str, b: str) -> float:
+    """
+    Pure-stdlib equivalent of thefuzz.fuzz.token_set_ratio (0.0–1.0).
+
+    Used only when thefuzz isn't installed. The previous fallback was a plain
+    SequenceMatcher ratio over the whole strings, which behaves completely
+    differently: an artist name appearing VERBATIM inside a longer title
+    ("pritam" in "pritam - make some noise for the desi boyz") scored 0.25
+    instead of 1.0, so the artist gate then rejected correct uploads and the
+    pipeline drifted to worse candidates — silently, and only in environments
+    missing the package (e.g. a terminal not using the project .venv).
+    Same algorithm as thefuzz: strip punctuation, split into token sets, and
+    compare the shared tokens against each side's leftovers.
+    """
+    ta = set(_NON_WORD_RE.sub(" ", a).split())
+    tb = set(_NON_WORD_RE.sub(" ", b).split())
+    if not ta or not tb:
+        return 0.0
+    inter = " ".join(sorted(ta & tb))
+    only_a = " ".join(sorted(ta - tb))
+    only_b = " ".join(sorted(tb - ta))
+    combined_a = f"{inter} {only_a}".strip()
+    combined_b = f"{inter} {only_b}".strip()
+
+    def _r(x: str, y: str) -> float:
+        return _SequenceMatcher(None, x, y).ratio() if x and y else 0.0
+
+    return max(_r(inter, combined_a), _r(inter, combined_b), _r(combined_a, combined_b))
+
+
+if not _FUZZY_AVAILABLE:
+    logger.warning(
+        "[strict_matcher] 'thefuzz' is not installed in this Python environment — using a "
+        "built-in token-set fallback. Matching is equivalent but slower; run "
+        "`pip install -r requirements.txt` in the interpreter that launches the app."
+    )
+
+
 def _fuzzy_ratio(a: str, b: str) -> float:
     """
     Return normalized similarity score (0.0–1.0) between two strings.
 
     Uses thefuzz token_set_ratio when available (handles token re-ordering well),
-    otherwise falls back to SequenceMatcher.
+    otherwise a stdlib re-implementation of the same token-set algorithm.
     """
     if not a or not b:
         return 0.0
@@ -250,12 +332,64 @@ def _fuzzy_ratio(a: str, b: str) -> float:
         return 0.0
     if _FUZZY_AVAILABLE:
         return _fuzz.token_set_ratio(a, b) / 100.0
-    return _SequenceMatcher(None, a, b).ratio()
+    return _token_set_ratio_fallback(a, b)
 
 
 def string_similarity(text_a: str, text_b: str) -> float:
     """Backward-compatible alias for _fuzzy_ratio."""
     return _fuzzy_ratio(text_a, text_b)
+
+
+# Version tags that name the same recording in a different wrapper. A NAMED remix
+# ("(Charlotte de Witte Remix)") is deliberately absent: it is a different recording.
+_BENIGN_VERSION_RE = re.compile(
+    r"\s*[\(\[]\s*(?:original(?:\s+(?:mix|version))?|extended(?:\s+(?:mix|version))?"
+    r"|radio\s+(?:edit|mix|version)|club\s+(?:mix|edit)|album\s+version|single\s+version"
+    r"|(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?|explicit|clean)\s*[\)\]]"
+    r"|\s+-\s+(?:original\s+mix|extended\s+mix|radio\s+edit|(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?)\s*$",
+    re.IGNORECASE,
+)
+
+
+_BRACKET_GROUP_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
+_DASH_SUFFIX_RE = re.compile(r"\s+-\s+.*$")
+
+
+def base_title(title: str) -> str:
+    """The song's core name: cleaned, with any (...) / [...] group and a trailing ' - suffix'
+    removed — 'Chhote Chhote Peg (From "Yaariyan")' -> 'chhote chhote peg'."""
+    t = _DASH_SUFFIX_RE.sub("", _BRACKET_GROUP_RE.sub("", clean_title(title)))
+    return " ".join(re.sub(r"[()\[\]]", "", t).split())
+
+
+def same_song_title(a: str, b: str, threshold: float = 0.85) -> bool:
+    """
+    True when two titles name the same song once edition tags are ignored. Deliberately strict
+    about the CORE name: 'Aura' is not 'Aura of Ustaad', 'WOH' is not 'Woh Ladki Jo - Sped Up'.
+    A false 'different' just leaves a track unidentified; a false 'same' would trust the wrong
+    metadata, so the bias is towards 'different'.
+    """
+    ba, bb = base_title(a), base_title(b)
+    if not ba or not bb:
+        return False
+    return _SequenceMatcher(None, ba, bb).ratio() >= threshold
+
+
+def title_similarity(a: str, b: str) -> float:
+    """
+    Order-sensitive 0.0–1.0 similarity of two song titles after clean_title(), ignoring
+    benign version tags ("(Original Mix)", "(Radio Edit)", "- Remastered 2011").
+
+    Use this — not _fuzzy_ratio — to decide whether two titles name the SAME song.
+    token_set_ratio scores 1.0 whenever one title's words are a subset of the other's
+    ("Takes" vs "Takes Me Home"), which is right for a search-relevance gate but wrong
+    for identity: an external database hit for the wrong song would be accepted.
+    """
+    ca = _BENIGN_VERSION_RE.sub("", clean_title(a)).strip()
+    cb = _BENIGN_VERSION_RE.sub("", clean_title(b)).strip()
+    if not ca or not cb:
+        return 0.0
+    return _SequenceMatcher(None, ca, cb).ratio()
 
 
 def duration_score(actual_sec: Optional[int], expected_sec: Optional[int]) -> float:
@@ -266,7 +400,13 @@ def duration_score(actual_sec: Optional[int], expected_sec: Optional[int]) -> fl
     Heavy -50 penalty applied when diff > 2 s (via score_candidate).
     """
     if not actual_sec or not expected_sec:
-        return 0.5  # Unknown duration — neutral
+        # Unknown duration (e.g. SoundCloud scsearch candidates under
+        # extract_flat=True never report a length) — we have no data to hard-reject
+        # on, but also must not treat "unknown" as equivalent to a verified match.
+        # 0.3 sits below the "acceptable" tier (0.5, diff<=10s) so an unverified
+        # candidate always scores worse than one with a confirmed correct duration,
+        # while still being eligible to pass if title/artist signals are strong.
+        return 0.3
 
     diff = abs(actual_sec - expected_sec)
 
@@ -353,6 +493,22 @@ def score_candidate(
         log_rejection(f"forbidden keyword '{rejected_keyword}'", yt_title)
         return 0.0, rejections
 
+    # ── STEP 2a: Channel-name filter ──
+    # Karaoke/backing-track uploaders usually copy the artist + song title
+    # verbatim and put "karaoke" only in the CHANNEL name, so the title filter
+    # above can't see them (and the artist/duration gates below would pass them).
+    if uploader:
+        rejected_channel_kw = has_reject_keyword(
+            uploader, exempt_from=sp_lower, keywords=REJECT_CHANNEL_KEYWORDS,
+        )
+        if rejected_channel_kw:
+            rejections.append(
+                f"Uploader channel '{uploader}' looks like a karaoke/instrumental/cover "
+                f"channel (keyword: {rejected_channel_kw})"
+            )
+            log_rejection(f"channel keyword '{rejected_channel_kw}' ({uploader})", yt_title)
+            return 0.0, rejections
+
     # ── STEP 2b: Version/edition mismatch gate ──
     # Catches remix/VIP/edit/extended/radio/bootleg/rework/live/acoustic
     # candidates that REJECT_KEYWORDS doesn't cover (see VERSION_TOKENS).
@@ -367,6 +523,11 @@ def score_candidate(
         return 0.0, rejections
 
     # ── STEP 10 (early): Hard duration ceiling ──
+    # Intentionally skipped when actual_duration_sec is unknown (no data to hard-reject
+    # against) — this is NOT an outright pass though: duration_score() below still
+    # applies a reduced-confidence penalty (0.3, below the 0.5 "acceptable" tier) to the
+    # weighted final score for unknown-duration candidates, so a wildly wrong-length
+    # result still needs a strong title+artist match to clear min_score.
     if expected_duration_sec and actual_duration_sec:
         if not final_duration_check(actual_duration_sec, expected_duration_sec):
             diff = abs(actual_duration_sec - expected_duration_sec)
@@ -459,6 +620,8 @@ def score_candidate(
         official_bonus += 0.05  # official channel name
     if 'vevo' in uploader_lower:
         official_bonus += 0.10  # VEVO verified partner
+    if uploader_lower.endswith(" - topic"):
+        official_bonus += TOPIC_CHANNEL_BONUS  # auto-generated label-delivered studio audio
 
     # ── STEP 5: Weighted final score ──
     final = (0.5 * title_score) + (0.3 * artist_score) + (0.2 * dur_score) + official_bonus + verified_bonus

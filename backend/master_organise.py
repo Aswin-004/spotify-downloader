@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import config
+from services.organizer_service import _move_lock
 
 BASE  = Path(config.BASE_DOWNLOAD_DIR)
 LIB   = BASE / "Library"
@@ -45,6 +46,17 @@ def _collision_safe(dest_dir: Path, name: str) -> Path:
 
 
 def mv(src: Path, dest_dir: Path, note: str = "") -> None:
+    """
+    Move src into dest_dir, tracking global moved/skipped/errors counters.
+
+    The "pick a collision-safe name" + actual move is serialized under the
+    shared organizer_service._move_lock so no other mover in this process
+    can claim the same destination name in between (closes a check-then-act
+    overwrite race). Any failure (locked file, disk full, DB error, a
+    genuine name collision that slips through) is caught here so one bad
+    file doesn't abort the whole multi-step reorg — it's counted in
+    `errors` and the run continues with the next file.
+    """
     global moved, skipped, errors
     if not src.is_file():
         errors += 1
@@ -52,27 +64,39 @@ def mv(src: Path, dest_dir: Path, note: str = "") -> None:
     if src.parent.resolve() == dest_dir.resolve():
         skipped += 1
         return
-    dest = _collision_safe(dest_dir, src.name)
-    tag  = "WOULD" if DRY else "MOVE"
+
     try:
         rel_src  = src.relative_to(BASE)
         rel_dest = dest_dir.relative_to(BASE)
     except ValueError:
         rel_src  = src
         rel_dest = dest_dir
-    print(f"  [{tag}] {str(rel_src):75s} → {rel_dest}{note}")
-    if not DRY:
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dest))
+
+    if DRY:
+        # Preview only — nothing is written, so an unlocked name pick is
+        # fine here; it's purely informational.
+        print(f"  [WOULD] {str(rel_src):75s} → {rel_dest}{note}")
+        moved += 1
+        return
+
+    try:
+        with _move_lock:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = _collision_safe(dest_dir, src.name)
+            shutil.move(str(src), str(dest))
+        print(f"  [MOVE] {str(rel_src):75s} → {rel_dest}{note}")
         _update_mongo(src, dest)
-    moved += 1
+        moved += 1
+    except Exception as e:
+        errors += 1
+        print(f"  [ERROR] {str(rel_src):75s} : {e}")
 
 
 def _update_mongo(old: Path, new: Path) -> None:
     try:
         from database import get_library_index_collection
         col = get_library_index_collection()
-        col.update_one(
+        result = col.update_one(
             {"final_path": str(old)},
             {"$set": {
                 "final_path":   str(new),
@@ -80,6 +104,8 @@ def _update_mongo(old: Path, new: Path) -> None:
                 "last_seen":    datetime.now(timezone.utc),
             }},
         )
+        if result.matched_count == 0:
+            print(f"    [mongo-warn] 0 documents matched final_path={str(old)!r} — genre_folder not updated")
     except Exception as e:
         print(f"    [mongo-warn] {e}")
 

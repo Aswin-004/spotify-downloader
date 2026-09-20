@@ -5,7 +5,6 @@ File browsing, artwork, audio preview, track tag editing, duplicate management,
 library organisation, and Rekordbox export.
 """
 import os
-import shutil
 from pathlib import Path
 from flask import Blueprint, jsonify, request, send_from_directory, Response
 
@@ -232,8 +231,13 @@ def update_track_bpm():
             if p.is_file():
                 candidate = p
             else:
-                found = list(Path(BASE_DOWNLOAD_DIR).rglob(filename))
-                candidate = found[0] if found else p
+                # Match the literal filename, not a glob pattern — track
+                # titles can legitimately contain "[", "]", "*", "?".
+                found = next(
+                    (f for f in Path(BASE_DOWNLOAD_DIR).rglob("*.mp3") if f.name == filename),
+                    None,
+                )
+                candidate = found if found else p
         target = candidate
 
     try:
@@ -247,14 +251,40 @@ def update_track_bpm():
         return jsonify({"error": "File not found"}), 404
 
     try:
-        from bpm_key_service import write_bpm_key_to_tags, persist_audio_features
+        from bpm_key_service import (
+            write_bpm_key_to_tags,
+            persist_audio_features,
+            resolve_identity_key,
+        )
         write_bpm_key_to_tags(str(resolved), bpm, key_str)
-        persist_audio_features(
-            resolved.stem,
+
+        # identity_key is "sp:<spotify_id>", never a filename stem — passing
+        # resolved.stem meant persist_audio_features() never matched a
+        # document and returned False, so the correction reached the ID3 tags
+        # but silently never reached MongoDB.  Resolve the real document, and
+        # report the outcome instead of always claiming success.
+        identity_key = resolve_identity_key(
+            final_path=str(resolved), filename=resolved.name
+        )
+        persisted = bool(identity_key) and persist_audio_features(
+            identity_key,
             {"bpm": bpm, "key": key_str, "analyzed": True, "manual": True},
         )
-        logger.info(f"[bpm-update] {resolved.name} → {bpm} BPM · {key_str or 'key unchanged'}")
-        return jsonify({"ok": True, "bpm": bpm, "key": key_str, "filename": resolved.name}), 200
+        if not persisted:
+            logger.warning(
+                f"[bpm-update] {resolved.name} → ID3 tags written but NOT persisted to "
+                f"library_index (identity_key={identity_key or 'unresolved'})"
+            )
+        else:
+            logger.info(f"[bpm-update] {resolved.name} → {bpm} BPM · {key_str or 'key unchanged'}")
+        return jsonify({
+            "ok": True,
+            "bpm": bpm,
+            "key": key_str,
+            "filename": resolved.name,
+            "persisted": persisted,
+            "identity_key": identity_key or None,
+        }), 200
     except Exception as e:
         logger.error(f"[bpm-update] Failed for {filename}: {e}")
         return jsonify({"error": str(e)}), 500
@@ -349,10 +379,8 @@ def move_and_remember():
         src = Path(full_path)
         if not src.exists():
             return jsonify({"error": f"File not found: {filepath}"}), 404
-        dest_dir = Path(BASE_DOWNLOAD_DIR) / genre_path
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / src.name
-        shutil.move(str(src), str(dest))
+        from services.organizer_service import safe_move
+        dest = safe_move(src, Path(BASE_DOWNLOAD_DIR) / genre_path, artist_name=artist)
         try:
             from database import get_library_index_collection
             col = get_library_index_collection()
@@ -393,11 +421,14 @@ def library_organize():
 
 @library_bp.route("/api/library/organize-recent", methods=["POST"])
 def library_organize_recent():
-    data  = request.get_json(silent=True) or {}
-    mode  = data.get("mode", "artist")
-    hours = int(data.get("hours", 24))
+    data = request.get_json(silent=True) or {}
+    mode = data.get("mode", "artist")
     if mode not in ("artist", "genre", "artist_genre"):
         return jsonify({"success": False, "error": f"Invalid mode: {mode}"}), 400
+    try:
+        hours = int(data.get("hours", 24))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "hours must be a number"}), 400
     try:
         from services.organizer_service import organize_recent
         result = organize_recent(mode=mode, hours=hours)
@@ -464,14 +495,12 @@ def keep_duplicate():
         return jsonify({"error": "File not found"}), 404
 
     from services.genre_router import normalize_genre, _library_path
+    from services.organizer_service import safe_move
     canonical = normalize_genre(genre)
     lib_path  = _library_path(canonical) if canonical else f"Library/{genre}"
-    dest_dir  = Path(BASE_DOWNLOAD_DIR) / lib_path
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / src.name
-    shutil.move(str(src), str(dest))
+    dest = safe_move(src, Path(BASE_DOWNLOAD_DIR) / lib_path)
     logger.info(f"[duplicates] Kept: {filename} → {lib_path}")
-    return jsonify({"moved": True, "filename": filename, "destination": lib_path}), 200
+    return jsonify({"moved": True, "filename": dest.name, "destination": lib_path}), 200
 
 
 # ── Rekordbox export ──────────────────────────────────────────────────────────

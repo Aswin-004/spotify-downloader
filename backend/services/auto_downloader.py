@@ -576,6 +576,16 @@ def _process_index_queue():
             mf.write_text(json.dumps(data, indent=2))
 
 
+def _requeue_done(track_id, title, artist, why):
+    """Drop a track from the requeue list once its re-download is finished (or moot)."""
+    try:
+        from services.requeue_service import remove_from_requeue, key_for_track
+        if remove_from_requeue(key_for_track(track_id, title, artist)):
+            logger.info(f"[requeue] done ({why}): {title} - {artist}")
+    except Exception as exc:
+        logger.debug(f"[requeue] could not update the queue for {title!r}: {exc}")
+
+
 def ingest_download(download_dir=None, force_folder=None, force_redownload=False):
     """Download new tracks from the ingest playlist with parallel workers.
 
@@ -650,6 +660,16 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     skipped_permanent = pre_filter - len(new_tracks)  # PERMANENT SKIP
     if skipped_permanent > 0:  # PERMANENT SKIP
         logger.info(f"[ingest] {skipped_permanent} track(s) permanently skipped (>{MAX_FAIL_ATTEMPTS} failures)")  # PERMANENT SKIP
+
+    # REQUEUE — tracks queued for a fresh download (e.g. a wrong karaoke/instrumental
+    # version was removed from the library). They bypass the ingest-history filter above
+    # and are picked up even when they are not in the ingest playlist at all.
+    # See services/requeue_service.py.
+    try:
+        from services.requeue_service import merge_requeued_tracks
+        new_tracks = merge_requeued_tracks(new_tracks, sp_service, failure_counts, MAX_FAIL_ATTEMPTS)
+    except Exception as _rq_merge_err:
+        logger.warning(f"[ingest] Requeue merge failed (continuing without it): {_rq_merge_err}")
 
     # Update status with playlist totals
     current_ids = {t["id"] for t in tracks}
@@ -759,6 +779,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     logger.debug(f"[ingest] Skipping (exists/in-progress): {title} - {artist}")
                     _emit("download_skipped", {"title": title, "artist": artist, "reason": "Already downloaded or in progress", "source": "ingest"})
                     saved_ids.add(tid)
+                    _requeue_done(tid, title, artist, "a file with this identity already exists in the library")
                     return
                 _in_progress_registry.add(track_key)  # reserve the slot — no other worker can claim it
                 _reserved = True
@@ -803,6 +824,8 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     output_filename=filename,
                     duration_ms=track_info.get("duration_ms"),
                     album_art_url=track_info.get("album_art_url"),
+                    spotify_track_id=track_info.get("id", ""),
+                    spotify_release_date=track_info.get("release_date", ""),
                 )
 
             if result["status"] == "success":
@@ -824,6 +847,12 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
 
                 _is_catchall = False  # set True when routed to Electronic as fallback
                 genre_confidence = 0.0  # default; overwritten by routing branches below
+                genre_source = "unclassified"  # default; overwritten by routing branches below.
+                # Needed because the MB-genre-unmapped branch (mb_genre set, map_genre_string()
+                # returns falsy, Gemini fallback also fails) sets _is_catchall=True without ever
+                # assigning genre_source — leaving it unset raised UnboundLocalError in the
+                # download_needs_review emit below, which the outer except Exception caught and
+                # mislabeled a fully-downloaded/tagged/moved track as FAILED.
                 if force_folder:
                     # Manual override always wins — flat, no artist subfolder
                     final_folder = os.path.join(target_base, force_folder)
@@ -999,8 +1028,13 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     _downloaded_registry.add(track_key)
                 success_count[0] += 1
                 saved_ids.add(tid)
+                _requeue_done(tid, title, artist, "downloaded")
                 logger.info(f"[ingest] Downloaded: {result['filename']}")
                 # LIBRARY INDEX — register in MongoDB for persistent O(1) dedup
+                _genre_folder = ""  # default; overwritten below on success. Must be set BEFORE
+                # the try so _routing_label / the download_complete emit further down never hit
+                # an UnboundLocalError if relative_to() raises (final_folder not under
+                # BASE_DOWNLOAD_DIR) and the except branch below runs instead.
                 try:
                     from database import index_track as _idx
                     from services.dedup_service import content_hash as _ch

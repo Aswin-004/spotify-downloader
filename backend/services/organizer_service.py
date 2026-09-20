@@ -28,6 +28,7 @@ into a short human sentence for display in the Telegram bot and web UI.
 import hashlib
 import os
 import shutil
+import threading
 import time
 import re
 from pathlib import Path
@@ -41,6 +42,21 @@ from config import config
 BASE_DOWNLOAD_DIR = Path(config.BASE_DOWNLOAD_DIR)
 
 UNSAFE_CHARS = r'<>:"/\|?*'
+
+# Windows reserved device names — invalid as a file/folder name (with or
+# without an extension), regardless of case.
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+# Serializes "pick a free destination name, then move" across every caller in
+# this process (download pipeline threads, the hourly maintenance-worker
+# thread, and manual reclassification tools all touch the same library
+# concurrently). Without this, two racers can both see a name as free and one
+# silently clobbers the other on the actual move.
+_move_lock = threading.Lock()
 
 # ── Phase 4: mix-variant detection ───────────────────────────────────────────
 
@@ -143,6 +159,36 @@ def _collision_safe_name(
     return dest_dir / f"{stem} - {h}{ext}"
 
 
+def safe_move(
+    src: "str | Path",
+    dest_dir: "str | Path",
+    filename: Optional[str] = None,
+    artist_name: str = "",
+    spotify_id: str = "",
+) -> Path:
+    """
+    Move ``src`` into ``dest_dir`` without ever clobbering an existing file.
+
+    Picks a collision-safe destination name via :func:`_collision_safe_name`
+    (artist suffix -> spotify_id suffix -> hash) and performs the move while
+    holding a process-wide lock, so two concurrent callers can't both resolve
+    the same "free" name and have one overwrite the other. Returns the actual
+    destination path used (may differ from ``filename`` if a collision was
+    resolved) — callers should use the return value for any follow-up DB/tag
+    updates rather than assuming the original name.
+    """
+    src = Path(src)
+    dest_dir = Path(dest_dir)
+    name = filename or src.name
+    with _move_lock:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = _collision_safe_name(dest_dir, name, artist_name, spotify_id)
+        shutil.move(str(src), str(dest))
+    if dest.name != name:
+        logger.info(f"[organizer] Collision resolved on move: {name} → {dest.name}")
+    return dest
+
+
 # ── Folder name sanitisation ──────────────────────────────────────────────────
 
 def clean_folder_name(name: str) -> str:
@@ -157,7 +203,17 @@ def clean_folder_name(name: str) -> str:
     name = name.strip().strip("_")
     while "  " in name:
         name = name.replace("  ", " ")
-    return name or "Unknown"
+    # Windows silently strips trailing dots/spaces at creation time, which can
+    # collapse two visually-different names into the same folder.
+    name = name.rstrip(" .")
+    if not name:
+        return "Unknown"
+    # Windows reserved device names are invalid as a folder name even with
+    # a suffix like ".mp3" attached — mkdir() fails outright.
+    base = name.split(".")[0].upper()
+    if name.upper() in _WINDOWS_RESERVED_NAMES or base in _WINDOWS_RESERVED_NAMES:
+        name = f"{name}_"
+    return name
 
 
 # ── Destination path resolution ───────────────────────────────────────────────
@@ -345,12 +401,13 @@ def _run_organize(mode: str, since_hours: Optional[float]) -> dict:
                 except ValueError:
                     pass
 
-                _, dest_path, _ = resolve_destination_path(
-                    fname, folder_structure,
-                    group_remix_families=True,
-                    artist_name=artist,
-                )
-                shutil.move(str(src), dest_path)
+                with _move_lock:
+                    _, dest_path, _ = resolve_destination_path(
+                        fname, folder_structure,
+                        group_remix_families=True,
+                        artist_name=artist,
+                    )
+                    shutil.move(str(src), dest_path)
                 logger.info(f"[organizer] {fname} → {dest_path}")
                 moved += 1
             except Exception as e:

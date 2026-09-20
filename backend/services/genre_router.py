@@ -240,6 +240,15 @@ _genre_cache: dict      = {}
 _confidence_cache: dict = {}
 _source_cache: dict     = {}
 
+# Flips to False the first time Spotify returns an artist object WITHOUT a
+# "genres" key (see step 5 of _resolve_core). Per-process; resets on restart.
+_spotify_genres_available: bool = True
+
+
+def spotify_genres_available() -> bool:
+    """False once Spotify has been observed to no longer return artist genres."""
+    return _spotify_genres_available
+
 # Sorted SPOTIFY_GENRE_MAP keys — computed once, invalidated by clear_genre_cache().
 # All callers use this so longest-key-wins is identical on every code path.
 _sorted_map_keys: list  = []
@@ -323,15 +332,23 @@ def _resolve_core(
     """
     clean_artist = clean_folder_name(artist_name)
 
-    # 1. Cache hit
-    if artist_id and artist_id in _genre_cache:
-        cached = _genre_cache[artist_id]
-        conf   = _confidence_cache.get(artist_id, CONFIDENCE_SPOTIFY_MAP)
-        source = _source_cache.get(artist_id, "cache")
-        logger.debug(f"[genre_router] cache hit: {artist_name} → {cached} ({conf:.2f})")
-        return cached, conf, source, ""
+    # NOTE ON ORDERING: the in-memory cache (below, was previously step 1 here)
+    # was moved to run AFTER artist-name override, custom folder mapping, and
+    # artist memory. Those three sources can be updated at runtime (a user adds
+    # a custom folder mapping on the Settings page, or record_move() learns a
+    # correction from a manual NeedsReview move) but record_move() only knows
+    # the artist DISPLAY NAME, not the Spotify artist_id the cache is keyed by
+    # — so there's no cheap way to invalidate just the affected cache entry
+    # from record_move()/the mapping-update route. Running these three checks
+    # fresh on every call instead (they're cheap: one Mongo query + one dict
+    # lookup) guarantees a stored correction always takes priority over a
+    # stale cached result, without needing artist_id-aware invalidation
+    # plumbing. The cache is still consulted below, just later — it now only
+    # short-circuits the expensive step-4 Spotify API fetch (and the static,
+    # never-corrected knowledge_base lookup), which is what it was actually
+    # protecting against in the first place.
 
-    # 2. Artist-name override (config) — highest confidence
+    # 1. Artist-name override (config) — highest confidence
     override_folder = _get_artist_override(artist_name)
     if override_folder:
         lib = _library_path(override_folder)
@@ -343,7 +360,7 @@ def _resolve_core(
         logger.info(f"[genre_router] {artist_name} → {result} (artist override, conf=1.0)")
         return result, CONFIDENCE_ARTIST_OVERRIDE, "artist_override", artist_name
 
-    # 2.5. User-defined custom folder mapping (Settings page)
+    # 2. User-defined custom folder mapping (Settings page)
     # Match folder_name against the artist name so tracks by a specific artist
     # (e.g. "Sammy Virji") route to the right folder; genre_label is the target folder.
     try:
@@ -381,7 +398,18 @@ def _resolve_core(
     except Exception:
         pass  # memory service unavailable — continue
 
-    # 3.5 Artist Knowledge Base — static profiles with aliases + multilingual names
+    # 4. Cache hit — checked AFTER override/custom-mapping/artist-memory above
+    # (see the ordering note near the top of this function) so a correction to
+    # any of those three always takes effect immediately instead of only after
+    # process restart / a manual /api/clear-genre-cache call.
+    if artist_id and artist_id in _genre_cache:
+        cached = _genre_cache[artist_id]
+        conf   = _confidence_cache.get(artist_id, CONFIDENCE_SPOTIFY_MAP)
+        source = _source_cache.get(artist_id, "cache")
+        logger.debug(f"[genre_router] cache hit: {artist_name} → {cached} ({conf:.2f})")
+        return cached, conf, source, ""
+
+    # 4.5 Artist Knowledge Base — static profiles with aliases + multilingual names
     try:
         from services.artist_knowledge_service import lookup_artist_knowledge
         kb_hit = lookup_artist_knowledge(artist_name)
@@ -407,10 +435,32 @@ def _resolve_core(
         logger.info(f"[genre_router] {artist_name} → {result} (no artist_id)")
         return result, CONFIDENCE_UNCATEGORIZED, "uncategorized", ""
 
-    # 4. Spotify API fetch
+    # 5. Spotify API fetch
+    #
+    # Spotify's artist objects no longer carry a `genres` field for this app's
+    # credentials (verified 2026-09-19: the response only has external_urls,
+    # href, id, images, name, type, uri). The old code did `.get("genres", [])`,
+    # so this tier failed SILENTLY — every artist not covered by an override /
+    # memory / knowledge-base entry fell straight to NeedsReview or an AI guess,
+    # and each artist still cost one wasted API call (a big part of what pushed
+    # the batch reclassify runs into Spotify's 429 rate limit). Distinguish
+    # "field absent" (API removed it: stop calling, say so once) from "field
+    # present but empty" (a genuinely untagged artist: keep asking).
+    global _spotify_genres_available
     try:
-        artist_obj = sp.artist(artist_id)
-        genres     = artist_obj.get("genres", []) or []
+        if not _spotify_genres_available:
+            genres = []
+        else:
+            artist_obj = sp.artist(artist_id)
+            if "genres" not in artist_obj:
+                _spotify_genres_available = False
+                logger.warning(
+                    "[genre_router] Spotify no longer returns artist 'genres' for this app — "
+                    "the Spotify-genre routing tier is disabled for this process. Artists outside "
+                    "ARTIST_GENRE_OVERRIDE / artist memory / knowledge base now rely on "
+                    "Last.fm, MusicBrainz and the AI step."
+                )
+            genres = artist_obj.get("genres", []) or []
     except Exception as e:
         result = f"{NEEDS_REVIEW_DIR}/{clean_artist}"
         logger.warning(
@@ -422,7 +472,7 @@ def _resolve_core(
         _source_cache[artist_id]     = "uncategorized"
         return result, CONFIDENCE_UNCATEGORIZED, "uncategorized", ""
 
-    # 5. Match against SPOTIFY_GENRE_MAP
+    # 6. Match against SPOTIFY_GENRE_MAP
     flat_genre  = _match_genre(genres)
     matched_tag = ""
     confidence  = CONFIDENCE_UNCATEGORIZED
@@ -440,7 +490,7 @@ def _resolve_core(
             if matched_tag:
                 break
 
-    # 6. Devanagari heuristic — low confidence, not a genre signal
+    # 7. Devanagari heuristic — low confidence, not a genre signal
     if not flat_genre and _matches_devanagari(artist_name):
         flat_genre  = "Indian"
         matched_tag = "devanagari-artist-name"
@@ -448,7 +498,7 @@ def _resolve_core(
         source      = "devanagari"
         logger.debug(f"[genre_router] {artist_name} → Indian (Devanagari script heuristic, conf={CONFIDENCE_DEVANAGARI})")
 
-    # 7. Raw first Spotify genre tag — moderate confidence
+    # 8. Raw first Spotify genre tag — moderate confidence
     if not flat_genre:
         if genres:
             raw        = genres[0].title()
@@ -461,7 +511,7 @@ def _resolve_core(
             confidence  = CONFIDENCE_RAW_SPOTIFY
             source      = "raw_spotify"
 
-    # 8. Phase 3: Route low-confidence to NeedsReview — NEVER Uncategorized
+    # 9. Phase 3: Route low-confidence to NeedsReview — NEVER Uncategorized
     if not flat_genre or confidence < CONFIDENCE_THRESHOLD:
         result = f"{NEEDS_REVIEW_DIR}/{clean_artist}"
         _genre_cache[artist_id]      = result
@@ -469,7 +519,7 @@ def _resolve_core(
         _source_cache[artist_id]     = source
         return result, confidence, source, matched_tag
 
-    # 9. Build Library/ path (flat — no artist subfolder)
+    # 10. Build Library/ path (flat — no artist subfolder)
     lib    = _library_path(flat_genre)
     result = lib
     _genre_cache[artist_id]      = result

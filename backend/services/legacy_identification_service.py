@@ -109,6 +109,27 @@ def _get_remix_flags(text: str) -> frozenset:
     return frozenset(m.group(1).lower() for m in _WORD_RE.finditer(text)) & _REMIX_TOKEN_SET
 
 
+# PHASE 1G — filename-convention edition-credit detection (see
+# docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md §4a / §15 item 2).
+# _REMIX_TOKEN_SET above was built for stripping tokens out of titles during
+# fuzzy-search normalization, so it only matches exact base forms ("mix",
+# not "mixed"). Filenames carry inflected/compound edition credits that
+# don't appear in titles the same way (e.g. "Alone - Mixed.mp3"), so the
+# filename-parsing check below extends the set with the specific inflected
+# forms observed in this library rather than adding general stemming (which
+# would risk new false positives on real song titles).
+_EDITION_CREDIT_TOKENS = _REMIX_TOKEN_SET | frozenset({"mixed", "remixed", "edited", "live", "acoustic"})
+
+
+def _is_edition_phrase(text: str) -> bool:
+    """True if *text* carries at least one edition/version/remix-credit
+    token — i.e. it reads as a credit ("Sammy Virji Remix", "Radio Edit",
+    "Mixed"), not a song or artist name."""
+    if not text:
+        return False
+    return bool(frozenset(m.group(1).lower() for m in _WORD_RE.finditer(text)) & _EDITION_CREDIT_TOKENS)
+
+
 def normalize_for_search(text: str, strip_remix: bool = True) -> str:
     """Normalize a title/artist string for fuzzy comparison and Spotify search."""
     if not text:
@@ -243,19 +264,104 @@ def _read_id3_metadata(filepath: Path) -> tuple[str, str, str, int]:
         return "", "", "", 0
 
 
-def _parse_filename(filepath: Path) -> tuple[str, str]:
+@dataclass
+class ParsedFilename:
+    """Result of _parse_filename(). See that function's docstring for the
+    convention-detection rules. `edition` is non-empty only when a version/
+    remix/edit credit was detected and separated out of the title. When
+    `confident` is False, `artist`/`title`/`edition` are all "" — the
+    convention could not be determined safely and callers must not guess
+    (PHASE 1G task spec: "DO NOT GUESS. Return an uncertain result")."""
+    artist: str
+    title: str
+    edition: str
+    confident: bool
+
+
+def _parse_filename(filepath: Path) -> ParsedFilename:
     """
-    Parse artist / title from filename.
+    Parse artist / title / edition-credit from filename.
 
     Patterns:
-      "Artist - Song (Remix).mp3"  → ("Artist", "Song (Remix)")
-      "Song.mp3"                   → (parent_folder_name, "Song")
+      "Artist - Song.mp3"          → artist="Artist", title="Song"
+      "Song - Radio Edit.mp3"      → title="Song", edition="Radio Edit" (artist unknown)
+      "Song - Hamdi Remix.mp3"     → title="Song", edition="Hamdi Remix" (artist unknown)
+      "Song.mp3"                   → artist=parent_folder_name, title="Song"
+
+    PHASE 1G fix (docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md §4a): the
+    previous version of this function unconditionally treated the text
+    before " - " as the artist and the text after as the title, which is
+    backwards for the "Song - EditionCredit" convention used throughout
+    this library (e.g. "Goodums - Sammy Virji Remix.mp3") — it put a
+    generic remix/edit credit into the title field and the real song name
+    into the artist field, and a downstream Spotify search on that
+    corrupted, generic title is what caused unrelated songs to collide on
+    one Spotify ID (Phase 1F root cause).
+
+    This version detects which side of " - " reads as an edition/version
+    credit (via _is_edition_phrase(), reusing the existing remix/version
+    token sets) and only treats the other side as the title. When BOTH
+    sides look like credits (neither reads like a real title), or the
+    edition credit appears to precede rather than follow the title (an
+    unexpected/unsupported ordering), the convention cannot be determined
+    safely — returns confident=False rather than guessing.
     """
     stem = filepath.stem
     if " - " in stem:
-        parts = stem.split(" - ", 1)
-        return parts[0].strip(), parts[1].strip()
-    return filepath.parent.name, stem
+        first, second = (p.strip() for p in stem.split(" - ", 1))
+        first_is_edition = _is_edition_phrase(first)
+        second_is_edition = _is_edition_phrase(second)
+
+        if first_is_edition or second_is_edition:
+            if first_is_edition and second_is_edition:
+                # Neither side reads like a real title/artist.
+                return ParsedFilename(artist="", title="", edition="", confident=False)
+            if second_is_edition:
+                # "Song - EditionCredit" — the only ordering observed in
+                # this library's actual corruption cases (Phase 1F §2).
+                return ParsedFilename(artist="", title=first, edition=second, confident=True)
+            # first_is_edition and not second_is_edition: edition-first is
+            # an unexpected/unsupported ordering — don't guess which side
+            # is the real title.
+            return ParsedFilename(artist="", title="", edition="", confident=False)
+
+        # Neither side carries an edition/version signal — default to the
+        # conventional "Artist - Song" reading (unchanged prior behavior).
+        return ParsedFilename(artist=first, title=second, edition="", confident=True)
+
+    # "Song.mp3": the parent folder is only an artist hint when it really IS an artist folder. In a
+    # genre-organised library it is "Indian" / "Electronic" / "Unknown" / "Ingest" ... — using that as
+    # the artist (the previous, unconditional behaviour) wrote artist="Indian" into hundreds of files
+    # and made the Spotify search look for `artist:Indian`, which returned unrelated tracks with
+    # "Indian" in the artist name (measured: 25% of those files carry a Spotify id for a DIFFERENT
+    # song). Title known, artist unknown is the honest answer.
+    if _folder_is_not_an_artist(filepath.parent.name):
+        return ParsedFilename(artist="", title=stem, edition="", confident=True)
+    return ParsedFilename(artist=filepath.parent.name, title=stem, edition="", confident=True)
+
+
+# Folder names that hold music but are never an artist's name.
+_CONTAINER_FOLDER_NAMES = frozenset({
+    "unknown", "uncategorized", "uncategorised", "ingest", "library", "downloads", "download", "music",
+    "unsorted", "misc", "miscellaneous", "various", "various artists", "new", "inbox", "needsreview",
+    "needs review", "dj music", "songs", "tracks", "mp3", "audio", "quarantine", "duplicates",
+})
+
+
+def _folder_is_not_an_artist(name: str) -> bool:
+    """True for a genre crate ('Indian', 'Electronic', 'Hip Hop', 'Drum & Bass', ...) or a container
+    folder ('Unknown', 'Ingest', 'Uncategorized', ...): its name says nothing about WHO made the track."""
+    n = " ".join((name or "").lower().split())
+    if not n or n in _CONTAINER_FOLDER_NAMES:
+        return True
+    try:
+        from services.artist_recovery import is_placeholder_artist
+        if is_placeholder_artist(n):                       # the shared list of genre words / 'unknown' / ...
+            return True
+    except Exception:
+        pass
+    words = set(re.findall(r"[a-z]+", n))
+    return bool(words) and words <= _FOLDER_GENRE_KW
 
 
 # ── Spotify search ────────────────────────────────────────────────────────────
@@ -531,7 +637,8 @@ def infer_parent_folder_context(folder: Path) -> dict:
         ctx.update({
             "folder_type": "album",
             "album_hint":  name,
-            "artist_hint": grandparent_name,
+            # a genre crate / container folder above an album is not the artist
+            "artist_hint": "" if _folder_is_not_an_artist(grandparent_name) else grandparent_name,
             "confidence":  0.70,
         })
         return ctx
@@ -554,8 +661,9 @@ def infer_parent_folder_context(folder: Path) -> dict:
                 })
                 return ctx
 
-    # ── 7. Fallback: treat any non-empty folder name as loose artist hint ────────
-    if name:
+    # ── 7. Fallback: treat a folder name as a loose artist hint — unless it is a container or a
+    #        genre crate ("Unknown", "Ingest", "Pop", "Hip Hop"...), which names no artist.
+    if name and not _folder_is_not_an_artist(name):
         ctx.update({
             "folder_type": "artist",
             "artist_hint": name,
@@ -631,6 +739,17 @@ def identify_file(filepath: str | Path) -> LegacyIdentificationResult:
     """
     filepath = Path(filepath)
 
+    def _unidentified(reason: str, artist: str = "", title: str = "",
+                       norm_artist: str = "", norm_title: str = "") -> LegacyIdentificationResult:
+        return LegacyIdentificationResult(
+            filepath=str(filepath), matched=False, spotify_id="",
+            artist=artist, title=title, confidence=0.0,
+            confidence_reason=reason, match_source="unidentified",
+            duration_delta_sec=0.0, normalized_artist=norm_artist,
+            normalized_title=norm_title, reroute_recommended=False,
+            target_genre_family="", target_subgenre="",
+        )
+
     # Step 0: Folder context
     folder_ctx = infer_parent_folder_context(filepath.parent)
 
@@ -639,7 +758,18 @@ def identify_file(filepath: str | Path) -> LegacyIdentificationResult:
 
     # Step 2: Filename fallback
     if not id3_title:
-        id3_artist_fb, id3_title = _parse_filename(filepath)
+        parsed = _parse_filename(filepath)
+        if not parsed.confident:
+            # PHASE 1G: the "Song - EditionCredit" vs "Artist - Song"
+            # convention could not be determined safely for this filename —
+            # do not guess (this is exactly the ambiguity that used to
+            # silently corrupt title/artist; see docs/PHASE_1F_...md §4a).
+            return _unidentified(
+                "ambiguous filename convention — cannot safely split "
+                "artist/title/edition without guessing",
+                artist=id3_artist, title=id3_title,
+            )
+        id3_artist_fb, id3_title = parsed.artist, parsed.title
         # Strip numeric track prefix when stem had no ' - ' separator
         id3_title_stripped, _tnum = _strip_track_number(id3_title)
         if _tnum is not None:
@@ -661,23 +791,17 @@ def identify_file(filepath: str | Path) -> LegacyIdentificationResult:
     canon_artist = resolve_artist_alias(id3_artist)
     norm_artist  = normalize_for_search(canon_artist, strip_remix=False)
 
-    def _unidentified(reason: str) -> LegacyIdentificationResult:
-        return LegacyIdentificationResult(
-            filepath=str(filepath), matched=False, spotify_id="",
-            artist=id3_artist, title=id3_title, confidence=0.0,
-            confidence_reason=reason, match_source="unidentified",
-            duration_delta_sec=0.0, normalized_artist=norm_artist,
-            normalized_title=norm_title, reroute_recommended=False,
-            target_genre_family="", target_subgenre="",
-        )
+    def _unidentified_scored(reason: str) -> LegacyIdentificationResult:
+        return _unidentified(reason, artist=id3_artist, title=id3_title,
+                              norm_artist=norm_artist, norm_title=norm_title)
 
     if not norm_title:
-        return _unidentified("could not determine title")
+        return _unidentified_scored("could not determine title")
 
     # Step 5: Spotify search
     candidates = _search_spotify(norm_title, norm_artist)
     if not candidates:
-        return _unidentified("no Spotify candidates found")
+        return _unidentified_scored("no Spotify candidates found")
 
     # Use album hint from folder context when no ID3 album tag is present
     effective_album = norm_album or normalize_for_search(
@@ -688,7 +812,7 @@ def identify_file(filepath: str | Path) -> LegacyIdentificationResult:
     best = _pick_best(candidates, norm_title, norm_artist, duration_ms, effective_album,
                       raw_query_title=norm_title_raw)
     if best is None:
-        return _unidentified(f"best score < {CONF_NEEDS_REVIEW}")
+        return _unidentified_scored(f"best score < {CONF_NEEDS_REVIEW}")
 
     spotify_id, candidate, confidence, reason, delta_s = best
     # Safe post-score boost from folder context (≤ +0.05, capped at 0.99)
@@ -926,14 +1050,11 @@ def _apply_canonical_renames(renames: list[dict], base_dir: Path) -> None:
         if dst == src or dst.exists():
             continue
 
-        # Guard: never produce Library/Library/
-        try:
-            rel_parent = dst.parent.relative_to(base_dir)
-            if "Library" in str(rel_parent).split("\\")[0].split("/")[0]:
-                pass  # parent is under Library/ — that is expected
-        except ValueError:
-            pass
-
+        # Note: this only renames the leaf folder component in place —
+        # dst.parent == src.parent always — so Library/Library/ nesting from
+        # a *parent* change is structurally impossible here. The only other
+        # way it could occur is the canonical name itself containing
+        # "Library" as a segment, which is guarded immediately below.
         if "Library" in rename["canonical_name"]:
             logger.warning(f"[rename] Skipping — canonical name contains 'Library': {rename}")
             continue
@@ -946,11 +1067,69 @@ def _apply_canonical_renames(renames: list[dict], base_dir: Path) -> None:
             if col is not None:
                 old_str = str(src)
                 new_str = str(dst)
-                for doc in col.find({"final_path": {"$regex": re.escape(old_str)}}):
-                    new_path = doc["final_path"].replace(old_str, new_str)
+                for doc in col.find({"final_path": {"$regex": _anchored_path_regex(old_str)}}):
+                    doc_path = doc.get("final_path", "")
+                    if not _is_path_or_descendant(doc_path, old_str):
+                        # $regex over-matched a prefix-colliding sibling
+                        # (e.g. "Sammy" vs "Sammy Virji") — skip it, the
+                        # Python-side check is authoritative.
+                        continue
+                    new_path = _rebuild_path_under(doc_path, old_str, new_str)
                     col.update_one({"_id": doc["_id"]}, {"$set": {"final_path": new_path}})
         except Exception as e:
             logger.error(f"[rename] Failed {src.name}: {e}")
+
+
+def _path_parts(path_str: str) -> list[str]:
+    """
+    Split a stored path string into components, tolerating both Windows
+    ('\\') and POSIX ('/') separators — this project runs on Windows in
+    dev and Linux in prod, and `final_path` values written by either can
+    end up in the same MongoDB collection.
+    """
+    return [p for p in re.split(r"[\\/]+", path_str) if p not in ("", ".")]
+
+
+def _anchored_path_regex(path_str: str) -> str:
+    """
+    Build a separator-agnostic regex that matches ``path_str`` only at a
+    genuine path-component boundary (i.e. as the whole path or a real
+    ancestor directory), never as a bare substring — so renaming
+    ``.../House/Sammy`` cannot also match ``.../House/Sammy Virji/...``.
+    """
+    parts = [re.escape(p) for p in _path_parts(path_str)]
+    body = r"[\\/]".join(parts)
+    return f"^{body}(?:[\\\\/]|$)"
+
+
+def _is_path_or_descendant(candidate: str, ancestor: str) -> bool:
+    """True if `candidate` equals `ancestor`, or `ancestor` is a genuine
+    path-component ancestor of `candidate` — never a plain substring
+    match. Separator-agnostic (see _path_parts)."""
+    cand_parts = _path_parts(candidate)
+    anc_parts = _path_parts(ancestor)
+    if not anc_parts or len(anc_parts) > len(cand_parts):
+        return False
+    return cand_parts[:len(anc_parts)] == anc_parts
+
+
+def _rebuild_path_under(candidate: str, old_ancestor: str, new_ancestor: str) -> str:
+    """
+    Rewrite `candidate` (known to be `old_ancestor` itself or a real
+    descendant of it, per _is_path_or_descendant) so its `old_ancestor`
+    prefix becomes `new_ancestor`, preserving the remaining path
+    components untouched. Uses the separator style of `new_ancestor`
+    (the freshly-renamed local path) for the rebuilt portion, since that
+    reflects the separator convention of the OS actually performing this
+    rename.
+    """
+    anc_parts = _path_parts(old_ancestor)
+    cand_parts = _path_parts(candidate)
+    tail_parts = cand_parts[len(anc_parts):]
+    sep = "\\" if "\\" in new_ancestor else "/"
+    if not tail_parts:
+        return new_ancestor
+    return new_ancestor + sep + sep.join(tail_parts)
 
 
 # ── Phase 5: Trance bucket analysis ──────────────────────────────────────────

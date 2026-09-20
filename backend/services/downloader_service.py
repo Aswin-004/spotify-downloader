@@ -183,6 +183,39 @@ def _retry_file_op(fn, *args, attempts=3, delay=0.5, **kwargs):
     raise last_err
 
 
+def _is_valid_mp3(path, min_size=1000):
+    """
+    Cheap "already downloaded" integrity check — header/duration validation only,
+    NOT a full decode.
+
+    Previously, any .mp3 over min_size bytes at a candidate path was treated as a
+    complete, correct download purely on file size. That let partial/corrupt files
+    (an interrupted yt-dlp/ffmpeg run, a truncated write, a disk-full failure mid
+    download) get skipped forever as "already downloaded" instead of being retried.
+
+    Returns False (and logs a warning) when the file is missing, undersized, can't
+    be opened as an MP3, or reports zero/missing duration — callers should then
+    treat it as corrupt/partial and proceed with a fresh download rather than
+    short-circuiting.
+    """
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) <= min_size:
+            return False
+        if not _MUTAGEN_AVAILABLE:
+            # mutagen unavailable — fall back to the old size-only check rather
+            # than blocking all dedup because an optional dependency is missing.
+            return True
+        audio = MP3(path)
+        length = getattr(audio.info, "length", 0) or 0
+        if length <= 0:
+            logger.warning(f"Existing file failed integrity check (zero/missing duration): {path}")
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"Existing file failed integrity check ({e}): {path}")
+        return False
+
+
 # ═══════════════════════════════════════════════════════════════════
 # AUDIO POST-PROCESSING HELPERS
 # ═══════════════════════════════════════════════════════════════════
@@ -384,6 +417,7 @@ def _build_quality_report(  # QUALITY UPGRADE
     normalization_applied: bool = False,
     silence_trimmed: bool = False,  # QUALITY UPGRADE
     query_stage: Optional[int] = None,
+    audio_verification: Optional[dict] = None,
 ) -> dict:
     return {
         "bitrate_achieved": bitrate,
@@ -397,7 +431,21 @@ def _build_quality_report(  # QUALITY UPGRADE
         "normalization_applied": normalization_applied,
         "silence_trimmed": silence_trimmed,  # QUALITY UPGRADE
         "art_embedded": art_embedded,
+        # AcoustID audio check (services/audio_verifier.py): status is one of
+        # verified / inconclusive here (a proven-bad verdict discards the file, so
+        # it never reaches a report). None = verification did not run.
+        "audio_verification": audio_verification,
     }
+
+
+class VerificationRejected(Exception):
+    """A downloaded file's audio fingerprint proved it is NOT the requested recording
+    (karaoke / instrumental / another song). The file has already been discarded."""
+
+    def __init__(self, candidate_url: str, result):
+        super().__init__(f"audio verification rejected candidate: {result.reason}")
+        self.candidate_url = candidate_url
+        self.result = result
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -409,17 +457,101 @@ class DownloaderService:
 
     def __init__(self):
         self.download_dir = config.DOWNLOAD_PATH if hasattr(config, 'DOWNLOAD_PATH') else config.DOWNLOAD_DIR
-        self._last_match_quality = "exact"
-        # ── CHANGED: track the stage number that produced the final download
-        self._last_query_stage = 1
-        # ── CHANGED: track title similarity of the final candidate
-        self._last_title_similarity = 0.0
-        # ── CHANGED: track source platform of the final download
-        self._last_source_platform = "youtube"
-        self._last_format_downloaded = "unknown"  # QUALITY UPGRADE
-        self._last_channel_verified = False  # QUALITY UPGRADE
-        self._last_blacklist_filtered = 0  # QUALITY UPGRADE
+        # Per-download "last result" fields below are exposed as properties backed by
+        # threading.local(), NOT plain instance attributes. get_downloader_service()
+        # returns a single process-wide singleton, and auto_downloader.ingest_download()
+        # runs download_track() concurrently across a ThreadPoolExecutor(max_workers=2).
+        # Plain instance attributes let one thread's in-flight download overwrite
+        # another's quality-report fields before they're read, corrupting the
+        # Socket.IO event / DB write with the wrong track's data. See the
+        # `_last_*` properties defined below __init__ for the actual storage.
+        self._tls = threading.local()
         self._ensure_download_dir()
+
+    # ── Thread-local "last download" result storage ─────────────────────────
+    # Each property lazily initializes its slot on self._tls (per-thread) to the
+    # same default that used to be set once on the instance in __init__, so
+    # external behavior/return shape is unchanged — only the storage is now
+    # isolated per worker thread instead of shared across the singleton.
+    @property
+    def _last_match_quality(self):
+        return getattr(self._tls, 'last_match_quality', "exact")
+
+    @_last_match_quality.setter
+    def _last_match_quality(self, value):
+        self._tls.last_match_quality = value
+
+    @property
+    def _last_query_stage(self):
+        return getattr(self._tls, 'last_query_stage', 1)
+
+    @_last_query_stage.setter
+    def _last_query_stage(self, value):
+        self._tls.last_query_stage = value
+
+    @property
+    def _last_title_similarity(self):
+        return getattr(self._tls, 'last_title_similarity', 0.0)
+
+    @_last_title_similarity.setter
+    def _last_title_similarity(self, value):
+        self._tls.last_title_similarity = value
+
+    @property
+    def _last_source_platform(self):
+        return getattr(self._tls, 'last_source_platform', "youtube")
+
+    @_last_source_platform.setter
+    def _last_source_platform(self, value):
+        self._tls.last_source_platform = value
+
+    @property
+    def _last_format_downloaded(self):
+        return getattr(self._tls, 'last_format_downloaded', "unknown")
+
+    @_last_format_downloaded.setter
+    def _last_format_downloaded(self, value):
+        self._tls.last_format_downloaded = value
+
+    @property
+    def _last_channel_verified(self):
+        return getattr(self._tls, 'last_channel_verified', False)
+
+    @_last_channel_verified.setter
+    def _last_channel_verified(self, value):
+        self._tls.last_channel_verified = value
+
+    @property
+    def _last_blacklist_filtered(self):
+        return getattr(self._tls, 'last_blacklist_filtered', 0)
+
+    @_last_blacklist_filtered.setter
+    def _last_blacklist_filtered(self, value):
+        self._tls.last_blacklist_filtered = value
+
+    @property
+    def _last_audio_verification(self):
+        return getattr(self._tls, 'last_audio_verification', None)
+
+    @_last_audio_verification.setter
+    def _last_audio_verification(self, value):
+        self._tls.last_audio_verification = value
+
+    @property
+    def _last_track_id(self):
+        return getattr(self._tls, 'last_track_id', '')
+
+    @_last_track_id.setter
+    def _last_track_id(self, value):
+        self._tls.last_track_id = value
+
+    @property
+    def _last_release_date(self):
+        return getattr(self._tls, 'last_release_date', '')
+
+    @_last_release_date.setter
+    def _last_release_date(self, value):
+        self._tls.last_release_date = value
 
     def _ensure_download_dir(self):
         Path(self.download_dir).mkdir(parents=True, exist_ok=True)
@@ -541,7 +673,7 @@ class DownloaderService:
     # ─── Single track download (unchanged public signature) ─────────────────
     def download_track(self, title, artist, album=None, progress_callback=None,
                        output_dir=None, output_filename=None, duration_ms=None,
-                       album_art_url=None):
+                       album_art_url=None, spotify_track_id=None, spotify_release_date=None):
         """
         Download track audio and convert to 320 kbps MP3.
         With intelligent fallback: if auto-download fails, provide manual YouTube link.
@@ -553,10 +685,21 @@ class DownloaderService:
             output_filename: custom filename (no extension)
             duration_ms: expected Spotify duration for validation
             album_art_url: URL to highest-res Spotify album image (optional)
+            spotify_track_id: Spotify track ID (optional) — persisted to spotify_meta["id"]
+                so tagger_service can write it as TXXX:SPOTIFY_ID for future re-routing/dedup
+            spotify_release_date: Spotify release date string, e.g. "2024-03-15" (optional) —
+                persisted to spotify_meta["release_date"] as a fallback release year when
+                MusicBrainz has no match
 
         Returns:
             dict with 'status' = 'success' | 'fallback'
         """
+        # Stored via the thread-local properties defined above (see __init__) so
+        # concurrent download_track() calls on this singleton don't clobber each
+        # other's values before spotify_meta is built further down (~line 855).
+        self._last_track_id = spotify_track_id or ""
+        self._last_audio_verification = None   # set again by _verify_download() if it runs
+        self._last_release_date = spotify_release_date or ""
         try:
             safe_title = sanitize_filename(title)
             safe_artist = sanitize_filename(artist)
@@ -570,14 +713,23 @@ class DownloaderService:
 
             # ── Skip if file already exists (duplicate prevention) ──
             expected_path = os.path.join(actual_dir, f"{clean_name}.mp3")
-            if os.path.isfile(expected_path) and os.path.getsize(expected_path) > 1000:
-                logger.info(f"Skipping duplicate: {clean_name}.mp3")
-                return {
-                    "status": "success",
-                    "filename": f"{clean_name}.mp3",
-                    "filepath": expected_path,
-                    "message": f"Already exists: {clean_name}.mp3",
-                }
+            if os.path.isfile(expected_path):
+                if _is_valid_mp3(expected_path):
+                    logger.info(f"Skipping duplicate: {clean_name}.mp3")
+                    return {
+                        "status": "success",
+                        "filename": f"{clean_name}.mp3",
+                        "filepath": expected_path,
+                        "message": f"Already exists: {clean_name}.mp3",
+                    }
+                logger.warning(
+                    f"Existing file at {expected_path} is corrupt/partial — "
+                    f"replacing with a fresh download"
+                )
+                try:
+                    os.remove(expected_path)
+                except OSError as _rm_err:
+                    logger.warning(f"Could not remove corrupt file {expected_path}: {_rm_err}")
 
             # Normalized duplicate check — local directory first.
             # norm_key matches the new "Title - Artist.mp3" naming convention;
@@ -590,7 +742,7 @@ class DownloaderService:
                     existing_norm = normalize(existing[:-4])
                     if existing_norm == norm_key or existing_norm == title_only_key:
                         existing_path = os.path.join(actual_dir, existing)
-                        if os.path.getsize(existing_path) > 1000:
+                        if _is_valid_mp3(existing_path):
                             logger.info(f"Skipping normalized duplicate: {existing}")
                             return {
                                 "status": "success",
@@ -598,6 +750,14 @@ class DownloaderService:
                                 "filepath": existing_path,
                                 "message": f"Already exists (normalized match): {existing}",
                             }
+                        logger.warning(
+                            f"Normalized-duplicate match {existing_path} is "
+                            f"corrupt/partial — ignoring, will download fresh"
+                        )
+                        try:
+                            os.remove(existing_path)
+                        except OSError as _rm_err:
+                            logger.warning(f"Could not remove corrupt file {existing_path}: {_rm_err}")
 
             # Cross-directory duplicate check — scan all of BASE_DOWNLOAD_DIR
             # to catch files that were organized into subfolders after download.
@@ -618,7 +778,7 @@ class DownloaderService:
                             if normalize(existing[:-4]) == norm_key:
                                 existing_path = os.path.join(root, existing)
                                 try:
-                                    if os.path.getsize(existing_path) > 1000:
+                                    if _is_valid_mp3(existing_path):
                                         logger.info(f"Skipping cross-dir duplicate: {existing} (in {root})")
                                         return {
                                             "status": "success",
@@ -626,6 +786,16 @@ class DownloaderService:
                                             "filepath": existing_path,
                                             "message": f"Already exists in library: {existing}",
                                         }
+                                    # Corrupt/partial — don't auto-delete a file found
+                                    # elsewhere in the library during this wide scan
+                                    # (unlike the local-dir checks above, deleting here
+                                    # carries more risk of touching an unrelated file);
+                                    # just log it and keep scanning / fall through to a
+                                    # fresh download at actual_dir.
+                                    logger.warning(
+                                        f"Cross-dir duplicate {existing_path} is "
+                                        f"corrupt/partial — ignoring, will download fresh"
+                                    )
                                 except OSError:
                                     pass
 
@@ -760,6 +930,7 @@ class DownloaderService:
                 normalization_applied=norm_ok,
                 silence_trimmed=trim_ok,  # QUALITY UPGRADE
                 query_stage=self._last_query_stage,
+                audio_verification=self._last_audio_verification,
             )
 
             # Persist to SQLite
@@ -1095,6 +1266,13 @@ class DownloaderService:
         MAX_RETRIES = 2
         STAGE_CONFIDENT_ACCEPT_SCORE = 0.75
 
+        # Candidates whose DOWNLOADED audio failed the AcoustID check (karaoke /
+        # wrong song). They are excluded from re-scoring so the next-best candidate
+        # is tried instead of the same bad one being picked again.
+        rejected_urls: set = set()
+        MAX_VERIFY_REJECTS = 3
+        verify_rejects = 0
+
         # Best marginal (min_score <= score < confident bar) candidate seen
         # across all stages so far: {"candidate", "score", "stage_num",
         # "stage_name", "quality", "platform"} or None.
@@ -1111,6 +1289,7 @@ class DownloaderService:
                     candidate, score, reason = self._score_stage_candidates(
                         query, stage_name, duration_ms=duration_ms,
                         spotify_title=spotify_title, artist=artist,
+                        exclude_urls=rejected_urls,
                     )
 
                     if candidate is None:
@@ -1128,6 +1307,7 @@ class DownloaderService:
                             progress_callback, output_dir=actual_dir,
                             output_filename=output_filename,
                         )
+                        self._verify_download(filename, actual_dir, spotify_title, artist, duration_ms, candidate)
                         logger.info(f"{stage_name} confident accept ({score:.3f}): {filename}")
                         self._last_match_quality = quality
                         self._last_query_stage = stage_num
@@ -1147,6 +1327,20 @@ class DownloaderService:
                             f"continuing to later stages"
                         )
                     break  # done with this stage, no need to retry — got a scored result
+                except VerificationRejected as vr:
+                    rejected_urls.add(vr.candidate_url)
+                    verify_rejects += 1
+                    logger.warning(
+                        f"{stage_name}: top candidate failed AUDIO verification "
+                        f"({verify_rejects}/{MAX_VERIFY_REJECTS}) — {vr.result.reason}. "
+                        f"Trying the next best candidate."
+                    )
+                    if verify_rejects >= MAX_VERIFY_REJECTS:
+                        raise Exception(
+                            f"All candidates failed audio verification for: {title} — {art} "
+                            f"(last: {vr.result.reason})"
+                        )
+                    continue  # re-score this stage without the rejected URL
                 except Exception as e:
                     logger.warning(f"{stage_name} attempt {attempt+1} failed: {str(e)[:150]}")
                     if attempt < MAX_RETRIES:
@@ -1154,12 +1348,22 @@ class DownloaderService:
                     else:
                         logger.info(f"{stage_name} exhausted, moving on...")
 
+        if held is not None and held["candidate"].get("url") in rejected_urls:
+            held = None  # it was downloaded as a confident pick elsewhere and failed verification
+
         if held is not None:
             filename = self._finalize_and_download(
                 held["candidate"], held["stage_name"], spotify_title, duration_ms,
                 progress_callback, output_dir=actual_dir,
                 output_filename=output_filename,
             )
+            try:
+                self._verify_download(filename, actual_dir, spotify_title, artist, duration_ms, held["candidate"])
+            except VerificationRejected as vr:
+                raise Exception(
+                    f"Best available candidate failed audio verification for: {title} — {art} "
+                    f"({vr.result.reason})"
+                )
             logger.info(
                 f"All stages exhausted — downloading best held candidate from "
                 f"{held['stage_name']} (score={held['score']:.3f}): {filename}"
@@ -1178,7 +1382,7 @@ class DownloaderService:
     # ═══════════════════════════════════════════════════════════════════
 
     def _score_stage_candidates(self, query, source_name, duration_ms=None,
-                                 spotify_title=None, artist=None):
+                                 spotify_title=None, artist=None, exclude_urls=None):
         """
         Fetch one search stage's results and score them — NO download.
 
@@ -1236,11 +1440,17 @@ class DownloaderService:
                 logger.info(f"[{source_name}] Blacklisted #{i+1}: \"{yt_title_raw}\"")  # QUALITY UPGRADE
                 continue  # QUALITY UPGRADE
 
+            # Skip candidates already downloaded and rejected by the audio check.
+            _cand_url = entry.get("webpage_url") or entry.get("url")
+            if exclude_urls and _cand_url in exclude_urls:
+                logger.info(f"[{source_name}] Skipping #{i+1} (failed audio verification earlier): \"{yt_title_raw}\"")
+                continue
+
             # ── CHANGED: include channel_is_verified for +30 boost ──
             candidates.append({
                 "title": yt_title_raw,
                 "duration": entry.get("duration"),
-                "url": entry.get("webpage_url") or entry.get("url"),
+                "url": _cand_url,
                 "uploader": entry.get("uploader", "") or entry.get("channel", "") or "",
                 "channel_is_verified": entry.get("channel_is_verified", False),
                 "entry": entry,
@@ -1264,6 +1474,42 @@ class DownloaderService:
 
         return best_candidate, best_score, selection_reason
 
+    def _verify_download(self, filename, actual_dir, spotify_title, artist, duration_ms, candidate):
+        """
+        Fingerprint the freshly downloaded file (AcoustID) and DISCARD it if the audio
+        is provably not the requested recording — a karaoke/instrumental re-recording,
+        a remix/live cut, or a different song. Title/duration scoring cannot see any
+        of those. Raises VerificationRejected after deleting the file; returns
+        normally for verified AND inconclusive results (no evidence never blocks a
+        download). The verdict is stored for the quality report.
+        See services/audio_verifier.py for the decision rules and safety design.
+        """
+        try:
+            from services.audio_verifier import verify_recording, should_reject
+        except Exception as exc:  # verifier unavailable — never block a download on it
+            logger.debug(f"[verify] audio verifier unavailable: {exc}")
+            return
+
+        filepath = os.path.abspath(os.path.join(actual_dir, filename))
+        expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
+        try:
+            result = verify_recording(filepath, spotify_title or "", artist or "", expected_secs)
+        except Exception as exc:  # verify_recording is designed never to raise; belt and braces
+            logger.warning(f"[verify] verifier crashed — skipping the audio check: {exc}")
+            return
+        self._last_audio_verification = result.to_dict()
+
+        if should_reject(result):
+            logger.warning(
+                f"[verify] REJECTED \"{candidate.get('title', '')}\" "
+                f"({candidate.get('uploader', '')}): {result.reason}"
+            )
+            try:
+                _retry_file_op(os.remove, filepath)
+            except Exception as rm_err:
+                logger.warning(f"[verify] Could not delete rejected file {filepath}: {rm_err}")
+            raise VerificationRejected(candidate.get("url") or "", result)
+
     def _finalize_and_download(self, candidate, source_name, spotify_title, duration_ms,
                                 progress_callback=None, output_dir=None, output_filename=None):
         """
@@ -1278,6 +1524,13 @@ class DownloaderService:
 
         expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
 
+        # ── CHANGED: record title similarity for quality report ──
+        # Computed BEFORE the duration check below so the unverified-duration
+        # branch can reuse it as a reduced-confidence substitute signal.
+        clean_yt = clean_title(candidate.get("title", ""))
+        clean_sp = clean_title(spotify_title or "")
+        self._last_title_similarity = string_similarity(clean_sp, clean_yt)
+
         # Final duration validation
         best_duration = candidate.get("duration")
         if expected_secs and best_duration:
@@ -1287,11 +1540,24 @@ class DownloaderService:
                     f"[{source_name}] Final validation failed: duration diff {diff}s > "
                     f"{HARD_DURATION_LIMIT_SEC}s for \"{candidate.get('title', '')}\""
                 )
-
-        # ── CHANGED: record title similarity for quality report ──
-        clean_yt = clean_title(candidate.get("title", ""))
-        clean_sp = clean_title(spotify_title or "")
-        self._last_title_similarity = string_similarity(clean_sp, clean_yt)
+        elif expected_secs and not best_duration:
+            # Candidate duration is unknown (common for SoundCloud scsearch results
+            # under extract_flat=True) — we have no data to hard-reject against, so
+            # don't fully bypass this safety net. Instead, require a strong
+            # independent title match as a reduced-confidence substitute for the
+            # duration check; without this a wildly wrong-length result (a full DJ
+            # mix, a live set) could slip through purely on a weak title/artist
+            # match once duration is simply missing. Known-duration behavior above
+            # is unchanged.
+            UNVERIFIED_DURATION_MIN_TITLE_SIMILARITY = 0.60
+            if self._last_title_similarity < UNVERIFIED_DURATION_MIN_TITLE_SIMILARITY:
+                raise Exception(
+                    f"[{source_name}] Final validation failed: duration unknown and title "
+                    f"similarity {self._last_title_similarity:.2f} < "
+                    f"{UNVERIFIED_DURATION_MIN_TITLE_SIMILARITY} for "
+                    f"\"{candidate.get('title', '')}\" — too risky to accept without a "
+                    f"verified duration"
+                )
 
         # QUALITY UPGRADE — capture verified status for quality report
         self._last_channel_verified = candidate.get("channel_is_verified", False)  # QUALITY UPGRADE

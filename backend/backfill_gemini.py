@@ -576,6 +576,53 @@ def pass5_embed_artwork():
     print(f"  Embedded artwork for {embedded}/{len(to_process)} files")
 
 
+# ── PASS 6 confidence gate (PHASE 1G) ──────────────────────────────────────────
+# docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md root-caused this pass's blind
+# `items[0]`-with-no-gate acceptance as one of the two defects that let
+# unrelated songs collide on one Spotify ID. Reuses the existing, already-
+# tested scoring utility from legacy_identification_service.py (title/artist/
+# duration/remix/album weighted scoring + review threshold) instead of a
+# second independent matching algorithm — per PHASE 1G task spec.
+
+def _select_verified_spotify_match(query_title, query_artist, duration_ms, candidates):
+    """
+    Confidence-gated Spotify candidate selection for backfill passes.
+
+    Returns (spotify_id, confidence, reason). spotify_id is "" whenever no
+    candidate clears the acceptance bar — a weak or absent match is a
+    REJECT, never a guess.
+
+    `candidates` must already be in the "extracted" shape produced by
+    services.legacy_identification_service._extract_candidate() — i.e. each
+    a dict with id/title/artist/album/duration_ms.
+
+    Deliberately gates at CONF_ACCEPT_WARN (0.75), not the looser
+    CONF_NEEDS_REVIEW (0.60) that _pick_best() itself uses internally —
+    NEEDS_REVIEW is documented in legacy_identification_service.py as
+    "log + report only, no retag," and this function performs an actual
+    unattended tag write, which needs the stronger bar.
+    """
+    from services.legacy_identification_service import (
+        _pick_best, normalize_for_search, CONF_ACCEPT_WARN,
+    )
+
+    norm_title = normalize_for_search(query_title)
+    norm_artist = normalize_for_search(query_artist) if query_artist else ""
+
+    if not norm_title or not candidates:
+        return "", 0.0, "no title or no candidates to evaluate"
+
+    best = _pick_best(candidates, norm_title, norm_artist, duration_ms)
+    if best is None:
+        return "", 0.0, "no candidate cleared the minimum review threshold"
+
+    spotify_id, candidate, confidence, reason, delta_s = best
+    if confidence < CONF_ACCEPT_WARN:
+        return "", confidence, f"match too weak for automatic tagging (confidence={confidence:.2f} < {CONF_ACCEPT_WARN}): {reason}"
+
+    return spotify_id, confidence, reason
+
+
 # ── PASS 6: Backfill TXXX:SPOTIFY_ID + artwork via MusicBrainz fallback ───────
 
 def pass6_backfill_spotify_id():
@@ -635,16 +682,31 @@ def pass6_backfill_spotify_id():
 
         spotify_id = ""
         img_url    = ""
+        match_track = None
         try:
+            from services.legacy_identification_service import _extract_candidate
+            from mutagen.mp3 import MP3 as _MP3
+
             clean = _re.sub(r'\s*[\(\[]From[^\)\]]*[\)\]]', '', title, flags=_re.IGNORECASE).strip()
             q = f"track:{clean}"
             if artist:
                 q += f" artist:{artist}"
-            items = sp.search(q=q, type="track", limit=1).get("tracks", {}).get("items", [])
-            if items:
-                track      = items[0]
-                spotify_id = track.get("id", "")
-                img_url    = (track.get("album", {}).get("images") or [{}])[0].get("url", "")
+            items = sp.search(q=q, type="track", limit=5).get("tracks", {}).get("items", [])
+            candidates = [_extract_candidate(t) for t in items if t]
+
+            try:
+                duration_ms = int(_MP3(str(f)).info.length * 1000)
+            except Exception:
+                duration_ms = 0
+
+            spotify_id, confidence, reason = _select_verified_spotify_match(
+                clean, artist, duration_ms, candidates,
+            )
+            if spotify_id:
+                match_track = next((t for t in items if t.get("id") == spotify_id), None)
+                img_url = ((match_track or {}).get("album", {}).get("images") or [{}])[0].get("url", "")
+            else:
+                print(f"    [reject] {reason}")
         except Exception as e:
             print(f"    [spotify-warn] {e}")
 

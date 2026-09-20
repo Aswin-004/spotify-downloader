@@ -174,7 +174,7 @@ def _execute_move(
     Updates library_index final_path.
     Returns True on success.
     """
-    from services.organizer_service import _collision_safe_name
+    from services.organizer_service import _collision_safe_name, _move_lock
 
     dest_dir  = BASE_DIR / dest_folder_rel
 
@@ -196,18 +196,23 @@ def _execute_move(
         except Exception:
             pass
 
-        dest_path = _collision_safe_name(dest_dir, src.name, artist_name, spotify_id)
+        # Serialize "pick a free name → write it" under the process-wide
+        # lock so another mover in this process can't claim the same
+        # destination name in between (check-then-act overwrite race).
+        # Keeps this file's own cross-device-aware collision naming intact.
+        with _move_lock:
+            dest_path = _collision_safe_name(dest_dir, src.name, artist_name, spotify_id)
 
-        src_st  = os.stat(src)
-        dest_st = os.stat(dest_dir)
-        if src_st.st_dev == dest_st.st_dev:
-            os.replace(src, dest_path)
-        else:
-            shutil.copy2(src, dest_path)
-            if os.path.getsize(dest_path) != os.path.getsize(src):
-                os.remove(dest_path)
-                raise OSError("Cross-device copy size mismatch")
-            os.remove(src)
+            src_st  = os.stat(src)
+            dest_st = os.stat(dest_dir)
+            if src_st.st_dev == dest_st.st_dev:
+                os.replace(src, dest_path)
+            else:
+                shutil.copy2(src, dest_path)
+                if os.path.getsize(dest_path) != os.path.getsize(src):
+                    os.remove(dest_path)
+                    raise OSError("Cross-device copy size mismatch")
+                os.remove(src)
 
         # Update library_index
         try:
@@ -862,7 +867,7 @@ def flatten_existing_artist_folders(
           folders_removed, failures, dry_run, report_path
         }
     """
-    from services.organizer_service import _collision_safe_name
+    from services.organizer_service import _collision_safe_name, _move_lock
 
     root        = Path(base_dir) if base_dir else BASE_DIR
     library_dir = root / "Library"
@@ -911,10 +916,9 @@ def flatten_existing_artist_folders(
             artist_name = tags.get("artist", "") or artist_dir.name
             spotify_id  = tags.get("spotify_id", "")
 
-            dest_path = _collision_safe_name(flat_target, mp3.name, artist_name, spotify_id)
-            collided  = dest_path.name != mp3.name
-
             if dry_run:
+                dest_path = _collision_safe_name(flat_target, mp3.name, artist_name, spotify_id)
+                collided  = dest_path.name != mp3.name
                 logger.info(
                     f"[flatten][DRY] {mp3.relative_to(root)} → "
                     f"{dest_path.relative_to(root)}"
@@ -936,16 +940,25 @@ def flatten_existing_artist_folders(
             try:
                 flat_target.mkdir(parents=True, exist_ok=True)
 
-                src_dev  = os.stat(mp3).st_dev
-                dest_dev = os.stat(flat_target).st_dev
-                if src_dev == dest_dev:
-                    os.replace(mp3, dest_path)
-                else:
-                    shutil.copy2(mp3, dest_path)
-                    if os.path.getsize(dest_path) != os.path.getsize(mp3):
-                        os.remove(dest_path)
-                        raise OSError("Cross-device copy size mismatch")
-                    os.remove(mp3)
+                # Serialize "pick a free name → write it" under the
+                # process-wide lock so another mover in this process can't
+                # claim the same destination name in between (check-then-act
+                # overwrite race). Keeps this function's own cross-device-
+                # aware collision naming intact.
+                with _move_lock:
+                    dest_path = _collision_safe_name(flat_target, mp3.name, artist_name, spotify_id)
+                    collided  = dest_path.name != mp3.name
+
+                    src_dev  = os.stat(mp3).st_dev
+                    dest_dev = os.stat(flat_target).st_dev
+                    if src_dev == dest_dev:
+                        os.replace(mp3, dest_path)
+                    else:
+                        shutil.copy2(mp3, dest_path)
+                        if os.path.getsize(dest_path) != os.path.getsize(mp3):
+                            os.remove(dest_path)
+                            raise OSError("Cross-device copy size mismatch")
+                        os.remove(mp3)
 
                 entry = {
                     "src":      str(mp3.relative_to(root)),

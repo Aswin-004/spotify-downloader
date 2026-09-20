@@ -41,7 +41,10 @@ from services.spotify_service import get_api_usage
 from utils import setup_logging, extract_spotify_id
 
 # Route blueprints
-from routes import library_bp, analytics_bp, settings_bp, system_bp, genre_bp, notifications_bp
+from routes import (
+    library_bp, analytics_bp, settings_bp, system_bp, genre_bp,
+    notifications_bp, training_bp, dj_coach_bp,
+)
 
 # MUSICBRAINZ — import tagger service
 try:  # MUSICBRAINZ
@@ -146,9 +149,6 @@ _active_downloads_lock = threading.Lock()
 download_history = []
 history_lock = threading.Lock()
 MAX_HISTORY = 100
-
-# Lock protecting concurrent writes to user_config.json
-_user_config_lock = threading.Lock()
 
 
 from routes.library import _load_existing_files as load_existing_files
@@ -256,6 +256,8 @@ app.register_blueprint(settings_bp)
 app.register_blueprint(system_bp)
 app.register_blueprint(genre_bp)
 app.register_blueprint(notifications_bp)
+app.register_blueprint(training_bp)
+app.register_blueprint(dj_coach_bp)
 
 # Get services
 spotify_service = get_spotify_service()
@@ -407,8 +409,8 @@ def get_track_metadata():
       Album: { "type": "album", "name": ..., "artist": ..., "total_tracks": ..., "tracks": [...] }
     """
     try:
-        data = request.get_json()
-        
+        data = request.get_json(silent=True)
+
         if not data or "url" not in data:
             return jsonify({"error": "URL missing"}), 400
         
@@ -485,15 +487,15 @@ def get_track_metadata():
             already_in_library = False
             existing_folder = None
             try:
-                from database import find_track_by_spotify_id as _find_by_sid
+                from database import lookup_by_spotify_id as _find_by_sid
                 _sid = url_info.get("id", "")
                 if _sid:
                     _existing = _find_by_sid(_sid)
                     if _existing:
                         already_in_library = True
                         existing_folder = _existing.get("genre_folder", "")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[track-metadata] Duplicate lookup failed for {url_info.get('id', '')}: {e}")
             return jsonify({
                 "type": "track",
                 "title": metadata["title"],
@@ -530,9 +532,9 @@ def download_track():
         global active_download, download_status
         
         # Get request data
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         url = data.get("url")
-        
+
         if not url:
             return jsonify({"error": "No URL"}), 400
         
@@ -599,95 +601,99 @@ def download_stream_to_browser():
     except Exception as e:
         return jsonify({"error": f"Spotify error: {str(e)[:80]}"}), 502
 
-    # 2. YouTube search (extract_flat=True — works from any IP, no bot check)
-    search_query = f"ytsearch1:{artist} - {title} Official Audio"
-    search_opts = {
-        'quiet': True, 'no_warnings': True,
-        'extract_flat': True, 'socket_timeout': 10,
-    }
+    # 2+3. Search -> strict scoring -> download -> AUDIO fingerprint check -> retry with the
+    #      next-best candidate if the audio is proven to be karaoke / the wrong song.
+    #      (Logic lives in services/stream_download.py so it is unit-tested; this route
+    #      only supplies the yt-dlp download step and maps errors to HTTP.)
+    #
+    #    This route used to take `ytsearch1` -> entries[0] with NO validation, so whatever
+    #    YouTube ranked first (a karaoke/instrumental re-recording, a cover, a different
+    #    song by the same artist) was downloaded and then named after the Spotify
+    #    metadata — making the wrong audio look like the right file.
+    from services.audio_verifier import verify_recording, should_reject
+    from services.stream_download import (
+        download_verified_audio, StreamDownloadError, NoConfidentMatch, AllCandidatesRejected,
+    )
+
     _cookies = '/tmp/youtube_cookies.txt'
-    if os.path.isfile(_cookies):
-        search_opts['cookiefile'] = _cookies
+
+    def _fetch_audio(video_id):
+        """Download one video to a temp MP3 via YouTube's tv_embedded client (far less
+        bot-checked than the web client; works from datacenter IPs without cookies)."""
+        tmp_dir  = tempfile.mkdtemp()
+        tmp_base = os.path.join(tmp_dir, 'track')
+        try:
+            ffmpeg = shutil.which('ffmpeg')
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'quiet': True, 'no_warnings': True,
+                'outtmpl': tmp_base + '.%(ext)s',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'socket_timeout': 60,
+                'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
+            }
+            if ffmpeg:
+                ydl_opts['ffmpeg_location'] = str(Path(ffmpeg).parent)
+            if os.path.isfile(_cookies):
+                ydl_opts['cookiefile'] = _cookies
+
+            with _yt.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+
+            tmp_mp3 = tmp_base + '.mp3'
+            if not os.path.isfile(tmp_mp3):
+                # yt-dlp may have named it differently — find it
+                import glob
+                found = glob.glob(tmp_base + '*.mp3')
+                if not found:
+                    raise RuntimeError("Download completed but MP3 file not found")
+                tmp_mp3 = found[0]
+            return tmp_dir, tmp_mp3
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
 
     try:
-        with _yt.YoutubeDL(search_opts) as ydl:
-            info = ydl.extract_info(search_query, download=False)
-            entries = (info or {}).get('entries', [])
-            if not entries:
-                return jsonify({"error": "No YouTube match found for this track"}), 404
-            video_id = entries[0].get('id', '')
-    except Exception as e:
-        return jsonify({"error": f"YouTube search failed: {str(e)[:80]}"}), 502
-
-    if not video_id:
-        return jsonify({"error": "Could not extract video ID"}), 502
-
-    # 3. Download using YouTube tv_embedded client — far less bot-checked than web client
-    #    Works from datacenter IPs without cookies or proxies.
-    youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-    tmp_dir  = tempfile.mkdtemp()
-    tmp_base = os.path.join(tmp_dir, 'track')
-    tmp_mp3  = tmp_base + '.mp3'
-    try:
-        ffmpeg = shutil.which('ffmpeg')
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'quiet': True, 'no_warnings': True,
-            'outtmpl': tmp_base + '.%(ext)s',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'socket_timeout': 60,
-            # tv_embedded player: YouTube's TV/embed API — not subject to same IP blocks as web
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['tv_embedded'],
-                }
-            },
-        }
-        if ffmpeg:
-            ydl_opts['ffmpeg_location'] = str(Path(ffmpeg).parent)
-        if os.path.isfile(_cookies):
-            ydl_opts['cookiefile'] = _cookies
-
-        with _yt.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
-
-        if not os.path.isfile(tmp_mp3):
-            # yt-dlp may have named it differently — find it
-            import glob
-            candidates = glob.glob(tmp_base + '*.mp3')
-            if candidates:
-                tmp_mp3 = candidates[0]
-            else:
-                return jsonify({"error": "Download completed but MP3 file not found"}), 502
-
-        safe_artist = sanitize_filename(artist)[:40]
-        safe_title  = sanitize_filename(title)[:60]
-        download_name = f"{safe_artist} - {safe_title}.mp3"
-
-        logger.info(f"[download-stream] Streaming '{title}' by {artist} → {download_name}")
-
-        # Read into memory so the temp dir can be deleted before the response
-        # is streamed — avoids a race on gevent where finally runs mid-stream.
-        from io import BytesIO
-        with open(tmp_mp3, 'rb') as fh:
-            audio_bytes = fh.read()
-
-        return send_file(
-            BytesIO(audio_bytes),
-            as_attachment=True,
-            download_name=download_name,
-            mimetype='audio/mpeg',
+        result = download_verified_audio(
+            title=title, artist=artist, duration_ms=duration_ms,
+            score_stage=downloader_service._score_stage_candidates,
+            fetch_audio=_fetch_audio,
+            verify=verify_recording, should_reject_fn=should_reject,
         )
-
+    except (NoConfidentMatch, AllCandidatesRejected) as e:
+        logger.warning(f"[download-stream] '{title}' by {artist}: {e.__class__.__name__} — {e.reason}")
+        body = {"error": str(e), "reason": e.reason}
+        if isinstance(e, NoConfidentMatch):
+            body["error"] += " Try a SoundCloud or Bandcamp URL instead."
+        return jsonify(body), e.http_status
+    except StreamDownloadError as e:
+        return jsonify({"error": str(e)}), e.http_status
     except Exception as e:
         logger.error(f"[download-stream] Failed for '{title}': {e}")
         return jsonify({"error": f"Download failed: {str(e)[:120]}"}), 502
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    safe_artist = sanitize_filename(artist)[:40]
+    safe_title  = sanitize_filename(title)[:60]
+    download_name = f"{safe_artist} - {safe_title}.mp3"
+    logger.info(
+        f"[download-stream] Streaming '{title}' by {artist} -> {download_name} "
+        f"(picked \"{result.candidate.get('title')}\" / {result.candidate.get('uploader')}, "
+        f"score={result.score:.2f}, audio check: {result.verdict.status})"
+    )
+
+    from io import BytesIO
+    response = send_file(
+        BytesIO(result.audio_bytes),
+        as_attachment=True,
+        download_name=download_name,
+        mimetype='audio/mpeg',
+    )
+    response.headers["X-Audio-Verification"] = result.verdict.status
+    return response
 
 
 # ── SoundCloud / Bandcamp direct URL download ─────────────────────────────────
@@ -797,15 +803,12 @@ def _download_direct_background(url, title, artist):
         if not genre_folder:
             genre_folder = 'Library/Electronic'
 
-        dest_dir  = os.path.join(BASE_DOWNLOAD_DIR, genre_folder)
-        os.makedirs(dest_dir, exist_ok=True)
+        from services.organizer_service import safe_move
+        dest_dir   = os.path.join(BASE_DOWNLOAD_DIR, genre_folder)
         clean_name = sanitize_filename(f"{dl_title} - {dl_artist}.mp3")
-        dest_path  = os.path.join(dest_dir, clean_name)
-        if os.path.exists(dest_path):
-            stem, ext = os.path.splitext(clean_name)
-            dest_path  = os.path.join(dest_dir, f"{stem}_1{ext}")
-            clean_name = os.path.basename(dest_path)
-        _shutil.move(str(src_path), dest_path)
+        dest_path_obj = safe_move(src_path, dest_dir, filename=clean_name, artist_name=dl_artist)
+        clean_name = dest_path_obj.name
+        dest_path  = str(dest_path_obj)
 
         if is_catchall:
             socketio.emit('download_needs_review', {
@@ -1061,6 +1064,9 @@ def _download_background(url):
                     download_status["status"] = "downloading"
                     download_status["current"] = f"{title} - {artist}"
                     download_status["progress"] = 10
+                    # Clear any task_id left over from a prior Celery-queued
+                    # download — this run isn't a Celery task.
+                    download_status["task_id"] = None
 
                 result = downloader_service.download_track(title, artist, progress_callback=track_progress_cb, duration_ms=duration_ms, output_dir=manual_folder, album_art_url=album_art_url)
 
@@ -1135,15 +1141,11 @@ def _extract_playlist_id(raw: str) -> str:
     return m.group(1) if m else raw
 
 def _save_user_config(data: dict) -> None:
-    p = Path(__file__).parent / "user_config.json"
-    with _user_config_lock:
-        existing = {}
-        try:
-            existing = json.loads(p.read_text())
-        except Exception:
-            pass
-        existing.update(data)
-        p.write_text(json.dumps(existing, indent=2))
+    # Delegates to settings_store so every writer of user_config.json goes
+    # through the same lock — a second, separate lock here previously let
+    # concurrent writes to /api/ingest-config and /api/settings/app-config
+    # race and silently drop one side's update.
+    _settings_store.save(data)
 
 @app.route('/api/ingest-config', methods=['GET', 'POST'])
 def ingest_config():
@@ -1435,45 +1437,6 @@ def get_celery_queue():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# CELERY UPGRADE — Redis pub/sub bridge for Socket.IO events
-# ═══════════════════════════════════════════════════════════════════
-def _redis_pubsub_bridge():
-    """
-    Background task: subscribe to Redis 'socketio_bridge' channel and
-    re-emit events to all connected Socket.IO clients.
-
-    This bridges events published from Celery workers into the Flask
-    Socket.IO server.
-    """
-    if not _celery_available:
-        return
-
-    try:
-        import json as _json
-        import redis as _redis_lib
-        from celery_app import REDIS_URL
-
-        r = _redis_lib.Redis.from_url(REDIS_URL, socket_connect_timeout=2)
-        pubsub = r.pubsub()
-        pubsub.subscribe("socketio_bridge")
-        logger.info("Redis pub/sub bridge started")
-
-        for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            try:
-                payload = _json.loads(message["data"])
-                event = payload.get("event")
-                data = payload.get("data")
-                if event and data:
-                    socketio.emit(event, data)
-            except Exception:
-                pass
-    except Exception as e:
-        logger.warning(f"Redis pub/sub bridge failed: {e} — Celery events won't reach frontend")
-
-
-# ═══════════════════════════════════════════════════════════════════
 # MUSICBRAINZ — Library retag routes (Task 3)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -1656,34 +1619,17 @@ def _storage_monitor():  # NOTIFICATION
         except Exception as e:  # NOTIFICATION
             logger.error(f"[notifications] Storage monitor error: {e}")  # NOTIFICATION
         time.sleep(1800)  # NOTIFICATION — check every 30 minutes
-def _with_timeout(fn, seconds=8):
-    """Run fn() in a daemon thread with a wall-clock timeout. Raises TimeoutError on expiry."""
-    import threading
-    result = [None]
-    exc = [None]
-
-    def _run():
-        try:
-            result[0] = fn()
-        except Exception as e:
-            exc[0] = e
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    t.join(seconds)
-    if t.is_alive():
-        raise TimeoutError(f"External API call timed out after {seconds}s")
-    if exc[0]:
-        raise exc[0]
-    return result[0]
 @app.route('/api/retag-catchall-track', methods=['POST'])
 def retag_catchall_track():
     """Retry genre classification for one catch-all track using the full fallback chain."""
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     filepath = (data.get("filepath") or "").strip()
     if not filepath:
         return jsonify({"error": "filepath required"}), 400
     full_path = os.path.join(BASE_DOWNLOAD_DIR, filepath) if not os.path.isabs(filepath) else filepath
+    full_path = os.path.realpath(full_path)
+    if not full_path.startswith(os.path.realpath(BASE_DOWNLOAD_DIR) + os.sep):
+        return jsonify({"error": "Access denied"}), 403
     if not os.path.isfile(full_path):
         # Fallback: scan the parent folder for a file whose stem starts with the
         # requested stem — catches old title-only filenames when the frontend sends
@@ -1699,186 +1645,19 @@ def retag_catchall_track():
             full_path = _fallback
         else:
             return jsonify({"error": "File not found"}), 404
-    try:
-        from services.gemini_service import identify_audio, GeminiQuotaExceeded
-        from services.genre_router import normalize_genre, _library_path, resolve_genre_folder_with_confidence
-        import shutil as _shutil
-        from mutagen.id3 import ID3
 
-        # Read artist from ID3
-        artist_name = ""
-        try:
-            _id3 = ID3(full_path)
-            artist_name = str(_id3.get("TPE1", "")).strip()
-        except Exception:
-            pass
+    from services.catchall_reclassifier import classify_and_route_catchall_track
+    result = classify_and_route_catchall_track(full_path, dry_run=False)
 
-        genre_path = None
-        route_source = "unknown"
-
-        # ── 1. ARTIST_GENRE_OVERRIDE (instant, no API) ──────────────────────
-        if artist_name:
-            from services.genre_router import normalize_artist_key as _nak
-            override = config.ARTIST_GENRE_OVERRIDE.get(_nak(artist_name))
-            if override:
-                canonical = normalize_genre(override)
-                genre_path = _library_path(canonical) if canonical else None
-                route_source = "artist_override"
-
-        # Read title from ID3 once (used by multiple fallback steps)
-        title_tag = ""
-        try:
-            title_tag = str(_id3.get("TIT2", "")).strip()
-        except Exception:
-            pass
-
-        # ── 2. Spotify artist search ─────────────────────────────────────────
-        if not genre_path and artist_name and artist_name.lower() not in ("unknown", "electronic", ""):
-            try:
-                def _sp2_search():
-                    s = spotify_service.sp.search(q=artist_name, type="artist", limit=1)
-                    its = s.get("artists", {}).get("items", [])
-                    aid = its[0]["id"] if its else ""
-                    return resolve_genre_folder_with_confidence(aid, artist_name, spotify_service.sp)
-                folder, conf, src = _with_timeout(_sp2_search)
-                if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
-                    genre_path = folder
-                    route_source = src
-                    logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via {src} ({conf:.0%})")
-            except Exception as e:
-                logger.debug(f"[retag-catchall-track] Spotify artist chain failed for '{artist_name}': {e}")
-
-        # ── 3. Spotify title-only search (works when artist tag is wrong) ────
-        if not genre_path and title_tag:
-            try:
-                def _sp3_search():
-                    return spotify_service.sp.search(q=f"track:{title_tag}", type="track", limit=5)
-                results = _with_timeout(_sp3_search)
-                tracks = results.get("tracks", {}).get("items", [])
-                for t in tracks:
-                    sp_artist = t.get("artists", [{}])[0].get("name", "")
-                    if not sp_artist:
-                        continue
-                    artist_id = t.get("artists", [{}])[0].get("id", "")
-                    folder, conf, src = resolve_genre_folder_with_confidence(
-                        artist_id, sp_artist, spotify_service.sp
-                    )
-                    if folder.startswith("Library/") and folder != "Library/Electronic" and conf >= 0.5:
-                        genre_path = folder
-                        route_source = f"spotify_title/{src}"
-                        # Fix the corrupted artist tag while we're here
-                        try:
-                            from mutagen.id3 import TPE1
-                            _id3["TPE1"] = TPE1(encoding=3, text=sp_artist)
-                            _id3.save(full_path)
-                        except Exception:
-                            pass
-                        logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via title search (artist corrected to '{sp_artist}')")
-                        break
-            except Exception as e:
-                logger.debug(f"[retag-catchall-track] Spotify title search failed: {e}")
-
-        # ── 4. Last.fm tag lookup (free, no quota) ──────────────────────────
-        if not genre_path:
-            try:
-                from services.lastfm_service import lookup_genre as _lastfm_lookup
-                if title_tag and artist_name:
-                    raw = _with_timeout(lambda: _lastfm_lookup(title_tag, artist_name))
-                    if raw:
-                        canonical = normalize_genre(raw)
-                        _lp = _library_path(canonical) if canonical else None
-                        if _lp and _lp != "Library/Electronic":
-                            genre_path = _lp
-                            route_source = "lastfm"
-                            logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via lastfm")
-            except Exception as e:
-                logger.debug(f"[retag-catchall-track] Last.fm failed: {e}")
-
-        # ── 5. MusicBrainz search (free, no quota) ──────────────────────────
-        if not genre_path and title_tag:
-            try:
-                from services.musicbrainz_service import lookup_by_search as _mb_search
-                mb_raw = _with_timeout(lambda: _mb_search(title_tag, artist_name))
-                if mb_raw:
-                    canonical = normalize_genre(mb_raw)
-                    _lp = _library_path(canonical) if canonical else None
-                    if _lp and _lp != "Library/Electronic":
-                        genre_path = _lp
-                        route_source = "musicbrainz"
-                        logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via musicbrainz")
-            except Exception as e:
-                logger.debug(f"[retag-catchall-track] MusicBrainz search failed: {e}")
-
-        # ── 6. AcoustID fingerprint (free, no quota if key configured) ───────
-        if not genre_path:
-            try:
-                from services.musicbrainz_service import lookup_by_fingerprint as _mb_fp
-                fp_raw = _with_timeout(lambda: _mb_fp(full_path), seconds=15)
-                if fp_raw:
-                    canonical = normalize_genre(fp_raw)
-                    _lp = _library_path(canonical) if canonical else None
-                    if _lp and _lp != "Library/Electronic":
-                        genre_path = _lp
-                        route_source = "acoustid"
-                        logger.info(f"[retag-catchall-track] {Path(full_path).name} → {genre_path} via acoustid")
-            except Exception as e:
-                logger.debug(f"[retag-catchall-track] AcoustID lookup failed: {e}")
-
-        # ── 7. Gemini (last resort — costs daily quota) ──────────────────────
-        if not genre_path:
-            from services.gemini_service import remaining_quota as _remaining_quota
-            if _remaining_quota() == 0:
-                return jsonify({"moved": False, "reason": "Could not classify via steps 1-6 and Gemini quota is exhausted"}), 200
-            gemini = identify_audio(full_path)
-            raw = gemini.get("gemini_genre", "")
-            if raw:
-                canonical = normalize_genre(raw)
-                genre_path = _library_path(canonical) if canonical else None
-                route_source = "gemini"
-
-        if not genre_path:
-            return jsonify({"moved": False, "reason": f"Could not classify (source={route_source})"}), 200
-
-        dest_dir = Path(BASE_DOWNLOAD_DIR) / genre_path
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        src_path = Path(full_path)
-        dest = dest_dir / src_path.name
-
-        # Already in the correct folder — mark as reviewed so it drops from the catchall
-        if src_path.resolve() == dest.resolve():
-            try:
-                from mutagen.id3 import TXXX as _TXXX
-                _tags = ID3(str(src_path))
-                _tags.add(_TXXX(encoding=3, desc="catchall_reviewed", text=["1"]))
-                _tags.save()
-            except Exception:
-                pass
-            return jsonify({"moved": False, "confirmed": True, "reason": "already in correct folder", "new_folder": genre_path}), 200
-
-        _shutil.move(str(src_path), str(dest))
-        try:
-            tags = ID3(str(dest))
-            tags.delall("TXXX:routing_source")
-            tags.save()
-        except Exception:
-            pass
-        try:
-            from database import get_library_index_collection
-            col = get_library_index_collection()
-            if col is not None:
-                col.update_one(
-                    {"final_path": full_path},
-                    {"$set": {"final_path": str(dest), "genre_folder": genre_path}},
-                )
-        except Exception:
-            pass
-        return jsonify({"moved": True, "new_folder": genre_path, "source": route_source}), 200
-    except GeminiQuotaExceeded as e:
-        logger.warning(f"[retag-catchall-track] quota exhausted: {e}")
-        return jsonify({"moved": False, "reason": str(e), "quota_exhausted": True}), 200
-    except Exception as e:
-        logger.error(f"[retag-catchall-track] {e}")
-        return jsonify({"moved": False, "reason": str(e), "quota_exhausted": False}), 200
+    if result["reason"] == "already in correct folder":
+        return jsonify({"moved": False, "confirmed": True, "reason": result["reason"], "new_folder": result["new_folder"]}), 200
+    if not result["moved"]:
+        return jsonify({
+            "moved": False,
+            "reason": result["reason"],
+            "quota_exhausted": result["quota_exhausted"],
+        }), 200
+    return jsonify({"moved": True, "new_folder": result["new_folder"], "source": result["source"]}), 200
 @app.route('/api/stop-sync', methods=['POST'])
 def stop_sync():
     """Signal the ingest monitor to stop after the current track."""
@@ -2001,12 +1780,11 @@ if __name__ == '__main__':
             app._auto_thread_started = True
             logger.info("Auto-downloader background task started")
 
-        # CELERY UPGRADE — Start Redis pub/sub bridge if Celery is available
-        if _celery_available:
-            import threading
-            bridge_thread = threading.Thread(target=_redis_pubsub_bridge, daemon=True)
-            bridge_thread.start()
-            logger.info("Redis pub/sub bridge thread started")
+        # NOTE: the Redis→Socket.IO bridge for Celery events is already started
+        # unconditionally at import time via start_socketio_bridge(socketio)
+        # above — starting a second bridge thread here duplicated every
+        # Celery-published event (progress, download_complete, etc.) to the
+        # frontend whenever this module was run directly with Celery available.
 
         # NOTIFICATION — Start storage monitor background task
         socketio.start_background_task(target=_storage_monitor)  # NOTIFICATION

@@ -13,11 +13,24 @@ Collections:  # MUSICBRAINZ
 # MUSICBRAINZ — entire file is new
 
 import os  # MUSICBRAINZ
+import re
 import threading  # MUSICBRAINZ
 from datetime import datetime, timedelta, timezone  # MUSICBRAINZ
 
+from dotenv import load_dotenv
 from pymongo import MongoClient, ASCENDING, DESCENDING  # MUSICBRAINZ
 from pymongo.errors import ConnectionFailure  # MUSICBRAINZ
+
+# Phase 1E hardening: this module used to read MONGODB_URI via bare
+# os.getenv() and relied on *something else* (config.py's own load_dotenv())
+# having already loaded backend/.env into the process environment first. Any
+# standalone script that imports database.py directly — without importing
+# config.py or app.py first, or without exporting the env var itself — got
+# no error, just a MONGODB_URI that silently fell through to the
+# mongodb://localhost:27017 default below (see MongoConfigurationError).
+# Calling load_dotenv() here too makes this module self-sufficient the same
+# way config.py already is; it is a no-op if the variables are already set.
+load_dotenv()
 
 # MUSICBRAINZ — Loguru / stdlib fallback
 try:  # MUSICBRAINZ
@@ -26,10 +39,45 @@ except ImportError:  # MUSICBRAINZ
     import logging  # MUSICBRAINZ
     logger = logging.getLogger(__name__)  # MUSICBRAINZ
 
+
+def _redact_uri(uri: str) -> str:
+    """Mask the user:password part of a connection URI so it is safe to log.
+
+    ``mongodb+srv://user:secret@host/db`` -> ``mongodb+srv://***:***@host/db``.
+    The startup log line used to print the raw URI, putting the database
+    password in terminal scrollback, log files and anything pasted from them.
+    """
+    try:
+        return re.sub(r"(://)[^/@\s]+@", r"\1***:***@", uri or "")
+    except Exception:
+        return "<redacted>"
+
+
 # ═══════════════════════════════════════════════════════════════════
 # MUSICBRAINZ — Configuration
 # ═══════════════════════════════════════════════════════════════════
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")  # MUSICBRAINZ
+
+class MongoConfigurationError(RuntimeError):
+    """Raised when MONGODB_URI cannot be resolved safely.
+
+    Phase 1E hardening. This module previously defaulted MONGODB_URI to
+    mongodb://localhost:27017 whenever the environment variable was unset —
+    silently, with no error. Every standalone script that imported this
+    module without MONGODB_URI already exported (Phase 1B/1C/1D all hit
+    this) got no exception, just a client quietly pointed at an empty local
+    database instead of the real one — either a 10s connection stall if
+    nothing is listening on localhost, or worse, real results from an
+    unrelated local Mongo if one happens to be running.
+
+    Missing configuration now fails here, at first connection, instead.
+    Explicitly setting MONGODB_URI=mongodb://localhost:27017 is still
+    honored — this only removes the *silent, unrequested* fallback.
+    """
+
+
+# No default here — an unset/empty MONGODB_URI must fail loudly in
+# _get_db(), never fall through to a same-looking-but-wrong local database.
+MONGODB_URI = os.getenv("MONGODB_URI")  # MUSICBRAINZ
 MONGODB_DB = os.getenv("MONGODB_DB", "spotify_downloader")  # MUSICBRAINZ
 
 # MUSICBRAINZ — Module-level state
@@ -51,6 +99,14 @@ def _get_db():  # MUSICBRAINZ
     with _lock:  # MUSICBRAINZ
         if _initialized and _db is not None:  # MUSICBRAINZ
             return _db  # MUSICBRAINZ
+        if not MONGODB_URI:
+            raise MongoConfigurationError(
+                "MONGODB_URI is not set. Set it in backend/.env or the "
+                "process environment before connecting to MongoDB — this "
+                "module no longer falls back to mongodb://localhost:27017 "
+                "silently. If a local MongoDB is genuinely what you want, "
+                "set MONGODB_URI=mongodb://localhost:27017 explicitly."
+            )
         _client = MongoClient(  # MUSICBRAINZ
             MONGODB_URI,  # MUSICBRAINZ
             serverSelectionTimeoutMS=10000,  # Atlas M0 SRV cold-connect needs >5s
@@ -77,7 +133,7 @@ def _get_db():  # MUSICBRAINZ
         _db = _client[MONGODB_DB]  # MUSICBRAINZ
         _ensure_indexes()  # MUSICBRAINZ
         _initialized = True  # MUSICBRAINZ
-        logger.info(f"[database] Connected to MongoDB: {MONGODB_URI}/{MONGODB_DB}")  # MUSICBRAINZ
+        logger.info(f"[database] Connected to MongoDB: {_redact_uri(MONGODB_URI)}/{MONGODB_DB}")  # MUSICBRAINZ
         return _db  # MUSICBRAINZ
 
 
@@ -451,6 +507,14 @@ def is_indexed(identity_key: str) -> bool:
     """Return True if identity_key exists in the library index."""
     col = get_library_index_collection()
     return col.count_documents({"identity_key": identity_key}, limit=1) > 0
+
+
+def lookup_by_identity_key(identity_key: str) -> dict | None:
+    """Return the library_index document for an identity_key, or None."""
+    if not identity_key:
+        return None
+    col = get_library_index_collection()
+    return col.find_one({"identity_key": identity_key}, {"_id": 0})
 
 
 def lookup_by_spotify_id(spotify_id: str) -> dict | None:
