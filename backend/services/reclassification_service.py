@@ -625,7 +625,7 @@ def diagnose_needsreview_move(
         "bulk_resolve_default_dry_run": True,
         "maintenance_worker_calls":     "run_reclassification(dry_run=False) — NOT bulk_resolve",
         "bulk_resolve_live_callers":    "NONE — bulk_resolve_needsreview_artists never called with dry_run=False",
-        "fix":                          "call bulk_resolve_needsreview_artists(dry_run=False) from CLI or Telegram",
+        "fix":                          "call bulk_resolve_needsreview_artists(dry_run=False) from the CLI",
     }
 
     return _write_diagnostics(diag)

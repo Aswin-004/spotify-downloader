@@ -107,13 +107,14 @@ class TestDecideAction(unittest.TestCase):
         self.assertEqual(self.go("House", decision("Trance", 0.4))[0], "unknown")
 
     def test_the_indian_boundary_is_taste_so_it_is_never_a_move(self):
-        for a, b in (("Bollywood", "Punjabi"), ("Punjabi", "Bollywood"), ("Bollywood", "Tamil")):
+        for a, b in (("Bollywood", "Punjabi"), ("Punjabi", "Bollywood"), ("Bollywood", "Tamil"),
+                     ("Punjabi", "Indian Hip Hop"), ("Indian Hip Hop", "Bollywood")):     # Punjabi rap vs Indian rap: taste
             action, proposed, note = self.go(a, decision(b, 1.0))
             self.assertEqual((action, proposed), ("review", b))
             self.assertIn("boundary", note)
 
     def test_pop_rnb_hiphop_latin_overlap_so_moves_between_them_are_taste_too(self):
-        for a, b in (("Pop", "R&B"), ("Pop", "Latin"), ("Hip Hop", "Pop"), ("Latin", "Hip Hop")):
+        for a, b in (("Pop", "R&B"), ("Pop", "Latin"), ("International Hip Hop", "Pop"), ("Latin", "International Hip Hop")):
             action, proposed, note = self.go(a, decision(b, 1.0))
             self.assertEqual((action, proposed), ("review", b), (a, b))
             self.assertIn("boundary", note)
@@ -134,7 +135,8 @@ class TestDecideAction(unittest.TestCase):
 
     def test_crossing_into_or_out_of_the_indian_family_is_not_the_boundary(self):
         self.assertEqual(self.go("House", decision("Bollywood", 1.0))[0], "move")
-        self.assertEqual(self.go("Punjabi", decision("Hip Hop", 1.0))[0], "move")
+        self.assertEqual(self.go("Punjabi", decision("International Hip Hop", 1.0))[0], "move")
+        self.assertEqual(self.go("International Hip Hop", decision("Indian Hip Hop", 1.0))[0], "move")   # crosses families
 
     def test_a_destination_that_is_not_a_crate_is_not_used(self):
         self.assertEqual(self.go("House", decision("Nonsense", 1.0))[0], "unknown")
@@ -458,7 +460,9 @@ class TestHandPlacedProtection(unittest.TestCase):
 
     def test_tag_text_maps_to_crates(self):
         for text, want in (("Electronic", "Electronic"), ("Drum and Bass", "Drum & Bass"), ("drum & bass", "Drum & Bass"),
-                           ("Hip-Hop", "Hip Hop"), ("RNB", "R&B"), ("UK Garage", "UK Garage"), ("Psytrance", "Trance"),
+                           ("Hip-Hop", "International Hip Hop"), ("Hip Hop", "International Hip Hop"),   # tags written before the split
+                           ("Desi Hip Hop", "Indian Hip Hop"), ("Indian Hip Hop", "Indian Hip Hop"),
+                           ("RNB", "R&B"), ("UK Garage", "UK Garage"), ("Psytrance", "Trance"),
                            ("", ""), ("Some Odd Genre", ""), ("  house ", "House")):
             self.assertEqual(lr.tag_folder_of(text), want, text)
 

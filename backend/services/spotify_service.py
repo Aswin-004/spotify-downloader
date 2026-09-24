@@ -36,6 +36,39 @@ api_usage = {
 _usage_lock = threading.Lock()
 
 
+def _playlist_item_to_track(item):
+    """One playlist entry -> the track dict the rest of the app uses; None for local files / episodes / gaps."""
+    if not item:
+        return None
+    track = item.get("item") or item.get("track")
+    if not (track and track.get("id") and track.get("type") == "track"):
+        return None
+    out = {
+        "id": track["id"],
+        "title": track["name"],
+        "artist": track["artists"][0]["name"] if track.get("artists") else "Unknown",
+        "artist_id": track["artists"][0]["id"] if track.get("artists") else "",
+        "duration_ms": track.get("duration_ms"),
+        "album_art_url": (track.get("album", {}).get("images") or [{}])[0].get("url"),
+        # release_date lives under album, not on the track object itself —
+        # feeds downloader_service.download_track()'s spotify_release_date
+        # param, which persists it as a MusicBrainz-miss fallback release
+        # year (see tagger_service.py).
+        "release_date": (track.get("album") or {}).get("release_date", ""),
+    }
+    if item.get("added_at"):
+        out["added_at"] = item["added_at"]
+    return out
+
+
+def _clean_playlist_id(playlist_id):
+    """Accepts an id, a spotify: URI or a full open.spotify.com URL."""
+    text = str(playlist_id).strip()
+    if "?" in text:
+        text = text.split("?", 1)[0]
+    return text.rstrip("/").split("/")[-1].split(":")[-1]
+
+
 class SpotifyService:
     """Service for interacting with Spotify API"""
     
@@ -368,6 +401,41 @@ class SpotifyService:
             logger.error(f"Error fetching playlist: {str(e)}")
             raise ValueError(f"Error fetching playlist: {str(e)}")
 
+    def get_playlist_meta(self, playlist_id):
+        """ONE request: {'snapshot_id', 'total', 'name', 'owner_id'} for a playlist.
+
+        The snapshot_id is Spotify's version stamp — it changes whenever a song is added, removed or
+        moved — so the ingest watcher can ask "did anything change?" for the price of one request
+        instead of re-reading the whole playlist (see services/playlist_delta.py).
+        """
+        if is_rate_limited():
+            raise ValueError("Spotify API cooling down.")
+        clean_id = _clean_playlist_id(playlist_id)
+        sp_client = self._get_user_sp() or self.sp
+        pl = self._call_with_backoff(
+            sp_client.playlist, clean_id,
+            fields="snapshot_id,name,owner(id),tracks(total),items(total)",
+        )
+        counted = pl.get("items") if isinstance(pl.get("items"), dict) else pl.get("tracks")
+        return {
+            "snapshot_id": pl.get("snapshot_id") or "",
+            "total": int((counted or {}).get("total") or 0),
+            "name": pl.get("name") or "",
+            "owner_id": (pl.get("owner") or {}).get("id") or "",
+        }
+
+    def get_playlist_window(self, playlist_id, offset, limit):
+        """`limit` (max 100) songs starting at `offset`, in the same shape as get_playlist_tracks_by_id()."""
+        if is_rate_limited():
+            raise ValueError("Spotify API cooling down.")
+        clean_id = _clean_playlist_id(playlist_id)
+        sp_client = self._get_user_sp() or self.sp
+        page = self._call_with_backoff(
+            sp_client.playlist_items, clean_id,
+            limit=min(int(limit), 100), offset=int(offset), additional_types=["track"],
+        )
+        return [t for t in (_playlist_item_to_track(i) for i in page.get("items", [])) if t]
+
     def get_playlist_tracks_by_id(self, playlist_id, force_refresh=False):
         """Fetch tracks from a playlist by ID (cache-first).
         Uses user OAuth (required since 2025), falls back to client credentials.
@@ -403,23 +471,9 @@ class SpotifyService:
             tracks = []
             while results:
                 for item in results["items"]:
-                    if not item:
-                        continue
-                    track = item.get("item") or item.get("track")
-                    if track and track.get("id") and track.get("type") == "track":
-                        tracks.append({
-                            "id": track["id"],
-                            "title": track["name"],
-                            "artist": track["artists"][0]["name"] if track.get("artists") else "Unknown",
-                            "artist_id": track["artists"][0]["id"] if track.get("artists") else "",
-                            "duration_ms": track.get("duration_ms"),
-                            "album_art_url": (track.get("album", {}).get("images") or [{}])[0].get("url"),
-                            # release_date lives under album, not on the track object itself —
-                            # feeds downloader_service.download_track()'s spotify_release_date
-                            # param, which persists it as a MusicBrainz-miss fallback release
-                            # year (see tagger_service.py).
-                            "release_date": (track.get("album") or {}).get("release_date", ""),
-                        })
+                    track = _playlist_item_to_track(item)
+                    if track:
+                        tracks.append(track)
                 if results.get("next"):
                     results = self._call_with_backoff(sp_client.next, results)
                 else:

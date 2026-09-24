@@ -8,11 +8,11 @@ organises them into genre-based folders. Built for DJs who want a clean, sorted 
 ## Features
 
 - **Auto-sync** — monitors a Spotify playlist and downloads new tracks automatically
-- **Smart genre routing** — 7-step chain (artist override → Spotify → Last.fm → MusicBrainz → AcoustID → Gemini) routes each track to the right folder
+- **Smart genre routing** — a genre playlist you own → your artist lists and learned memory → verified evidence (Last.fm / MusicBrainz / iTunes) → a Groq guess → the catch-all folder (see `docs/AUTOMATION.md`)
 - **Custom folder mapping** — point the app at your existing DJ folder structure
 - **Album artwork** — embeds Spotify cover art as ID3 APIC frames
 - **Celery + Redis** — optional async task queue with automatic fallback to threading
-- **Telegram notifications** — alerts on download completion and storage warnings
+- **Discord notifications** (optional) — alerts on download completion and storage warnings
 
 ---
 
@@ -63,10 +63,10 @@ Open **http://localhost:5000** in your browser.
 | Key | Where to get | Free tier |
 |-----|-------------|-----------|
 | `SPOTIFY_CLIENT_ID` / `SECRET` | [developer.spotify.com](https://developer.spotify.com/dashboard) | Yes |
-| `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com/app/apikey) | 15 calls/day |
+| `GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) | Yes (last-resort genre guess) |
 | `LASTFM_API_KEY` | [last.fm/api](https://www.last.fm/api/account/create) | Yes |
 | `ACOUSTID_API_KEY` | [acoustid.org](https://acoustid.org/api-key) | Yes |
-| `TELEGRAM_BOT_TOKEN` | @BotFather on Telegram | Optional |
+| `DISCORD_WEBHOOK_URL` | Discord → Server Settings → Integrations → Webhooks | Optional |
 
 All keys go in `backend/.env` — copy `backend/.env.example` as a template.
 
@@ -126,9 +126,9 @@ BASE_DOWNLOAD_DIR/
 | **Files** | Browse downloaded MP3s by genre folder |
 | **Library** | Search library with album art thumbnails |
 | **Analytics** | Stats, top artists, genre distribution |
-| **Review** | Retry catch-all tracks when Gemini quota resets |
-| **Maintenance** | Reorganise library, repair index, backfill Gemini tags |
-| **Settings** | Custom folder mappings, Telegram notifications |
+| **Review** | Retry catch-all tracks |
+| **Maintenance** | Reorganise library, repair index, backfill AI genre tags |
+| **Settings** | Custom folder mappings, API keys |
 | **Guide** | In-app getting-started guide |
 
 ---

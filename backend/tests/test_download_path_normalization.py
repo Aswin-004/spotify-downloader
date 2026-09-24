@@ -87,6 +87,8 @@ class DownloadPathNormalizationTestCase(unittest.TestCase):
         subset of routing paths."""
         branch_markers = [
             'final_folder = os.path.join(target_base, force_folder)',           # manual override
+            'final_folder = os.path.join(BASE_DOWNLOAD_DIR, _forced_folder)',   # genre playlist (forced_genre)
+            'final_folder = os.path.join(BASE_DOWNLOAD_DIR, _hip_hop_folder(artist, title))',  # hip hop origin split
             '_mem_lib_path = _lib_p(_mem_genre)',                                # artist_memory
             'final_folder = os.path.join(BASE_DOWNLOAD_DIR, mapped)',           # MB genre
             'final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)',      # Gemini fallback (both call sites)

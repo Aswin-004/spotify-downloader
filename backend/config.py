@@ -36,10 +36,8 @@ class Config:
     SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
     SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 
-    # Gemini API (legacy — kept so old references don't break)
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-
-    # Groq API (replaces Gemini for genre classification — free tier, 14400 calls/day)
+    # Groq API: the AI used for the last-resort genre guess (services/gemini_service.py is a legacy
+    # file name — it calls Groq, never Gemini). Free tier, 14400 calls/day.
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     # Model was previously hardcoded as "llama-3.1-8b-instant" in gemini_service.py,
     # then briefly defaulted to "llama-3.3-70b-versatile" — Groq rejected BOTH for
@@ -73,7 +71,7 @@ class Config:
     )
 
     # Auto-sync interval in seconds
-    CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
+    CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "600"))   # seconds; the ingest watcher never goes below 600
     
     # Download settings
     BASE_DOWNLOAD_DIR = os.getenv("BASE_DOWNLOAD_DIR", os.path.join(os.path.dirname(__file__), "downloads"))
@@ -298,8 +296,14 @@ class Config:
         "mumbai indie":         "Bollywood",
         "desi":                 "Bollywood",
         # ── Indian (non-Bollywood) ────────────────────────────
-        "desi hip hop":         "Indian",
-        "indian hip hop":       "Indian",
+        "desi hip hop":         "Indian Hip Hop",
+        "indian hip hop":       "Indian Hip Hop",
+        "indian hip-hop":       "Indian Hip Hop",   # Last.fm writes the hyphenated form
+        "desi hip-hop":         "Indian Hip Hop",
+        "hindi hip hop":        "Indian Hip Hop",
+        "hindi rap":            "Indian Hip Hop",
+        "desi rap":             "Indian Hip Hop",
+        "dhh":                  "Indian Hip Hop",   # Last.fm's tag for Desi Hip Hop
         "indian pop":           "Indian",
         # ── Country / Folk ────────────────────────────────────
         "country pop":          "Country",
@@ -356,7 +360,7 @@ class Config:
         "sufr":                 "Indian",
         "karun":                "Indian",
         # ── Hip Hop ──────────────────────────────────────────────────────
-        "seedhe maut":          "Hip Hop",
+        "seedhe maut":          "Indian Hip Hop",
         # ── R&B / Pop ────────────────────────────────────────────────────
         "jay sean":             "R&B",
         # ── Electronic ───────────────────────────────────────────────────
@@ -529,7 +533,8 @@ class Config:
         "mc stan":              "Indian Hip Hop",
         "prabh deep":           "Indian Hip Hop",
         "brodha v":             "Indian Hip Hop",
-        "nucleya":              "Indian Hip Hop",
+        "nucleya":              "Dubstep",          # Indian bass music, filed with Skrillex / Hamdi (user's choice)
+        "talha anjum":          "Indian Hip Hop",   # desi hip hop = Indian Hip Hop crate
         # ── Global Hip Hop additions ──────────────────────────────────────
         "kendrick lamar":       "Hip Hop",
         "drake":                "Hip Hop",

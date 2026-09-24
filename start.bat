@@ -9,6 +9,14 @@ echo  =============================================
 echo.
 
 REM ── Step 1: Build frontend ────────────────────────────────────────────────
+REM Already running? Never start a second copy: two copies would each download every new song.
+netstat -ano | findstr /R /C:":5000 .*LISTENING" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo  The app is already running - opening it in your browser.
+    start "" http://localhost:5000
+    exit /b 0
+)
+
 echo  [1/3] Building frontend...
 cd /d "%~dp0frontend-react"
 
@@ -57,7 +65,7 @@ echo.
 REM ── Step 3: Start backend ─────────────────────────────────────────────────
 echo  [3/3] Starting backend on http://localhost:5000 ...
 
-REM Prefer venv Python so all installed packages (telegram bot, etc.) are available
+REM Prefer venv Python so all installed packages are available
 if exist "%~dp0.venv\Scripts\python.exe" (
     set PYTHON="%~dp0.venv\Scripts\python.exe"
 ) else (

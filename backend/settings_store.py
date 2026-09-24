@@ -32,17 +32,15 @@ _PUBLIC_KEYS = {
     "redirect_uri",
     "fpcalc_path",
     "notify_storage_threshold_mb",
-    "telegram_chat_id",
 }
 
 # ── Keys that hold secrets — returned masked unless full=True ─────────────────
 _SECRET_KEYS = {
     "spotify_client_id",
     "spotify_client_secret",
-    "gemini_api_key",
+    "groq_api_key",
     "lastfm_api_key",
     "acoustid_api_key",
-    "telegram_bot_token",
 }
 
 # ── Defaults read from .env (never overwrite user values, only fill gaps) ────
@@ -52,12 +50,10 @@ def _env_defaults() -> dict:
         "ingest_playlist_id":          os.getenv("INGEST_PLAYLIST_ID", ""),
         "spotify_client_id":           os.getenv("SPOTIFY_CLIENT_ID", ""),
         "spotify_client_secret":       os.getenv("SPOTIFY_CLIENT_SECRET", ""),
-        "gemini_api_key":              os.getenv("GEMINI_API_KEY", ""),
+        "groq_api_key":                os.getenv("GROQ_API_KEY", ""),
         "lastfm_api_key":              os.getenv("LASTFM_API_KEY", ""),
         "acoustid_api_key":            os.getenv("ACOUSTID_API_KEY", ""),
         "fpcalc_path":                 os.getenv("FPCALC_PATH", ""),
-        "telegram_bot_token":          os.getenv("TELEGRAM_BOT_TOKEN", ""),
-        "telegram_chat_id":            os.getenv("TELEGRAM_CHAT_ID", ""),
         "check_interval":              int(os.getenv("CHECK_INTERVAL", "500")),
         "redirect_uri":                os.getenv("REDIRECT_URI", "http://127.0.0.1:8888/callback"),
         "notify_storage_threshold_mb": int(os.getenv("NOTIFY_STORAGE_THRESHOLD_MB", "100000")),
@@ -139,9 +135,9 @@ def apply_to_config():
         _cfg.SPOTIFY_CLIENT_SECRET = settings["spotify_client_secret"]
         os.environ["SPOTIFY_CLIENT_SECRET"] = settings["spotify_client_secret"]
 
-    if settings.get("gemini_api_key"):
-        _cfg.GEMINI_API_KEY = settings["gemini_api_key"]
-        os.environ["GEMINI_API_KEY"] = settings["gemini_api_key"]
+    if settings.get("groq_api_key"):
+        _cfg.GROQ_API_KEY = settings["groq_api_key"]
+        os.environ["GROQ_API_KEY"] = settings["groq_api_key"]
 
     if settings.get("lastfm_api_key"):
         _cfg.LASTFM_API_KEY = settings["lastfm_api_key"]
@@ -152,11 +148,6 @@ def apply_to_config():
 
     if settings.get("fpcalc_path"):
         os.environ["FPCALC_PATH"] = settings["fpcalc_path"]
-
-    if settings.get("telegram_bot_token"):
-        os.environ["TELEGRAM_BOT_TOKEN"] = settings["telegram_bot_token"]
-    if settings.get("telegram_chat_id"):
-        os.environ["TELEGRAM_CHAT_ID"] = settings["telegram_chat_id"]
 
     if settings.get("ingest_playlist_id"):
         _cfg.INGEST_PLAYLIST_ID = settings["ingest_playlist_id"]

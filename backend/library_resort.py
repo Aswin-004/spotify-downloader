@@ -79,16 +79,17 @@ REPORTS_DIR = Path(__file__).resolve().parent / "reports"
 
 # Folders that are not genre crates (or that you curate by hand): never scanned.
 SKIP_FOLDERS = ("NeedsReview", "Quarantine", "Manual", "Duplicates", "_TO_DELETE", "PSY")
-INDIAN = frozenset({"Bollywood", "Punjabi", "Tamil"})     # moving between these is taste, not fact
-GLOBAL = frozenset({"Pop", "R&B", "Hip Hop", "Latin"})    # ditto: The Weeknd is Pop AND R&B
+INDIAN = frozenset({"Bollywood", "Punjabi", "Tamil", "Indian Hip Hop"})     # moving between these is taste, not fact
+GLOBAL = frozenset({"Pop", "R&B", "International Hip Hop", "Latin"})       # ditto: The Weeknd is Pop AND R&B
 
 MOVE_CONFIDENCE = 0.75
 REVIEW_CONFIDENCE = 0.50
 
-# folder -> ID3 genre text (mirrors backfill_tcon.py so the two never disagree)
+# folder -> the ID3 genre (TCON) text written to a file when it is filed in that folder
 FOLDER_TO_TCON = {
     "Bollywood": "Bollywood", "Drum & Bass": "Drum and Bass", "Dubstep": "Dubstep",
-    "Electronic": "Electronic", "Grime": "Grime", "Hip Hop": "Hip Hop", "House": "House",
+    "Electronic": "Electronic", "Grime": "Grime", "House": "House",
+    "Indian Hip Hop": "Indian Hip Hop", "International Hip Hop": "International Hip Hop",
     "Latin": "Latin", "Pop": "Pop", "Punjabi": "Punjabi", "R&B": "R&B", "Tamil": "Tamil",
     "Techno": "Techno", "Trance": "Trance", "UK Garage": "UK Garage",
 }
@@ -98,7 +99,9 @@ _TRUTHY = {"y", "yes", "1", "true", "x", "ok", "move"}
 # genre-tag text -> crate. A file whose tag names a DIFFERENT crate than the one it sits in was, in
 # practice, moved by hand after the pipeline tagged it (measured: 124 such files on the real
 # library, incl. 72 whose tag still says "Electronic" — moved out of the catch-all by the user).
-_TCON_ALIASES = {"drum & bass": "Drum & Bass", "dnb": "Drum & Bass", "hiphop": "Hip Hop", "hip-hop": "Hip Hop",
+_TCON_ALIASES = {"drum & bass": "Drum & Bass", "dnb": "Drum & Bass", "hiphop": "International Hip Hop",
+                 "hip-hop": "International Hip Hop", "hip hop": "International Hip Hop",   # tags written before the split
+                 "desi hip hop": "Indian Hip Hop",
                  "rnb": "R&B", "garage": "UK Garage", "psytrance": "Trance", "psy": "Trance"}
 TCON_TO_FOLDER = {v.lower(): k for k, v in FOLDER_TO_TCON.items()} | _TCON_ALIASES
 
@@ -389,7 +392,8 @@ def decide_action(
     if current in INDIAN and answer not in INDIAN and _INDIAN_VERSION_RE.search(title or ""):
         return "review", answer, "the title says it is an Indian-language version — it stays in the Indian crates"
     if not artist_was_placeholder:
-        for family, label in ((INDIAN, "Bollywood/Punjabi/Tamil"), (GLOBAL, "Pop/R&B/Hip Hop/Latin")):
+        for family, label in ((INDIAN, "Bollywood/Punjabi/Tamil/Indian Hip Hop"),
+                              (GLOBAL, "Pop/R&B/International Hip Hop/Latin")):
             if current in family and answer in family:
                 return "review", answer, f"{label} boundary — a matter of taste, your call"
     if decision.verified and decision.confidence >= move_confidence:
@@ -1068,7 +1072,8 @@ def undo_manifest(
 # crate folder -> the canonical genre key the artist-memory service stores (a GENRE_TAXONOMY key)
 CRATE_TO_GENRE = {"Bollywood": "Bollywood", "Punjabi": "Punjabi", "Tamil": "Tamil", "House": "House", "Techno": "Techno",
                   "Trance": "Trance", "Drum & Bass": "Drum and Bass", "UK Garage": "UK Garage", "Dubstep": "Dubstep",
-                  "Grime": "Grime", "Hip Hop": "Hip Hop", "R&B": "R&B", "Pop": "Pop", "Latin": "Latin"}
+                  "Grime": "Grime", "Indian Hip Hop": "Indian Hip Hop", "International Hip Hop": "Hip Hop",
+                  "R&B": "R&B", "Pop": "Pop", "Latin": "Latin"}
 LEARN_MIN_TRACKS = 3
 LEARN_MIN_SHARE = 0.8
 

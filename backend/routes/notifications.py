@@ -16,17 +16,15 @@ notifications_bp = Blueprint("notifications", __name__)
 
 @notifications_bp.route("/api/notifications/test", methods=["POST"])
 def test_notifications_route():
-    """Send a test notification to Telegram + Discord."""
+    """Send a test notification to Discord."""
     try:
         from services.notifications_service import (
             test_notifications,
-            is_telegram_enabled,
             is_discord_enabled,
         )
         test_notifications()
         return jsonify({
             "message": "Test notification sent",
-            "telegram_enabled": is_telegram_enabled(),
             "discord_enabled": is_discord_enabled(),
         })
     except Exception as e:
@@ -38,7 +36,6 @@ def notifications_status():
     """Return which notification channels are enabled."""
     try:
         from services.notifications_service import (
-            is_telegram_enabled,
             is_discord_enabled,
             NOTIFY_ON_SUCCESS,
             NOTIFY_ON_FAILURE,
@@ -46,7 +43,6 @@ def notifications_status():
             STORAGE_THRESHOLD_MB,
         )
         return jsonify({
-            "telegram_enabled": is_telegram_enabled(),
             "discord_enabled": is_discord_enabled(),
             "notify_on_success": NOTIFY_ON_SUCCESS,
             "notify_on_failure": NOTIFY_ON_FAILURE,

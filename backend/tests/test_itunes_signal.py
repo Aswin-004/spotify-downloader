@@ -144,7 +144,7 @@ class TestItunesVote(unittest.TestCase):
 
     def test_specific_genres_map_to_crates(self):
         for genre, crate in (("House", "House"), ("Garage", "UK Garage"), ("Bollywood", "Bollywood"), ("Punjabi", "Punjabi"),
-                             ("Hip-Hop/Rap", "Hip Hop"), ("R&B/Soul", "R&B"), ("Drum & Bass", "Drum & Bass"),
+                             ("Hip-Hop/Rap", "International Hip Hop"), ("R&B/Soul", "R&B"), ("Drum & Bass", "Drum & Bass"),
                              ("Latin Urban", "Latin"), ("Urbano latino", "Latin")):
             d = classify(FakeFetchers(self.two(genre)), duration_s=200.0)
             self.assertEqual([v.label for v in d.votes], [crate], genre)

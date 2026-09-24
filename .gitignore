@@ -36,6 +36,12 @@ downloads/
 **/playlist_snapshots.json
 downloaded_tracks.json
 ingest_tracks.json
+# ingest automation state (this machine only): re-queue list, watch state, download checks, your genre playlists
+**/ingest_requeue.json
+**/ingest_tracks.before_*.json
+**/ingest_watch_state.json
+**/ingest_verify.json
+**/genre_playlists.json
 *.mp3
 *.wav
 *.m4a

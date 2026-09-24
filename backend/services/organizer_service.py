@@ -22,7 +22,7 @@ Non-remix tracks remain flat in the artist folder.
 Phase 9 — UI Instruction Layer
 --------------------------------
 ``routing_reason_text`` turns the opaque (folder, confidence, source) tuple
-into a short human sentence for display in the Telegram bot and web UI.
+into a short human sentence for display in the web UI.
 """
 
 import hashlib
@@ -278,7 +278,7 @@ def routing_reason_text(
 ) -> str:
     """
     Return a short, human-readable explanation of why a track was routed
-    to a specific folder.  Used by Telegram bot and web UI.
+    to a specific folder.  Used by the web UI.
 
     Args:
         folder:     Relative destination folder path.
@@ -326,7 +326,7 @@ def needs_review_guidance(artist: str = "", genre_suggestion: str = "") -> str:
     """
     Return actionable guidance for a track stuck in NeedsReview.
 
-    Called by the Telegram /needsreview command or the web UI review panel.
+    Called by the web UI review panel.
     """
     lines = [
         "**How to improve routing:**",

@@ -117,11 +117,16 @@ _TAG_RULES: List[Tuple[re.Pattern, str, float]] = [
                                                                            "UK Garage", 1.0),
         (r"\b(?:grime|uk drill)\b",                                        "Grime", 1.0),
         (r"\b(?:bollywood|hindi|filmi)\b",                                 "Bollywood", 1.0),
-        (r"\b(?:desi|telugu)\b",                                           "Bollywood", 0.8),
-        (r"\bindian\b",                                                    "Bollywood", 0.6),
+        (r"\b(?:desi|telugu)\b(?!\s+(?:hip ?hop|rap))",                    "Bollywood", 0.8),
+        (r"\bindian\b(?!\s+hip ?hop)",                                     "Bollywood", 0.6),
         (r"\b(?:punjabi|bhangra)\b",                                       "Punjabi", 1.0),
         (r"\b(?:tamil|kollywood)\b",                                       "Tamil", 1.0),
-        (r"\b(?:hip ?hop|rap)\b",                                          "Hip Hop", 0.9),
+        # Hip hop is one genre with TWO crates: the same tags describe Seedhe Maut and Kendrick Lamar.
+        # Explicitly Indian hip hop tags say so; every other hip hop tag says "hip hop", and
+        # split_hip_hop() then decides Indian vs international from where the artist is from.
+        (r"\b(?:desi hip ?hop|indian hip ?hop|hindi (?:hip ?hop|rap)|desi rap|dhh)\b",
+                                                                           "Indian Hip Hop", 1.0),
+        (r"\b(?:hip ?hop|rap)\b",                                          "International Hip Hop", 0.9),
         (r"\b(?:r&b|rnb)\b",                                               "R&B", 0.9),
         (r"\bsoul\b",                                                      "R&B", 0.4),   # also tags Indian film songs
         (r"\b(?:latin|latino|reggaeton|cumbia|salsa|bachata|urbano)\b",     "Latin", 0.9),
@@ -609,7 +614,48 @@ def collect_votes(
                     votes.append(Vote("llm", label, W_LLM))
             except Exception as exc:
                 logger.debug(f"[genre_evidence] llm failed for {path}: {exc}")
-    return [v for v in votes if v.weight > 0 and v.label not in CATCH_ALL_LABELS]
+    return split_hip_hop([v for v in votes if v.weight > 0 and v.label not in CATCH_ALL_LABELS])
+
+
+HIP_HOP_INTERNATIONAL = "International Hip Hop"
+HIP_HOP_INDIAN = "Indian Hip Hop"
+_INDIAN_LABELS = frozenset({"Bollywood", "Punjabi", "Tamil", HIP_HOP_INDIAN})
+# Signals that say nothing about where an ARTIST is from: a word in a title, or a remixer's crate.
+_NOT_ORIGIN_SOURCES = frozenset({"title_hint", "remixer"})
+_MIN_ORIGIN_WEIGHT = 0.3
+
+
+def split_hip_hop(votes: List[Vote]) -> List[Vote]:
+    """
+    Hip hop has two crates, Indian and international, and the tags for both are the same words. What
+    separates them is where the artist is from, and the evidence for that is any Indian signal among
+    the votes themselves: a curated entry, Indian tags (desi, hindi, punjabi, dhh ...), or Indian script.
+    If there is one, every generic hip hop vote is counted for Indian Hip Hop; otherwise it stays
+    international. Weak or title-only signals are not enough to reclassify an artist.
+    """
+    if not any(v.label == HIP_HOP_INTERNATIONAL for v in votes):
+        return votes
+    indian_origin = any(v.label in _INDIAN_LABELS and v.source not in _NOT_ORIGIN_SOURCES
+                        and v.weight >= _MIN_ORIGIN_WEIGHT for v in votes)
+    if not indian_origin:
+        return votes
+    return [Vote(v.source, HIP_HOP_INDIAN, v.weight, v.detail) if v.label == HIP_HOP_INTERNATIONAL else v
+            for v in votes]
+
+
+def is_indian_artist(artist: str, title: str = "", *, fetchers=None) -> bool:
+    """
+    Does ANY Indian signal exist for this artist (curated list, Indian tags, Indian script)? Used to pick
+    between the Indian Hip Hop and International Hip Hop crates when something else has already said
+    "hip hop". Costs nothing extra when Last.fm was asked already (answers are cached). Never raises.
+    """
+    try:
+        votes = collect_votes(artist, title, online=True, use_musicbrainz=False, fetchers=fetchers)
+    except Exception as exc:
+        logger.debug(f"[genre_evidence] is_indian_artist failed for {artist!r}: {exc}")
+        return False
+    return any(v.label in _INDIAN_LABELS and v.source not in _NOT_ORIGIN_SOURCES
+               and v.weight >= _MIN_ORIGIN_WEIGHT for v in votes)
 
 
 def _min_confidence(explicit: Optional[float]) -> float:

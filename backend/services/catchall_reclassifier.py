@@ -6,9 +6,8 @@ track (one that landed in Library/Electronic without a confident genre)
 into its correct genre subfolder.
 
 This is the same fallback chain used by the web UI's "retag catch-all"
-button (backend/app.py::retag_catchall_track) — extracted here so it can
-also be driven from a standalone batch script (batch_reclassify_electronic.py)
-without duplicating the logic.
+button (backend/app.py::retag_catchall_track) — extracted here so the
+hourly maintenance job and the button share one implementation.
 
 Fallback chain, cheapest/most-certain first:
   1. ARTIST_GENRE_OVERRIDE (instant, no API)

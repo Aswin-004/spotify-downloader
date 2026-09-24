@@ -281,7 +281,7 @@ def seed_artist_memory(force: bool = False) -> int:
         ("Mc Stan",              "Indian Hip Hop","Indian"),
         ("Prabh Deep",           "Indian Hip Hop","Indian"),
         ("Brodha V",             "Indian Hip Hop","Indian"),
-        ("Nucleya",              "Indian Hip Hop","Indian"),
+        ("Nucleya",              "Dubstep",       "Electronic"),
         # ── Marathi ──────────────────────────────────────────────────
         ("Ajay-Atul",            "Indian",        "Indian"),
         ("Avadhoot Gupte",       "Indian",        "Indian"),

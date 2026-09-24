@@ -21,7 +21,7 @@ const GENRE_OPTIONS = [
   'House', 'Trance', 'UK Garage', 'Drum & Bass', 'Dubstep',
   'Techno', 'Grime', 'Electronic',
   'Bollywood', 'Punjabi', 'Tamil',
-  'Hip Hop', 'R&B', 'Pop', 'Latin',
+  'Indian Hip Hop', 'International Hip Hop', 'R&B', 'Pop', 'Latin',
 ];
 
 const KNOWN_GENRES = new Set(GENRE_OPTIONS.map(g => g.toLowerCase()));

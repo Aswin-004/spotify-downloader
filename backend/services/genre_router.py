@@ -90,10 +90,10 @@ GENRE_TAXONOMY: dict[str, tuple[str, str]] = {
     "Indian":        ("Indian",     "Punjabi"),      # ambiguous → Punjabi crate
     "Tamil":         ("Indian",     "Tamil"),
     "Telugu":        ("Indian",     "Bollywood"),    # → Bollywood crate
-    "Indian Hip Hop":("Indian",     "Punjabi"),
-    "Desi Hip Hop":  ("Indian",     "Punjabi"),
+    "Indian Hip Hop":("Indian",     "Indian Hip Hop"),   # rappers from India (Seedhe Maut, Divine, KR$NA ...)
+    "Desi Hip Hop":  ("Indian",     "Indian Hip Hop"),
     # ── Global (flat) ─────────────────────────────────────────────────────
-    "Hip Hop":       ("Global",     "Hip Hop"),
+    "Hip Hop":       ("Global",     "International Hip Hop"),   # every rapper from outside India
     "R&B":           ("Global",     "R&B"),
     "Soul":          ("Global",     "R&B"),
     "Pop":           ("Global",     "Pop"),

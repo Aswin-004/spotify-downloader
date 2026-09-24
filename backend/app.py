@@ -752,7 +752,6 @@ def _download_direct_background(url, title, artist):
     """Background worker: download SoundCloud/Bandcamp URL → route to Library."""
     import tempfile, shutil as _shutil
     import yt_dlp as _ytdlp
-    from services.genre_router import map_genre_string
 
     socketio.emit('download_start', {'title': title, 'artist': artist, 'source': 'ingest'})
     tmp_dir = tempfile.mkdtemp(prefix='directdl_')
@@ -777,27 +776,26 @@ def _download_direct_background(url, title, artist):
         dl_title  = (info.get('title') or info.get('track') or title).strip()
         dl_artist = (info.get('uploader') or info.get('artist') or artist).strip()
 
-        # ── Genre routing: artist_memory → MusicBrainz tag → Electronic ────
-        genre_folder = None
-        try:
-            from services.artist_memory_service import lookup_artist as _mem_lookup
-            from services.genre_router import normalize_genre, _library_path as _lib_p
-            rec = _mem_lookup(dl_artist)
-            if rec and rec.get('confidence', 0) >= 0.5:
-                mapped = _lib_p(normalize_genre(rec.get('genre', '')))
-                if mapped:
-                    genre_folder = mapped
-        except Exception:
-            pass
+        # ── Genre routing: the same router + evidence engine the ingest pipeline uses ──
+        # (artist override → custom folder mapping → artist memory → knowledge base,
+        # then verified Last.fm/MusicBrainz/iTunes evidence for this song, then the
+        # Indian/International hip hop split) so a SoundCloud/Bandcamp paste lands in
+        # the same crate a playlist-ingested copy of the same artist would.
+        from services.genre_router import resolve_genre_folder_with_confidence, NEEDS_REVIEW_DIR
+        from services.auto_downloader import _evidence_route, _hip_hop_folder
 
-        if not genre_folder and _tagger_available:
-            try:
-                report = tagger_tag_file(str(src_path), dl_title, dl_artist)
-                mb_genre = (report or {}).get('genre', '')
-                if mb_genre:
-                    genre_folder = map_genre_string(mb_genre)
-            except Exception:
-                pass
+        genre_folder, genre_confidence, genre_method = resolve_genre_folder_with_confidence(
+            artist_id="", artist_name=dl_artist, sp=None,
+        )
+        if genre_folder.startswith(NEEDS_REVIEW_DIR) or genre_confidence < 0.5:
+            genre_folder = None
+            ev_path, ev_method = _evidence_route(dl_artist, dl_title, str(src_path))
+            if ev_path:
+                genre_folder, genre_method = ev_path, ev_method
+
+        if genre_folder and genre_folder.replace("\\", "/").rstrip("/").endswith("/International Hip Hop"):
+            genre_folder = _hip_hop_folder(dl_artist, dl_title)
+            genre_method = "hip_hop_origin"
 
         is_catchall = not bool(genre_folder)
         if not genre_folder:
@@ -818,7 +816,7 @@ def _download_direct_background(url, title, artist):
         else:
             socketio.emit('download_auto_classified', {
                 'title': dl_title, 'artist': dl_artist,
-                'folder': genre_folder, 'method': 'artist_memory',
+                'folder': genre_folder, 'method': genre_method,
                 'source': 'ingest',
             })
 
@@ -1597,8 +1595,8 @@ def _storage_monitor():  # NOTIFICATION
     while True:  # NOTIFICATION
         try:  # NOTIFICATION
             from services.notifications_service import STORAGE_THRESHOLD_MB, notify_storage_warning  # NOTIFICATION
-            from services.notifications_service import is_telegram_enabled, is_discord_enabled  # NOTIFICATION
-            if not (is_telegram_enabled() or is_discord_enabled()):  # NOTIFICATION
+            from services.notifications_service import is_discord_enabled  # NOTIFICATION
+            if not is_discord_enabled():  # NOTIFICATION
                 time.sleep(1800)  # NOTIFICATION — 30 min
                 continue  # NOTIFICATION
             total_bytes = 0  # NOTIFICATION
@@ -1804,33 +1802,6 @@ if __name__ == '__main__':
             # fingerprint_service and reclassification_service run as maintenance tasks
         except Exception as _svc_err:
             logger.warning(f"[startup] Maintenance worker skipped: {_svc_err}")
-
-        # START TELEGRAM BOT
-        _telegram_bot_started = False
-        try:
-            if os.getenv("TELEGRAM_BOT_TOKEN"):
-                from telegram_bot import start_bot_thread, TELEGRAM_CHAT_ID
-
-                if not TELEGRAM_CHAT_ID:
-                    logger.error("[app] TELEGRAM_CHAT_ID not valid — bot disabled")
-                else:
-                    try:
-                        start_bot_thread()
-                        _telegram_bot_started = True
-                        logger.success(f"[app] ✅ Telegram bot initialized (chat_id={TELEGRAM_CHAT_ID})")
-                    except Exception as bot_err:
-                        if "Conflict" in str(bot_err) or "getUpdates" in str(bot_err):
-                            logger.warning(f"[app] ⚠️  Telegram bot conflict (another instance running): {bot_err}")
-                            logger.info("[app] Continuing without Telegram bot for this session")
-                        else:
-                            raise
-            else:
-                logger.warning("[app] ⚠️  TELEGRAM_BOT_TOKEN not set — bot disabled")
-        except ImportError as e:
-            logger.warning(f"[app] ⚠️  python-telegram-bot not installed: {e}")
-        except Exception as e:
-            logger.error(f"[app] ❌ Telegram bot init failed: {e}")
-            logger.exception(e)
 
         # Run Flask app with SocketIO
         socketio.run(

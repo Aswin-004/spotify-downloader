@@ -461,7 +461,7 @@ _RAW_PROFILES: list[tuple[str, list[str], str, str, str]] = [
 
     ("Nucleya",
      ["nucleya", "bass rani"],
-     "Indian Hip Hop", "IN", "hi"),
+     "Dubstep", "IN", "hi"),                     # Indian bass music: filed with Skrillex / Hamdi
 
     ("Karma",
      ["karma", "kartik sharma"],

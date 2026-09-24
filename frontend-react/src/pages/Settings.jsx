@@ -127,13 +127,11 @@ export default function Settings() {
           ingest_playlist_id:    data.ingest_playlist_id || '',
           spotify_client_id:     '',
           spotify_client_secret: '',
-          gemini_api_key:        '',
+          groq_api_key:          '',
           lastfm_api_key:        '',
           acoustid_api_key:      '',
           fpcalc_path:           data.fpcalc_path || '',
-          telegram_bot_token:    '',
-          telegram_chat_id:      data.telegram_chat_id || '',
-          check_interval:        data.check_interval || 60,
+          check_interval:        data.check_interval || 600,
         });
       })
       .catch(() => {})
@@ -155,28 +153,12 @@ export default function Settings() {
       setDraft(p => ({
         ...p,
         spotify_client_id: '', spotify_client_secret: '',
-        gemini_api_key: '', lastfm_api_key: '', acoustid_api_key: '', telegram_bot_token: '',
+        groq_api_key: '', lastfm_api_key: '', acoustid_api_key: '',
       }));
     } catch (err) {
       addToast({ type: 'error', title: 'Save failed', description: err.message, duration: 5000 });
     } finally {
       setSaving(false);
-    }
-  }
-
-  // Telegram test
-  const [testingNotif, setTestingNotif] = useState(false);
-  const telegramEnabled = cfg?.telegram_bot_token || draft.telegram_bot_token;
-
-  async function handleTestNotification() {
-    setTestingNotif(true);
-    try {
-      await api.testNotification();
-      addToast({ type: 'success', title: 'Test notification sent', duration: 4000 });
-    } catch (err) {
-      addToast({ type: 'error', title: 'Failed', description: err.message, duration: 4000 });
-    } finally {
-      setTestingNotif(false);
     }
   }
 
@@ -411,11 +393,11 @@ export default function Settings() {
         desc="These services help the app detect the correct genre for each track. All are free.">
         <div className="space-y-3">
           <div>
-            <Label>Gemini AI Key <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>— Used to detect genre when other methods fail. Free at aistudio.google.com</span></Label>
+            <Label>Groq AI Key <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>— Last-resort genre guess (from title and artist) when nothing else knows the song. Free at console.groq.com</span></Label>
             <SecretInput
-              value={draft.gemini_api_key}
-              onChange={e => set('gemini_api_key', e.target.value)}
-              placeholder={cfg?.gemini_api_key ? 'Saved (enter to update)' : 'Paste Gemini key'}
+              value={draft.groq_api_key}
+              onChange={e => set('groq_api_key', e.target.value)}
+              placeholder={cfg?.groq_api_key ? 'Saved (enter to update)' : 'Paste Groq key'}
             />
           </div>
           <div>
@@ -427,34 +409,6 @@ export default function Settings() {
             />
           </div>
         </div>
-      </SectionCard>
-
-      {/* Telegram Notifications */}
-      <SectionCard icon={Bell} accent="var(--accent-cyan)" dim="var(--accent-cyan-dim)"
-        title="Telegram Notifications" delay={0.16}
-        desc="Get alerts when downloads complete or storage is running low. Optional.">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <Label>Bot Token <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(from @BotFather)</span></Label>
-            <SecretInput
-              value={draft.telegram_bot_token}
-              onChange={e => set('telegram_bot_token', e.target.value)}
-              placeholder={cfg?.telegram_bot_token ? 'Saved (enter to update)' : '8631466984:AAEz...'}
-            />
-          </div>
-          <div>
-            <Label>Chat ID <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(your Telegram user ID)</span></Label>
-            <Input
-              value={draft.telegram_chat_id}
-              onChange={e => set('telegram_chat_id', e.target.value)}
-              placeholder="7438454756"
-            />
-          </div>
-        </div>
-        <Button size="sm" variant="outline" disabled={testingNotif || !telegramEnabled} onClick={handleTestNotification}>
-          {testingNotif ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bell className="w-3.5 h-3.5" />}
-          Send Test Notification
-        </Button>
       </SectionCard>
 
       {/* Save button */}

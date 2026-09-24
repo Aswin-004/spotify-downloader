@@ -59,6 +59,23 @@ STAGING_FOLDER = os.path.join(BASE_DOWNLOAD_DIR, "Ingest", "Staging")
 
 
 CHECK_INTERVAL = config.CHECK_INTERVAL
+# A check now costs ONE Spotify request (services/playlist_delta.py), but the app was locked out of Spotify for
+# ~22 h at far lower traffic than a full re-read every minute, so however small CHECK_INTERVAL is set it is never
+# honoured below this (seconds).
+MIN_POLL_SECONDS = 600     # 10 minutes: at most ~144 requests a day; "Sync now" checks instantly when you want
+
+
+def effective_poll_interval(configured=None) -> int:
+    """CHECK_INTERVAL (seconds), raised to MIN_POLL_SECONDS if it is smaller or unreadable.
+    Reads the live setting each time, so a change on the Settings page takes effect without a restart."""
+    value = getattr(config, "CHECK_INTERVAL", CHECK_INTERVAL) if configured is None else configured
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = 600
+    return max(value, MIN_POLL_SECONDS)
+
+
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 INGEST_HISTORY_FILE = str(_BACKEND_ROOT / "ingest_tracks.json")
 INGEST_FAILURES_FILE = str(_BACKEND_ROOT / "ingest_failures.json")  # PERMANENT SKIP
@@ -586,7 +603,83 @@ def _requeue_done(track_id, title, artist, why):
         logger.debug(f"[requeue] could not update the queue for {title!r}: {exc}")
 
 
-def ingest_download(download_dir=None, force_folder=None, force_redownload=False):
+def _read_playlists(sp_service, *, full_scan: bool):
+    """
+    The ingest playlist plus every registered genre playlist (services/genre_playlists.py), read as cheaply as
+    possible (services/playlist_delta.py: one request when nothing changed). Returns (tracks, reads):
+    `tracks` is the merged list — songs from a genre playlist carry `forced_genre` — and `reads` is what
+    `_commit_reads` needs once those songs have been handled. Raises if the ingest playlist itself cannot be
+    read; an unreadable genre playlist is skipped with a warning.
+    """
+    from services import genre_playlists, playlist_delta
+
+    state = playlist_delta.load_state()
+    main = playlist_delta.read_playlist(sp_service, INGEST_PLAYLIST_ID, state.get(INGEST_PLAYLIST_ID),
+                                        force_full=full_scan)
+    reads = [(INGEST_PLAYLIST_ID, main)]
+    genre_reads = []
+    for entry in genre_playlists.load():
+        try:
+            r = playlist_delta.read_playlist(sp_service, entry["id"], state.get(entry["id"]), force_full=full_scan)
+        except Exception as exc:
+            logger.warning(f"[ingest] genre playlist {entry.get('name') or entry['id']} ({entry['crate']}) "
+                           f"could not be read: {exc}")
+            continue
+        reads.append((entry["id"], r))
+        genre_reads.append((entry, r.tracks))
+    return genre_playlists.merge_tracks(main.tracks, genre_reads), reads
+
+
+def _evidence_route(artist, title, filepath, bpm=None, duration_ms=None, classify=None):
+    """
+    Is there VERIFIED evidence for which crate this song belongs in? The router only knows artists that are on
+    its own lists; for everyone else this asks the evidence engine — the one the hourly catch-all job uses:
+    Last.fm / MusicBrainz / iTunes tags for THIS song, remixer and title hints, tempo — and accepts the answer
+    only when it is backed by a trusted source and names a real crate (not the Electronic catch-all).
+
+    Returns ('Library/<crate>', 'evidence:<sources>') or ('', ''). Never raises.
+    INGEST_EVIDENCE_ROUTING=false turns it off. `classify` is injectable for tests.
+    """
+    if os.getenv("INGEST_EVIDENCE_ROUTING", "true").strip().lower() in ("0", "false", "no", "off"):
+        return "", ""
+    try:
+        if classify is None:
+            from services.genre_evidence import classify_track as classify
+        secs = (duration_ms or 0) / 1000.0 or None
+        dec = classify(artist, title, path=filepath, bpm=bpm, online=True, use_itunes=True, duration_s=secs)
+        if (not dec.abstain) and dec.verified and dec.genre not in ("", "Electronic"):
+            logger.info(f"[ingest] evidence routing: {title} → Library/{dec.genre} ({dec.explain()})")
+            return f"Library/{dec.genre}", "evidence:" + "+".join(dec.sources)
+    except Exception as exc:
+        logger.debug(f"[ingest] evidence routing unavailable: {exc}")
+    return "", ""
+
+
+def _hip_hop_folder(artist, title, is_indian=None) -> str:
+    """
+    'Library/Indian Hip Hop' when any Indian signal exists for the artist (curated list, Indian tags, Indian
+    script), else 'Library/International Hip Hop'. Never raises. `is_indian` is injectable for tests.
+    """
+    try:
+        if is_indian is None:
+            from services.genre_evidence import is_indian_artist as is_indian
+        return "Library/Indian Hip Hop" if is_indian(artist, title) else "Library/International Hip Hop"
+    except Exception as exc:
+        logger.debug(f"[ingest] hip hop origin check unavailable: {exc}")
+        return "Library/International Hip Hop"
+
+
+def _commit_reads(reads) -> None:
+    """Everything `reads` returned has been handled: from now on an unchanged playlist is a one-request skip."""
+    try:
+        from services import playlist_delta
+        for playlist_id, read in reads:
+            playlist_delta.commit(playlist_id, read)
+    except Exception as exc:
+        logger.warning(f"[ingest] could not save the playlist watch state (next check re-reads): {exc}")
+
+
+def ingest_download(download_dir=None, force_folder=None, force_redownload=False, full_scan=False):
     """Download new tracks from the ingest playlist with parallel workers.
 
     Args:
@@ -601,6 +694,9 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
             ``PERMANENT_SKIP`` filter (tracks with >= MAX_FAIL_ATTEMPTS prior
             failures) is still applied to avoid replaying known-broken tracks.
             Ephemeral — not persisted across monitor cycles.
+        full_scan: When True, read every playlist completely instead of asking Spotify
+            "did anything change?" first. Implied by force_folder / force_redownload;
+            set by manual_refresh() (the "Sync now" button).
     """
     if not INGEST_PLAYLIST_ID:
         logger.warning("[ingest] No INGEST_PLAYLIST_ID configured. Skipping.")
@@ -638,13 +734,27 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     from services.spotify_service import get_spotify_service
     sp_service = get_spotify_service()
 
+    # VERIFY — a download recorded as done a few minutes ago whose file does not exist anywhere is queued
+    # again (twice at most). Runs before the playlist is read so the re-queued songs are picked up this cycle.
     try:
-        tracks = sp_service.get_playlist_tracks_by_id(INGEST_PLAYLIST_ID, force_refresh=True)
+        from services import download_verifier
+        from services.requeue_service import requeue_tracks
+        _vs = download_verifier.process_pending(BASE_DOWNLOAD_DIR, requeue_tracks)
+        if _vs["requeued"] or _vs["gave_up"]:
+            logger.warning(f"[ingest] verification: {len(_vs['requeued'])} song(s) had no file and were re-queued, "
+                           f"{len(_vs['gave_up'])} still had none after every retry")
+    except Exception as _v_err:
+        logger.warning(f"[ingest] download verification skipped: {_v_err}")
+
+    # One cheap request asks Spotify whether the playlist changed; songs are read only if it did.
+    try:
+        tracks, _reads = _read_playlists(sp_service, full_scan=bool(full_scan or force_folder or force_redownload))
     except Exception as e:
         logger.error(f"[ingest] Failed to fetch ingest playlist: {e}")
         AUTO_STATUS["status"] = "idle"
         AUTO_STATUS["current"] = f"Fetch error: {str(e)[:80]}"
         return
+    _main_read = _reads[0][1]
 
     saved_ids = _load_ingest_history()
     if force_redownload:
@@ -671,14 +781,25 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     except Exception as _rq_merge_err:
         logger.warning(f"[ingest] Requeue merge failed (continuing without it): {_rq_merge_err}")
 
-    # Update status with playlist totals
-    current_ids = {t["id"] for t in tracks}
-    AUTO_STATUS["playlist_total"] = len(tracks)
-    AUTO_STATUS["synced_total"] = len(saved_ids & current_ids)
+    # Update status with playlist totals. A full read sees every song; an incremental one sees only the ends of
+    # the playlist, so its totals come from Spotify's own count instead.
+    if _main_read.was_full:
+        current_ids = {t["id"] for t in tracks}
+        AUTO_STATUS["playlist_total"] = len(tracks)
+        AUTO_STATUS["synced_total"] = len(saved_ids & current_ids)
+    else:
+        AUTO_STATUS["playlist_total"] = _main_read.total
+        AUTO_STATUS["synced_total"] = min(len(saved_ids), _main_read.total)
     AUTO_STATUS["last_checked"] = time.strftime("%H:%M:%S")
 
+    _already = sum(1 for t in tracks if t.get("forced_genre") and t["id"] in saved_ids)
+    if _already:
+        logger.info(f"[ingest] {_already} song(s) in your genre playlists are already in the library — "
+                    "they stay where they are")
+
     if not new_tracks:
-        logger.info("[ingest] No new tracks in ingest playlist.")
+        logger.info(f"[ingest] No new tracks ({'playlist unchanged' if _main_read.mode == 'skip' else 'nothing to download'}).")
+        _commit_reads(_reads)
         AUTO_STATUS["status"] = "idle"
         AUTO_STATUS["current"] = ""
         _emit_auto_status()
@@ -754,6 +875,19 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
             except Exception as _ge:
                 logger.debug(f"[ingest] Gemini fallback unavailable: {_ge}")
             return ""
+
+        def _fallback_genre(filepath: str, bpm=None):
+            """
+            The router does not know this artist. Before guessing, ask the evidence engine (see _evidence_route:
+            only a VERIFIED answer for a real crate counts), then the Groq guess from title + artist, as before
+            (services/gemini_service.py is a legacy name: it calls Groq, not Gemini).
+            Returns (Library/-prefixed path or '', method): 'evidence:<sources>', 'gemini' or ''. Never raises.
+            """
+            _epath, _emethod = _evidence_route(artist, title, filepath, bpm, track_info.get("duration_ms"))
+            if _epath:
+                return _epath, _emethod
+            _gpath = _gemini_genre_fallback(filepath)
+            return _gpath, ("gemini" if _gpath else "")
 
         # Yield to manual downloads (priority)
         if wait_if_manual_active():
@@ -846,6 +980,8 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 NEEDS_REVIEW_THRESHOLD = 0.5  # configurable per-run if needed
 
                 _is_catchall = False  # set True when routed to Electronic as fallback
+                _route_tag = ""       # how a song was filed when it was NOT the router: written to the file's routing_source tag
+                _bpm_hint = (result.get("tagging_report") or {}).get("bpm")   # tempers unverified evidence
                 genre_confidence = 0.0  # default; overwritten by routing branches below
                 genre_source = "unclassified"  # default; overwritten by routing branches below.
                 # Needed because the MB-genre-unmapped branch (mb_genre set, map_genre_string()
@@ -853,10 +989,24 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 # assigning genre_source — leaving it unset raised UnboundLocalError in the
                 # download_needs_review emit below, which the outer except Exception caught and
                 # mislabeled a fully-downloaded/tagged/moved track as FAILED.
+                _forced_folder = ""
+                if not force_folder and track_info.get("forced_genre"):
+                    from services.genre_playlists import crate_folder as _crate_folder
+                    _forced_folder = _crate_folder(track_info["forced_genre"])
+                    if not _forced_folder:
+                        logger.warning(f"[ingest] genre playlist crate {track_info['forced_genre']!r} is not a crate "
+                                       f"in your library — routing {title!r} normally")
                 if force_folder:
                     # Manual override always wins — flat, no artist subfolder
                     final_folder = os.path.join(target_base, force_folder)
                     genre_confidence = 1.0
+                elif _forced_folder:
+                    # A genre playlist you own says which crate this is: the one source that is never a guess.
+                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, _forced_folder)
+                    genre_confidence = 1.0
+                    genre_source = "genre_playlist"
+                    _route_tag = f"genre_playlist:{track_info['forced_genre']}"
+                    logger.info(f"[ingest] Genre playlist: {title} → {_forced_folder}")
                 else:
                     from services.genre_router import resolve_genre_folder_with_confidence
                     # ── artist_memory: user-confirmed associations override Spotify/Groq ──
@@ -890,14 +1040,17 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                 genre_confidence = 0.9
                                 logger.info(f"[ingest] MB genre routing: {title} → {mapped} (conf=0.9)")
                             else:
-                                # MB genre not in map — Gemini fallback then Electronic catch-all
-                                gemini_path = _gemini_genre_fallback(staged_filepath)
+                                # MB genre not in map — verified evidence, then Gemini, then Electronic catch-all
+                                # (the variable keeps its old name; it now holds either fallback's answer)
+                                gemini_path, _fb_method = _fallback_genre(staged_filepath, _bpm_hint)
                                 if gemini_path:
                                     final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
-                                    logger.info(f"[ingest] Gemini fallback (MB miss): {title} → {gemini_path}")
+                                    logger.info(f"[ingest] Fallback routing ({_fb_method}, MB miss): {title} → {gemini_path}")
+                                    if _fb_method.startswith("evidence"):
+                                        _route_tag = _fb_method
                                     _emit("download_auto_classified", {
                                         "title": title, "artist": artist,
-                                        "folder": gemini_path, "method": "gemini",
+                                        "folder": gemini_path, "method": _fb_method.split(":")[0],
                                         "source": "ingest",
                                     })
                                 else:
@@ -918,18 +1071,20 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                 logger.info(f"[ingest] Genre routing: {title} → {folder_structure} "
                                             f"(conf={genre_confidence:.2f}, src={genre_source})")
                             else:
-                                # Low-confidence — try Gemini before falling back to catch-all.
+                                # Low-confidence — try verified evidence, then Gemini, before the catch-all.
                                 # Never routes to NeedsReview for genre failures.
-                                gemini_path = _gemini_genre_fallback(staged_filepath)
+                                gemini_path, _fb_method = _fallback_genre(staged_filepath, _bpm_hint)
                                 if gemini_path:
                                     final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
                                     logger.info(
-                                        f"[ingest] Gemini fallback: {title} → {gemini_path} "
+                                        f"[ingest] Fallback routing ({_fb_method}): {title} → {gemini_path} "
                                         f"(Spotify conf={genre_confidence:.2f} was too low)"
                                     )
+                                    if _fb_method.startswith("evidence"):
+                                        _route_tag = _fb_method
                                     _emit("download_auto_classified", {
                                         "title": title, "artist": artist,
-                                        "folder": gemini_path, "method": "gemini",
+                                        "folder": gemini_path, "method": _fb_method.split(":")[0],
                                         "spotify_confidence": genre_confidence,
                                         "source": "ingest",
                                     })
@@ -960,6 +1115,14 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 # showed up as orphans in repair_index.py --dry-run. normpath()
                 # collapses this to a clean native path without touching which
                 # file it points to.
+                # Hip hop has two crates. Whatever said "hip hop" (MusicBrainz, the router, the AI guess) knew the
+                # GENRE but not where the artist is from, so the Indian-vs-International call is made here. A crate
+                # you chose yourself (a pinned folder or a genre playlist) is never second-guessed.
+                if (not force_folder and not _forced_folder
+                        and str(final_folder).replace("\\", "/").rstrip("/").endswith("/International Hip Hop")):
+                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, _hip_hop_folder(artist, title))
+                    _route_tag = _route_tag or "evidence:hip_hop_origin"
+
                 final_folder = os.path.normpath(final_folder)
 
                 os.makedirs(final_folder, exist_ok=True)
@@ -1021,6 +1184,16 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                         "source": "ingest",
                     })
 
+                # Say HOW a song was filed when it was not the router: a genre playlist or verified evidence.
+                if _route_tag and not _is_catchall:
+                    try:
+                        from mutagen.id3 import ID3, TXXX
+                        _audio = ID3(final_filepath)
+                        _audio.add(TXXX(encoding=3, desc="routing_source", text=[_route_tag]))
+                        _audio.save()
+                    except Exception:
+                        pass
+
                 # Update result with final path
                 result["filepath"] = final_filepath
 
@@ -1029,6 +1202,12 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                 success_count[0] += 1
                 saved_ids.add(tid)
                 _requeue_done(tid, title, artist, "downloaded")
+                # VERIFY — have the file's presence double-checked a few minutes from now (services/download_verifier.py)
+                try:
+                    from services import download_verifier as _dv
+                    _dv.record_done(tid, title, artist, os.path.basename(final_filepath))
+                except Exception as _dv_err:
+                    logger.debug(f"[ingest] verification record skipped: {_dv_err}")
                 logger.info(f"[ingest] Downloaded: {result['filename']}")
                 # LIBRARY INDEX — register in MongoDB for persistent O(1) dedup
                 _genre_folder = ""  # default; overwritten below on success. Must be set BEFORE
@@ -1217,6 +1396,13 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     _save_ingest_history(saved_ids)
     _save_failure_counts(failure_counts)  # PERMANENT SKIP — persist failure counts to disk
 
+    # An unchanged playlist means "nothing to do" only when every song was handled without a retriable failure;
+    # otherwise the watch state stays where it was and the next check looks at the playlist again.
+    if fail_count[0] == 0:
+        _commit_reads(_reads)
+    else:
+        logger.info(f"[ingest] {fail_count[0]} failure(s) this cycle — the next check will look at the playlist again")
+
     # Clean up Staging folder — move any leftover files to Uncategorized
     try:
         staging = Path(STAGING_FOLDER)
@@ -1271,7 +1457,8 @@ def playlist_monitor():
         logger.warning("[ingest] Playlist monitor SKIPPED - no OAuth token. "
                        "Run 'python auto_downloader.py' to authorize.")
         return
-    logger.info("[ingest] Playlist monitor started.")
+    logger.info(f"[ingest] Playlist monitor started (checks every {effective_poll_interval()} s; "
+                "one Spotify request per check unless the playlist changed).")
     while True:
         if is_rate_limited():
             logger.info("[ingest] Skipping cycle — Spotify API cooldown active.")
@@ -1289,7 +1476,7 @@ def playlist_monitor():
             except Exception as e:
                 logger.error(f"[ingest] Monitor error: {e}")
 
-        time.sleep(CHECK_INTERVAL)
+        time.sleep(effective_poll_interval())
 
 
 def manual_refresh(download_dir=None, force_folder=None, force_redownload=False):
@@ -1312,6 +1499,7 @@ def manual_refresh(download_dir=None, force_folder=None, force_redownload=False)
             download_dir=download_dir,
             force_folder=force_folder,
             force_redownload=force_redownload,
+            full_scan=True,                     # "Sync now" looks at every song, not just what changed
         )
         return {"status": "ok", "message": "Ingest refresh triggered."}
     except Exception as e:

@@ -31,6 +31,7 @@ PLACEHOLDER_ARTISTS = frozenset({
     "electronic", "electronica", "dance", "edm", "house", "techno", "trance", "psytrance", "psy",
     "dubstep", "drum and bass", "drum & bass", "dnb", "grime", "uk garage", "bass",
     "bollywood", "punjabi", "tamil", "indian", "hip hop", "hiphop", "hip-hop", "rap", "r&b", "rnb",
+    "indian hip hop", "international hip hop", "desi hip hop",
     "pop", "latin", "rock", "metal", "jazz", "classical",
 })
 

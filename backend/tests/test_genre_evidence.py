@@ -96,7 +96,18 @@ class TestTagLabels(unittest.TestCase):
         self.assertEqual(ge.tag_labels("punjabi"), {"Punjabi": 1.0})
         self.assertEqual(ge.tag_labels("bhangra"), {"Punjabi": 1.0})
         self.assertEqual(ge.tag_labels("tamil"), {"Tamil": 1.0})
-        self.assertEqual(ge.tag_labels("hip-hop"), {"Hip Hop": 0.9})
+        self.assertEqual(ge.tag_labels("hip-hop"), {"International Hip Hop": 0.9})
+
+    def test_indian_hip_hop_tags_are_their_own_crate(self):
+        # the generic hip hop rule still fires (split_hip_hop() settles which crate), but the Indian
+        # words must not ALSO count for Bollywood: "desi hip hop" is a rapper, not a film song
+        self.assertEqual(ge.tag_labels("dhh"), {"Indian Hip Hop": 1.0})
+        self.assertEqual(ge.tag_labels("desi hip hop"), {"Indian Hip Hop": 1.0, "International Hip Hop": 0.9})
+        self.assertEqual(ge.tag_labels("Indian Hip-Hop"), {"Indian Hip Hop": 1.0, "International Hip Hop": 0.9})
+        self.assertEqual(ge.tag_labels("desi rap"), {"Indian Hip Hop": 1.0, "International Hip Hop": 0.9})
+        # ... while plain "desi" / "indian" keep their old Bollywood meaning
+        self.assertEqual(ge.tag_labels("desi"), {"Bollywood": 0.8})
+        self.assertEqual(ge.tag_labels("indian"), {"Bollywood": 0.6})
 
     def test_soul_is_a_weak_rnb_hint_because_it_also_tags_indian_film_songs(self):
         self.assertEqual(ge.tag_labels("soul"), {"R&B": 0.4})

@@ -38,7 +38,7 @@ const pages = [
   { icon: BarChart3,     label: 'Analytics',   to: '/analytics',   accent: 'var(--accent-amber)',  desc: 'Download stats, top artists, tagging success rates, and genre distribution over time.' },
   { icon: AlertTriangle, label: 'Review',      to: '/review',      accent: 'var(--accent-amber)',  desc: 'Unclassified tracks — downloaded but genre could not be detected. Retry to sort them into the right folder.' },
   { icon: Wrench,        label: 'Maintenance', to: '/maintenance', accent: 'var(--accent-rose)',   desc: 'Re-sort music into folders, fix library scan, re-classify undetected genres, embed album artwork.' },
-  { icon: Settings,      label: 'Settings',    to: '/settings',    accent: 'var(--text-tertiary)', desc: 'Map your existing DJ folder structure to genres. Configure Telegram notifications.' },
+  { icon: Settings,      label: 'Settings',    to: '/settings',    accent: 'var(--text-tertiary)', desc: 'Map your existing DJ folder structure to genres and enter your API keys.' },
 ];
 
 const workflow = [

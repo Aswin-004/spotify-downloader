@@ -96,6 +96,8 @@ export const GENRE_COLORS = {
   'Ambient':       '#60A5FA',
   'Electronica':   '#34D399',
   'Hip-Hop':       '#FBBF24',
+  'International Hip Hop': '#FBBF24',
+  'Indian Hip Hop':        '#F59E0B',
   'Pop':           '#F472B6',
   'Rock':          '#FB7185',
   'Classical':     '#94A3B8',
