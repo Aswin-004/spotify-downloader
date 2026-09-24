@@ -1,5 +1,5 @@
 """
-backfill_gemini.py — 4-pass Gemini AI + librosa enrichment.
+backfill_ai.py — 4-pass Gemini AI + librosa enrichment.
 
 Run after master_organise.py.  Each pass is independent.
 
@@ -136,6 +136,8 @@ def _mv(src: Path, dest_dir: Path) -> Path:
         dest_dir.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dest))
         _update_mongo_path(src, dest)
+        from services.hand_moves import stamp
+        stamp(dest)
     try:
         print(f"    → {'WOULD MOVE' if DRY else 'MOVED'} to {dest_dir.relative_to(BASE)}/")
     except ValueError:
@@ -182,12 +184,12 @@ def _call_gemini_with_retry(fn, filepath: str, retries: int = 5) -> dict:
 
 
 def _call_gemini_identify(filepath: str) -> dict:
-    from services.gemini_service import identify_audio
+    from services.groq_service import identify_audio
     return _call_gemini_with_retry(identify_audio, filepath)
 
 
 def _call_gemini_analyze(filepath: str) -> dict:
-    from services.gemini_service import analyze_audio
+    from services.groq_service import analyze_audio
     return _call_gemini_with_retry(analyze_audio, filepath)
 
 

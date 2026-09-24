@@ -33,7 +33,7 @@ const TASKS = [
     steps: ['Scan music folder', 'Fix broken file paths', 'Register untracked files'],
   },
   {
-    id: 'backfill_gemini',
+    id: 'backfill_ai',
     icon: Sparkles,
     title: 'Re-classify Undetected Genres',
     description: 'Uses AI to detect the genre of tracks that ended up in the Unclassified folder, add BPM and musical key info, and fetch missing album artwork.',

@@ -51,7 +51,7 @@ DRY  = "--dry-run" in sys.argv
 # Minimum title/artist similarity (SequenceMatcher ratio) for an incoming
 # Spotify identity to be considered compatible with an existing Mongo
 # document's title/artist. Deliberately lower than the stricter matching
-# bars used elsewhere (e.g. backfill_gemini's CONF_ACCEPT_WARN=0.75) —
+# bars used elsewhere (e.g. backfill_ai's CONF_ACCEPT_WARN=0.75) —
 # this check only needs to catch clear disagreement (different songs), not
 # rank candidates, so a looser bar avoids false-blocking legitimate minor
 # title variants (e.g. "Chaleya" vs "Chaleya (From \"Jawan\")").

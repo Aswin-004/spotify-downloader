@@ -20,7 +20,7 @@ import { getGenreColor, getCamelotColor } from '@/lib/tokens';
 const GENRE_OPTIONS = [
   'House', 'Trance', 'UK Garage', 'Drum & Bass', 'Dubstep',
   'Techno', 'Grime', 'Electronic',
-  'Bollywood', 'Punjabi', 'Tamil',
+  'Bollywood', 'Punjabi', 'Tamil', 'Indie',
   'Indian Hip Hop', 'International Hip Hop', 'R&B', 'Pop', 'Latin',
 ];
 

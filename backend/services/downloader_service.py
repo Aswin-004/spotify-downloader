@@ -538,6 +538,16 @@ class DownloaderService:
         self._tls.last_audio_verification = value
 
     @property
+    def _vocal_checks_left(self):
+        # >0 while the song being downloaded must be SUNG (see download_track(expect_vocals=...)):
+        # how many more instrumental uploads may still be rejected before one is accepted anyway.
+        return getattr(self._tls, 'vocal_checks_left', 0)
+
+    @_vocal_checks_left.setter
+    def _vocal_checks_left(self, value):
+        self._tls.vocal_checks_left = value
+
+    @property
     def _last_track_id(self):
         return getattr(self._tls, 'last_track_id', '')
 
@@ -673,7 +683,8 @@ class DownloaderService:
     # ─── Single track download (unchanged public signature) ─────────────────
     def download_track(self, title, artist, album=None, progress_callback=None,
                        output_dir=None, output_filename=None, duration_ms=None,
-                       album_art_url=None, spotify_track_id=None, spotify_release_date=None):
+                       album_art_url=None, spotify_track_id=None, spotify_release_date=None,
+                       expect_vocals=False):
         """
         Download track audio and convert to 320 kbps MP3.
         With intelligent fallback: if auto-download fails, provide manual YouTube link.
@@ -690,6 +701,10 @@ class DownloaderService:
             spotify_release_date: Spotify release date string, e.g. "2024-03-15" (optional) —
                 persisted to spotify_meta["release_date"] as a fallback release year when
                 MusicBrainz has no match
+            expect_vocals: True when the song is known to be sung in a South Asian language (its artist files
+                into Bollywood/Punjabi/Tamil/Indian Hip Hop). A download that has no singing is then treated as
+                a karaoke/instrumental upload and the next candidate is tried (services/ai_listener.py);
+                after two such rejections the next candidate is accepted as-is.
 
         Returns:
             dict with 'status' = 'success' | 'fallback'
@@ -699,6 +714,7 @@ class DownloaderService:
         # other's values before spotify_meta is built further down (~line 855).
         self._last_track_id = spotify_track_id or ""
         self._last_audio_verification = None   # set again by _verify_download() if it runs
+        self._vocal_checks_left = 2 if expect_vocals else 0
         self._last_release_date = spotify_release_date or ""
         try:
             safe_title = sanitize_filename(title)
@@ -1509,6 +1525,40 @@ class DownloaderService:
             except Exception as rm_err:
                 logger.warning(f"[verify] Could not delete rejected file {filepath}: {rm_err}")
             raise VerificationRejected(candidate.get("url") or "", result)
+
+        if self._vocal_checks_left > 0:
+            self._reject_if_instrumental(filepath, candidate)
+
+    def _reject_if_instrumental(self, filepath, candidate):
+        """
+        The song must be sung (download_track(expect_vocals=True)): discard a download in which Groq Whisper hears
+        no singing (services/ai_listener.is_instrumental — says yes only on clear audio, never when Groq is
+        unavailable). Raises VerificationRejected so the next-best candidate is tried.
+        """
+        try:
+            from services.ai_listener import is_instrumental
+            instrumental = is_instrumental(filepath)
+        except Exception as exc:
+            logger.debug(f"[verify] vocal check unavailable: {exc}")
+            return
+        if not instrumental:
+            return
+        self._vocal_checks_left -= 1
+        reason = "no singing heard (karaoke/instrumental upload)"
+        logger.warning(f"[verify] REJECTED \"{candidate.get('title', '')}\" ({candidate.get('uploader', '')}): {reason}")
+        try:
+            _retry_file_op(os.remove, filepath)
+        except Exception as rm_err:
+            logger.warning(f"[verify] Could not delete rejected file {filepath}: {rm_err}")
+
+        class _NoVocals:                     # the shape VerificationRejected's handlers read
+            def __init__(self):
+                self.reason = reason
+
+            def to_dict(self):
+                return {"status": "rejected", "reason": reason}
+
+        raise VerificationRejected(candidate.get("url") or "", _NoVocals())
 
     def _finalize_and_download(self, candidate, source_name, spotify_title, duration_ms,
                                 progress_callback=None, output_dir=None, output_filename=None):

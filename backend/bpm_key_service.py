@@ -254,7 +254,7 @@ def persist_audio_features(identity_key: str, result: dict, _col=None) -> bool:
     replacing the whole ``audio_features`` sub-document.  Replacing it deleted
     every key this function does not itself produce — in particular the
     ``lastfm_*`` and ``gemini_*`` enrichment written by tagger_service /
-    backfill_lastfm / backfill_gemini.  That was reachable in normal ingest:
+    backfill_lastfm / backfill_ai.  That was reachable in normal ingest:
     auto_downloader enriches a track (Last.fm, then Gemini) and *then*
     re-persists BPM for DnB/Techno half-time correction, which wiped the
     enrichment it had just written.

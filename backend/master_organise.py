@@ -84,6 +84,8 @@ def mv(src: Path, dest_dir: Path, note: str = "") -> None:
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest = _collision_safe(dest_dir, src.name)
             shutil.move(str(src), str(dest))
+            from services.hand_moves import stamp
+            stamp(dest)
         print(f"  [MOVE] {str(rel_src):75s} → {rel_dest}{note}")
         _update_mongo(src, dest)
         moved += 1

@@ -366,7 +366,7 @@ export function SocketProvider({ children }) {
   }, []);
 
   const _TASK_LABELS = {
-    backfill_gemini: 'Re-classify Undetected Genres',
+    backfill_ai: 'Re-classify Undetected Genres',
     backfill_lastfm: 'Enrich Genre & Mood Tags',
     organise:        'Re-sort Music into Folders',
     repair_index:    'Fix Library Scan',

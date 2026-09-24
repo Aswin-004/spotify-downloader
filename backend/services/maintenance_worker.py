@@ -51,6 +51,53 @@ except ImportError:
 _BACKEND = Path(__file__).resolve().parent.parent
 
 
+# ── Groq listening for catch-all songs ────────────────────────────────────────
+
+AI_RECHECK_DAYS = 7
+
+
+def _ai_catchall_route(fp, artist_name, title, tags):
+    """
+    ('Library/<crate>', 'ai:groq') when Groq, listening to the song, names a crate other than Electronic
+    with at least AI_MIN_CONFIDENCE (default 0.4); else ('', ''). Asks at most once per AI_RECHECK_DAYS per file
+    (TXXX:ai_checked holds the date of the last question). Never raises.
+    """
+    import time as _t
+    try:
+        from mutagen.id3 import ID3, TXXX
+        checked = tags.getall("TXXX:ai_checked") if tags is not None else []
+        if checked and checked[0].text:
+            try:
+                if _t.time() - float(checked[0].text[0]) < AI_RECHECK_DAYS * 86400:
+                    return "", ""
+            except (TypeError, ValueError):
+                pass
+        from services.ai_listener import classify
+        bpm = None
+        try:
+            bpm = float(str(tags.get("TBPM", "")).strip()) if tags is not None else None
+        except Exception:
+            bpm = None
+        answer = classify(str(fp), title or fp.stem, artist_name or "", bpm=bpm)
+        try:
+            t2 = ID3(str(fp))
+            t2.delall("TXXX:ai_checked")
+            t2.add(TXXX(encoding=3, desc="ai_checked", text=[str(int(_t.time()))]))
+            t2.save()
+        except Exception:
+            pass
+        try:
+            floor = float(os.getenv("AI_MIN_CONFIDENCE", "0.4"))
+        except ValueError:
+            floor = 0.4
+        crate = (answer or {}).get("crate", "")
+        if crate and crate != "Electronic" and answer.get("confidence", 0) >= floor:
+            return f"Library/{crate}", "ai:groq"
+    except Exception as exc:
+        logger.debug(f"[maintenance] Groq listening unavailable for {getattr(fp, 'name', fp)}: {exc}")
+    return "", ""
+
+
 # ── Task descriptor ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -384,7 +431,7 @@ class MaintenanceWorker:
 
         try:
             from services.genre_router import normalize_genre, _library_path
-            from services.gemini_service import identify_audio, GeminiQuotaExceeded
+            from services.groq_service import identify_audio, GroqQuotaExceeded
         except ImportError as e:
             logger.debug(f"[maintenance] retag_catchall: missing dependency: {e}")
             return
@@ -533,21 +580,15 @@ class MaintenanceWorker:
                     except Exception as _e4:
                         logger.debug(f"[maintenance] retag_catchall: evidence vote failed for {fp.name}: {_e4}")
 
-                # ── 7. Groq text guess (last resort — UNVERIFIED) ─────────────
-                # A guess from title+artist text alone, not evidence, and it leans "House" for
-                # every unfamiliar electronic act. This job runs unattended, so it no longer
-                # acts on one unless ALLOW_UNVERIFIED_AI_MOVES=true; the file simply stays in
-                # Electronic (and is offered again next cycle / in the review UI).
-                if not genre_path and os.getenv("ALLOW_UNVERIFIED_AI_MOVES", "").strip().lower() == "true":
-                    from services.gemini_service import remaining_quota as _rq
-                    if _rq() > 0:
-                        gemini = identify_audio(str(fp))
-                        raw = gemini.get("gemini_genre", "")
-                        if raw:
-                            canonical = normalize_genre(raw)
-                            genre_path = _library_path(canonical) if canonical else ""
-                            route_source = "gemini"
-                    # else: quota 0 — leave this file in Electronic, try next
+                # ── 7. Groq listens (last resort) ────────────────────────────
+                # Whisper hears the language / lyrics, then Groq picks one of your crates
+                # (services/ai_listener.py). Each file is asked once a week at most: the answer
+                # (even "don't know") is remembered in its ai_checked tag, so the free Groq quota
+                # is not spent on the same song every hour. AI_CATCHALL_MOVES=false turns it off.
+                if not genre_path and os.getenv("AI_CATCHALL_MOVES", "true").strip().lower() not in ("0", "false", "no", "off"):
+                    _ai_path, _ai_src = _ai_catchall_route(fp, artist_name, title_tag, _tags)
+                    if _ai_path:
+                        genre_path, route_source = _ai_path, _ai_src
 
                 if not genre_path or genre_path == "Library/Electronic":
                     continue  # still unknown — leave for next cycle
@@ -556,10 +597,15 @@ class MaintenanceWorker:
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest_fp = dest_dir / fp.name
                 _shutil.move(str(fp), str(dest_fp))
-                # Remove catchall tag from moved file
+                from services.hand_moves import stamp as _stamp_crate
+                _stamp_crate(dest_fp)                         # an app move, not yours: nothing to learn
+                # Replace the catchall tag with how it was filed (e.g. ai:groq, evidence:lastfm_track)
                 try:
+                    from mutagen.id3 import TXXX as _TXXX
                     tags = ID3(str(dest_fp))
                     tags.delall("TXXX:routing_source")
+                    if route_source:
+                        tags.add(_TXXX(encoding=3, desc="routing_source", text=[route_source]))
                     tags.save()
                 except Exception:
                     pass
@@ -596,9 +642,9 @@ class MaintenanceWorker:
                     )
                 logger.info(f"[maintenance] retag_catchall: {fp.name} → {genre_path} via {route_source}")
                 moved += 1
-                if route_source == "gemini":
-                    _time.sleep(4)  # rate limit only when Gemini was used
-            except GeminiQuotaExceeded:
+                if route_source == "ai:groq":
+                    _time.sleep(4)  # stay well under the Groq free-tier requests-per-minute
+            except GroqQuotaExceeded:
                 logger.warning(f"[maintenance] retag_catchall: Gemini quota hit mid-file ({moved} moved so far) — continuing without Gemini")
                 continue  # don't abort the batch — next files may resolve via steps 1-6
             except Exception as exc:

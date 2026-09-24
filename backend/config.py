@@ -36,10 +36,10 @@ class Config:
     SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
     SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 
-    # Groq API: the AI used for the last-resort genre guess (services/gemini_service.py is a legacy
+    # Groq API: the AI used for the last-resort genre guess (services/groq_service.py is a legacy
     # file name — it calls Groq, never Gemini). Free tier, 14400 calls/day.
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-    # Model was previously hardcoded as "llama-3.1-8b-instant" in gemini_service.py,
+    # Model was previously hardcoded as "llama-3.1-8b-instant" in groq_service.py,
     # then briefly defaulted to "llama-3.3-70b-versatile" — Groq rejected BOTH for
     # this account with "does not exist or you do not have access to it"
     # (model_not_found). Neither was a malformed string; this account simply has no
@@ -215,7 +215,13 @@ class Config:
         "j-pop":                "J-Pop",
         "mandopop":             "Asian Pop",
         "cantopop":             "Asian Pop",
-        "indie pop":            "Pop",
+        "indie pop":            "Indie",
+        "desi indie":           "Indie",
+        "hindi indie":          "Indie",
+        "urdu indie":           "Indie",
+        "pakistani indie":      "Indie",
+        "indian indie":         "Indie",
+        "indie":                "Indie",
         "art pop":              "Pop",
         "dream pop":            "Pop",
         "power pop":            "Pop",
@@ -228,7 +234,7 @@ class Config:
         "metal":                "Metal",
         "alternative rock":     "Rock",
         "classic rock":         "Rock",
-        "indie rock":           "Rock",
+        "indie rock":           "Indie",
         "post-punk":            "Rock",
         "grunge":               "Rock",
         "shoegaze":             "Rock",
@@ -308,7 +314,7 @@ class Config:
         # ── Country / Folk ────────────────────────────────────
         "country pop":          "Country",
         "country":              "Country",
-        "indie folk":           "Folk",
+        "indie folk":           "Indie",
         "americana":            "Folk",
         "bluegrass":            "Folk",
         "folk":                 "Folk",
@@ -535,6 +541,13 @@ class Config:
         "brodha v":             "Indian Hip Hop",
         "nucleya":              "Dubstep",          # Indian bass music, filed with Skrillex / Hamdi (user's choice)
         "talha anjum":          "Indian Hip Hop",   # desi hip hop = Indian Hip Hop crate
+        # ── Indie (non-film singer-songwriters; the user's own examples) ───
+        "anuv jain":            "Indie",
+        "prateek kuhad":        "Indie",
+        "rohh":                 "Indie",
+        "asim azhar":           "Indie",
+        "hasan raheem":         "Indie",
+        "aditya rikhari":       "Indie",
         # ── Global Hip Hop additions ──────────────────────────────────────
         "kendrick lamar":       "Hip Hop",
         "drake":                "Hip Hop",

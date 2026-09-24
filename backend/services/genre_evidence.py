@@ -130,6 +130,7 @@ _TAG_RULES: List[Tuple[re.Pattern, str, float]] = [
         (r"\b(?:r&b|rnb)\b",                                               "R&B", 0.9),
         (r"\bsoul\b",                                                      "R&B", 0.4),   # also tags Indian film songs
         (r"\b(?:latin|latino|reggaeton|cumbia|salsa|bachata|urbano)\b",     "Latin", 0.9),
+        (r"\bindie\b",                                                     "Indie", 0.8),
         (r"\bpop\b",                                                       "Pop", 0.5),
     ]
 ]
@@ -472,7 +473,7 @@ class LiveFetchers:
         return label_for_genre(musicbrainz_service.lookup_by_fingerprint(path))
 
     def llm_genre(self, path: str) -> str:
-        from services.gemini_service import identify_audio
+        from services.groq_service import identify_audio
 
         return label_for_genre(identify_audio(path).get("gemini_genre", ""))
 

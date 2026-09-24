@@ -82,6 +82,7 @@ def record_move(
     genre: str,
     source: str = "manual_move",
     family: str = "",
+    min_confidence: float = 0.0,
 ) -> None:
     """
     Record a confirmed artist → genre association.
@@ -92,8 +93,11 @@ def record_move(
     Args:
         artist: Display name of the artist.
         genre:  Canonical genre name (must be a GENRE_TAXONOMY key, e.g. "House").
-        source: "manual_move" | "artist_override" | "spotify_genre"
+        source: "manual_move" | "artist_override" | "spotify_genre" | "hand_move"
         family: Genre family; auto-resolved from GENRE_TAXONOMY if omitted.
+        min_confidence: floor for the stored confidence. A song YOU moved by hand (services/hand_moves.py)
+            passes 0.75: one such move is enough for the router to follow it. A move to a DIFFERENT genre
+            than the stored one starts the count again (your latest decision wins).
     """
     if not artist or not genre:
         return
@@ -117,8 +121,9 @@ def record_move(
     try:
         existing = col.find_one({"artist_key": key})
         if existing:
-            new_count = existing.get("move_count", 0) + 1
-            new_conf  = min(1.0, new_count * _CONFIDENCE_PER_MOVE)
+            same_genre = existing.get("genre") == genre
+            new_count = (existing.get("move_count", 0) + 1) if (same_genre or not min_confidence) else 1
+            new_conf  = max(min_confidence, min(1.0, new_count * _CONFIDENCE_PER_MOVE))
             aliases   = existing.get("aliases", [])
             if artist not in aliases:
                 aliases = (aliases + [artist])[-_ALIAS_LIMIT:]
@@ -141,7 +146,7 @@ def record_move(
                 "genre":      genre,
                 "family":     family,
                 "move_count": 1,
-                "confidence": _CONFIDENCE_PER_MOVE,
+                "confidence": max(min_confidence, _CONFIDENCE_PER_MOVE),
                 "last_seen":  now,
                 "source":     source,
             })

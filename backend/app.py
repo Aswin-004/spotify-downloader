@@ -342,7 +342,7 @@ def maintenance_run():
         args = [_sys.executable, script]
         if dry:
             args.append("--dry-run")
-        if task == "backfill_gemini":
+        if task == "backfill_ai":
             for p in passes:
                 args.append(f"--pass{p}")
             if limit:
@@ -1697,7 +1697,7 @@ _maintenance_active_task = None
 _MAINTENANCE_SCRIPTS = {
     "organise":        "master_organise.py",
     "repair_index":    "repair_index.py",
-    "backfill_gemini": "backfill_gemini.py",
+    "backfill_ai": "backfill_ai.py",
     "backfill_lastfm": "backfill_lastfm.py",
 }
 

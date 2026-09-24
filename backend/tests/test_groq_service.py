@@ -1,5 +1,5 @@
 """
-Focused tests for the P1 Groq-model-configuration fix in gemini_service.py.
+Focused tests for the P1 Groq-model-configuration fix in groq_service.py.
 
 Background: the Groq chat model was previously hardcoded as
 "llama-3.1-8b-instant" in _call_groq(); Groq began rejecting it for this
@@ -31,7 +31,7 @@ os.environ.setdefault("FLASK_ENV", "development")
 os.environ.setdefault("MONGODB_URI", "mongodb://localhost:27017/test")
 
 try:
-    import services.gemini_service as gs
+    import services.groq_service as gs
     from config import config as _config
     _IMPORT_ERROR = None
 except Exception as _e:  # pragma: no cover - environment-dependent
@@ -40,7 +40,7 @@ except Exception as _e:  # pragma: no cover - environment-dependent
     _IMPORT_ERROR = _e
 
 
-@unittest.skipIf(gs is None, f"services.gemini_service not importable: {_IMPORT_ERROR}")
+@unittest.skipIf(gs is None, f"services.groq_service not importable: {_IMPORT_ERROR}")
 class GroqModelConfigTestCase(unittest.TestCase):
     def setUp(self):
         # Every test gets a clean client singleton and a clean config value —

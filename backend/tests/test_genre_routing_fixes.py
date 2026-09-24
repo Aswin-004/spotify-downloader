@@ -210,12 +210,14 @@ class TestMaintenanceWorkerTitleSearchGuard(unittest.TestCase):
         self.assertIn("_decision.verified", step4)
         self.assertIn("not _decision.abstain", step4)
 
-    def test_unattended_job_does_not_act_on_a_groq_text_guess_by_default(self):
+    def test_unattended_job_uses_groq_listening_never_a_text_guess(self):
+        # 2026-09-24: the user wants Groq to decide unknown songs. It now LISTENS (ai_listener: language,
+        # lyrics, vocals) instead of guessing from the title, and can be switched off with AI_CATCHALL_MOVES.
         step7 = self.step4_to_7[self.step4_to_7.index("# ── 7."):]
-        # The real env lookup (not just the comment that mentions the flag) must gate the call.
-        gate = 'if not genre_path and os.getenv("ALLOW_UNVERIFIED_AI_MOVES", "").strip().lower() == "true":'
+        gate = 'if not genre_path and os.getenv("AI_CATCHALL_MOVES", "true").strip().lower() not in ("0", "false", "no", "off"):'
         self.assertIn(gate, step7)
-        self.assertLess(step7.index(gate), step7.index("identify_audio("))
+        self.assertLess(step7.index(gate), step7.index("_ai_catchall_route("))
+        self.assertNotIn("identify_audio(", step7)
 
 
 class TestReclassifierEvidenceStep(unittest.TestCase):

@@ -184,6 +184,8 @@ def safe_move(
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = _collision_safe_name(dest_dir, name, artist_name, spotify_id)
         shutil.move(str(src), str(dest))
+    from services.hand_moves import stamp
+    stamp(dest)                                               # an app move, not yours: nothing to learn
     if dest.name != name:
         logger.info(f"[organizer] Collision resolved on move: {name} → {dest.name}")
     return dest
@@ -408,6 +410,8 @@ def _run_organize(mode: str, since_hours: Optional[float]) -> dict:
                         artist_name=artist,
                     )
                     shutil.move(str(src), dest_path)
+                from services.hand_moves import stamp
+                stamp(dest_path)
                 logger.info(f"[organizer] {fname} → {dest_path}")
                 moved += 1
             except Exception as e:

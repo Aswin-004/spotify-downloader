@@ -655,6 +655,65 @@ def _evidence_route(artist, title, filepath, bpm=None, duration_ms=None, classif
     return "", ""
 
 
+_NOT_SUNG_RE = re.compile(r"\b(?:instrumental|karaoke|bgm|theme|beat|dialogue)\b", re.IGNORECASE)
+
+
+def _known_crate(artist) -> str:
+    """The crate your own lists already give this artist (override list, what the app learned, knowledge base); ''."""
+    try:
+        from services.genre_router import _get_artist_override, normalize_genre, GENRE_TAXONOMY
+        genre = _get_artist_override(artist)
+        if not genre:
+            from services.artist_memory_service import lookup_artist
+            rec = lookup_artist(artist) or {}
+            genre = rec.get("genre", "") if rec.get("confidence", 0) >= 0.5 else ""
+        if not genre:
+            from services.artist_knowledge_service import lookup_artist_knowledge
+            genre = (lookup_artist_knowledge(artist) or {}).get("genre", "")
+        canonical = normalize_genre(genre) if genre else ""
+        return GENRE_TAXONOMY[canonical][1] if canonical in GENRE_TAXONOMY else ""
+    except Exception as exc:
+        logger.debug(f"[ingest] known-crate lookup unavailable for {artist!r}: {exc}")
+        return ""
+
+
+def _expects_indic_vocals(artist, title, forced_crate="") -> bool:
+    """
+    Must this download have South Asian singing? Yes when the crate is already known (a genre playlist, or
+    the artist's crate on your lists) and is Bollywood/Punjabi/Tamil/Indian Hip Hop, unless the title itself
+    says it is an instrumental. The downloader then rejects karaoke/instrumental uploads (services/ai_listener).
+    """
+    if _NOT_SUNG_RE.search(title or ""):
+        return False
+    from services.ai_listener import INDIC_VOCAL_CRATES
+    crate = forced_crate or _known_crate(artist)
+    return crate in INDIC_VOCAL_CRATES
+
+
+def _ai_route(artist, title, filepath, bpm=None, classify=None):
+    """
+    Groq listens to the song (Whisper: language, lyrics, vocals) and picks one of your crates
+    (services/ai_listener.py). Returns ('Library/<crate>', 'ai:groq') or ('', '') when Groq is unavailable,
+    unsure (confidence below AI_MIN_CONFIDENCE, default 0.4) or says Electronic — the catch-all keeps its
+    routing_source=catchall tag then, so the hourly job looks at it again. `classify` is injectable for tests.
+    """
+    try:
+        if classify is None:
+            from services.ai_listener import classify
+        answer = classify(filepath, title, artist, bpm=bpm)
+    except Exception as exc:
+        logger.debug(f"[ingest] AI routing unavailable: {exc}")
+        return "", ""
+    crate = (answer or {}).get("crate", "")
+    try:
+        floor = float(os.getenv("AI_MIN_CONFIDENCE", "0.4"))
+    except ValueError:
+        floor = 0.4
+    if not crate or crate == "Electronic" or answer.get("confidence", 0) < floor:
+        return "", ""
+    return f"Library/{crate}", "ai:groq"
+
+
 def _hip_hop_folder(artist, title, is_indian=None) -> str:
     """
     'Library/Indian Hip Hop' when any Indian signal exists for the artist (curated list, Indian tags, Indian
@@ -852,42 +911,17 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
         from services.genre_router import map_genre_string, resolve_genre_folder
         from services.organizer_service import clean_folder_name
 
-        def _gemini_genre_fallback(filepath: str) -> str:
-            """
-            Try Gemini identify_audio() on the staged file.
-            Returns a Library/-prefixed path or '' only when Gemini itself fails/unavailable.
-            Sub-genres collapse to parent via normalize_genre(). Truly unknown genre → 'Library/Electronic'.
-            Never raises.
-            """
-            try:
-                from services.gemini_service import identify_audio, GeminiQuotaExceeded
-                from services.genre_router import normalize_genre, _library_path
-                gemini = identify_audio(filepath)
-                raw = gemini.get("gemini_genre", "")
-                if not raw:
-                    return ""
-                canonical = normalize_genre(raw)
-                if canonical:
-                    return _library_path(canonical)   # e.g. "Library/House"
-                return "Library/Electronic"           # Gemini identified something but it's not in taxonomy
-            except GeminiQuotaExceeded:
-                logger.info("[ingest] Gemini daily budget exhausted — skipping fallback for this track")
-            except Exception as _ge:
-                logger.debug(f"[ingest] Gemini fallback unavailable: {_ge}")
-            return ""
-
         def _fallback_genre(filepath: str, bpm=None):
             """
-            The router does not know this artist. Before guessing, ask the evidence engine (see _evidence_route:
-            only a VERIFIED answer for a real crate counts), then the Groq guess from title + artist, as before
-            (services/gemini_service.py is a legacy name: it calls Groq, not Gemini).
-            Returns (Library/-prefixed path or '', method): 'evidence:<sources>', 'gemini' or ''. Never raises.
+            The router does not know this artist. First the evidence engine (see _evidence_route: only a
+            VERIFIED answer for a real crate counts), then Groq listens to the song and picks a crate
+            (_ai_route). Returns (Library/-prefixed path or '', method): 'evidence:<sources>', 'ai:groq' or ''.
+            Never raises.
             """
             _epath, _emethod = _evidence_route(artist, title, filepath, bpm, track_info.get("duration_ms"))
             if _epath:
                 return _epath, _emethod
-            _gpath = _gemini_genre_fallback(filepath)
-            return _gpath, ("gemini" if _gpath else "")
+            return _ai_route(artist, title, filepath, bpm)
 
         # Yield to manual downloads (priority)
         if wait_if_manual_active():
@@ -960,6 +994,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     album_art_url=track_info.get("album_art_url"),
                     spotify_track_id=track_info.get("id", ""),
                     spotify_release_date=track_info.get("release_date", ""),
+                    expect_vocals=_expects_indic_vocals(artist, title, track_info.get("forced_genre", "")),
                 )
 
             if result["status"] == "success":
@@ -1040,14 +1075,13 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                 genre_confidence = 0.9
                                 logger.info(f"[ingest] MB genre routing: {title} → {mapped} (conf=0.9)")
                             else:
-                                # MB genre not in map — verified evidence, then Gemini, then Electronic catch-all
+                                # MB genre not in map — verified evidence, then Groq listening, then Electronic catch-all
                                 # (the variable keeps its old name; it now holds either fallback's answer)
                                 gemini_path, _fb_method = _fallback_genre(staged_filepath, _bpm_hint)
                                 if gemini_path:
                                     final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
                                     logger.info(f"[ingest] Fallback routing ({_fb_method}, MB miss): {title} → {gemini_path}")
-                                    if _fb_method.startswith("evidence"):
-                                        _route_tag = _fb_method
+                                    _route_tag = _fb_method
                                     _emit("download_auto_classified", {
                                         "title": title, "artist": artist,
                                         "folder": gemini_path, "method": _fb_method.split(":")[0],
@@ -1056,7 +1090,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                 else:
                                     final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
                                     _is_catchall = True
-                                    logger.info(f"[ingest] Electronic catch-all (MB miss, Gemini unavail): {title}")
+                                    logger.info(f"[ingest] Electronic catch-all (MB miss, no evidence, Groq unsure): {title}")
                         else:
                             # Spotify artist genres with confidence scoring
                             folder_structure, genre_confidence, genre_source = resolve_genre_folder_with_confidence(
@@ -1071,7 +1105,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                 logger.info(f"[ingest] Genre routing: {title} → {folder_structure} "
                                             f"(conf={genre_confidence:.2f}, src={genre_source})")
                             else:
-                                # Low-confidence — try verified evidence, then Gemini, before the catch-all.
+                                # Low-confidence — try verified evidence, then Groq listening, before the catch-all.
                                 # Never routes to NeedsReview for genre failures.
                                 gemini_path, _fb_method = _fallback_genre(staged_filepath, _bpm_hint)
                                 if gemini_path:
@@ -1080,8 +1114,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                         f"[ingest] Fallback routing ({_fb_method}): {title} → {gemini_path} "
                                         f"(Spotify conf={genre_confidence:.2f} was too low)"
                                     )
-                                    if _fb_method.startswith("evidence"):
-                                        _route_tag = _fb_method
+                                    _route_tag = _fb_method
                                     _emit("download_auto_classified", {
                                         "title": title, "artist": artist,
                                         "folder": gemini_path, "method": _fb_method.split(":")[0],
@@ -1089,13 +1122,13 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                                         "source": "ingest",
                                     })
                                 else:
-                                    # Gemini unavailable (quota/error) → Electronic catch-all.
+                                    # No evidence and Groq unsure/unavailable → Electronic catch-all.
                                     # Song is never lost — always lands somewhere in Library/.
                                     final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
                                     _is_catchall = True
                                     logger.warning(
                                         f"[ingest] Electronic catch-all: {title} "
-                                        f"(Spotify conf={genre_confidence:.2f}, Gemini unavail)"
+                                        f"(Spotify conf={genre_confidence:.2f}, no evidence, Groq unsure)"
                                     )
 
                 # Every routing branch above except the plain Electronic catch-all
@@ -1165,7 +1198,7 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
 
                 logger.info(f"[ingest] Moved: {result.get('filename')} → {final_folder}")
 
-                # Tag catch-all files so maintenance worker can retry Gemini later
+                # Tag catch-all files so maintenance worker can look at them again later
                 if _is_catchall:
                     try:
                         from mutagen.id3 import ID3, TXXX
@@ -1184,7 +1217,14 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                         "source": "ingest",
                     })
 
-                # Say HOW a song was filed when it was not the router: a genre playlist or verified evidence.
+                # The app filed this song here: a later move to another crate is then recognisably YOURS.
+                try:
+                    from services.hand_moves import stamp as _stamp_crate
+                    _stamp_crate(final_filepath)
+                except Exception:
+                    pass
+
+                # Say HOW a song was filed when it was not the router: a genre playlist, verified evidence or Groq.
                 if _route_tag and not _is_catchall:
                     try:
                         from mutagen.id3 import ID3, TXXX
@@ -1450,6 +1490,18 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
         logger.error(f"Notification error: {_notif_err}")  # NOTIFICATION
 
 
+def _learn_hand_moves() -> None:
+    """Songs you moved by hand since the last cycle teach the router (services/hand_moves.py).
+    HAND_MOVE_LEARNING=false switches it off. Needs no Spotify, so it runs even during a 429 cooldown."""
+    if os.getenv("HAND_MOVE_LEARNING", "true").strip().lower() in ("0", "false", "no", "off"):
+        return
+    try:
+        from services import hand_moves
+        hand_moves.scan()
+    except Exception as exc:
+        logger.warning(f"[hand-moves] pass failed: {exc}")
+
+
 def playlist_monitor():
     """Main monitor loop — checks the ingest playlist every CHECK_INTERVAL seconds."""
     time.sleep(10)
@@ -1460,6 +1512,7 @@ def playlist_monitor():
     logger.info(f"[ingest] Playlist monitor started (checks every {effective_poll_interval()} s; "
                 "one Spotify request per check unless the playlist changed).")
     while True:
+        _learn_hand_moves()
         if is_rate_limited():
             logger.info("[ingest] Skipping cycle — Spotify API cooldown active.")
         else:

@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import backfill_gemini
+import backfill_ai
 from services.legacy_identification_service import (
     _parse_filename,
     CONF_ACCEPT_WARN,
@@ -45,7 +45,7 @@ def sp_candidate(id_, title, artist, album="", duration_ms=0, popularity=50):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# A + B: backfill_gemini._select_verified_spotify_match() confidence gate
+# A + B: backfill_ai._select_verified_spotify_match() confidence gate
 # ═══════════════════════════════════════════════════════════════════
 
 class TestPass6ConfidenceGate(unittest.TestCase):
@@ -57,14 +57,14 @@ class TestPass6ConfidenceGate(unittest.TestCase):
                          duration_ms=95000),
             sp_candidate("WRONGID2", "Another Unrelated Track", "Also Not It", duration_ms=310000),
         ]
-        spotify_id, confidence, reason = backfill_gemini._select_verified_spotify_match(
+        spotify_id, confidence, reason = backfill_ai._select_verified_spotify_match(
             "Doctor", "Sammy Virji", 152000, candidates,
         )
         self.assertEqual(spotify_id, "")
         self.assertLess(confidence, CONF_ACCEPT_WARN)
 
     def test_A_no_candidates_rejected(self):
-        spotify_id, confidence, reason = backfill_gemini._select_verified_spotify_match(
+        spotify_id, confidence, reason = backfill_ai._select_verified_spotify_match(
             "Doctor", "Sammy Virji", 152000, [],
         )
         self.assertEqual(spotify_id, "")
@@ -76,7 +76,7 @@ class TestPass6ConfidenceGate(unittest.TestCase):
             sp_candidate("WRONGID", "Totally Different Song", "Nobody Relevant", duration_ms=200000),
             sp_candidate("GOODID", "Doctor", "Sammy Virji", duration_ms=152500, popularity=70),
         ]
-        spotify_id, confidence, reason = backfill_gemini._select_verified_spotify_match(
+        spotify_id, confidence, reason = backfill_ai._select_verified_spotify_match(
             "Doctor", "Sammy Virji", 152000, candidates,
         )
         self.assertEqual(spotify_id, "GOODID")
@@ -196,7 +196,7 @@ class TestCollisionRegression(unittest.TestCase):
             sp_candidate("0SLedTMdKihqLsR6CGPAfD", "Sammy Virji Remix", "Sammy Virji",
                          duration_ms=200000, popularity=55),
         ]
-        spotify_id, confidence, reason = backfill_gemini._select_verified_spotify_match(
+        spotify_id, confidence, reason = backfill_ai._select_verified_spotify_match(
             "Sammy Virji Remix", "Unknown T", 182730, candidates,
         )
         self.assertEqual(spotify_id, "")
@@ -214,7 +214,7 @@ class TestCollisionRegression(unittest.TestCase):
             sp_candidate("0SLedTMdKihqLsR6CGPAfD", "Sammy Virji Remix", "Sammy Virji", duration_ms=200000),
             sp_candidate("REALGOODUMSID", "Goodums", "Unknown T", duration_ms=182500, popularity=60),
         ]
-        spotify_id, confidence, reason = backfill_gemini._select_verified_spotify_match(
+        spotify_id, confidence, reason = backfill_ai._select_verified_spotify_match(
             parsed.title, "Unknown T", 182730, candidates,
         )
         self.assertEqual(spotify_id, "REALGOODUMSID")

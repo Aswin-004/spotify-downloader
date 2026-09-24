@@ -100,6 +100,9 @@ GENRE_TAXONOMY: dict[str, tuple[str, str]] = {
     "K-Pop":         ("Global",     "Pop"),
     "J-Pop":         ("Global",     "Pop"),
     "Asian Pop":     ("Global",     "Pop"),
+    "Indie":         ("Global",     "Indie"),       # non-film singer-songwriters: Anuv Jain, rohh, Asim Azhar ...
+    "Indie Pop":     ("Global",     "Indie"),
+    "Desi Indie":    ("Global",     "Indie"),
     "Latin":         ("Global",     "Latin"),
     "Afrobeats":     ("Global",     "Latin"),
     "Reggae":        ("Global",     "Latin"),

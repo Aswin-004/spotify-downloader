@@ -79,8 +79,8 @@ REPORTS_DIR = Path(__file__).resolve().parent / "reports"
 
 # Folders that are not genre crates (or that you curate by hand): never scanned.
 SKIP_FOLDERS = ("NeedsReview", "Quarantine", "Manual", "Duplicates", "_TO_DELETE", "PSY")
-INDIAN = frozenset({"Bollywood", "Punjabi", "Tamil", "Indian Hip Hop"})     # moving between these is taste, not fact
-GLOBAL = frozenset({"Pop", "R&B", "International Hip Hop", "Latin"})       # ditto: The Weeknd is Pop AND R&B
+INDIAN = frozenset({"Bollywood", "Punjabi", "Tamil", "Indian Hip Hop", "Indie"})     # moving between these is taste, not fact
+GLOBAL = frozenset({"Pop", "R&B", "International Hip Hop", "Latin", "Indie"})       # ditto: The Weeknd is Pop AND R&B
 
 MOVE_CONFIDENCE = 0.75
 REVIEW_CONFIDENCE = 0.50
@@ -90,7 +90,7 @@ FOLDER_TO_TCON = {
     "Bollywood": "Bollywood", "Drum & Bass": "Drum and Bass", "Dubstep": "Dubstep",
     "Electronic": "Electronic", "Grime": "Grime", "House": "House",
     "Indian Hip Hop": "Indian Hip Hop", "International Hip Hop": "International Hip Hop",
-    "Latin": "Latin", "Pop": "Pop", "Punjabi": "Punjabi", "R&B": "R&B", "Tamil": "Tamil",
+    "Indie": "Indie", "Latin": "Latin", "Pop": "Pop", "Punjabi": "Punjabi", "R&B": "R&B", "Tamil": "Tamil",
     "Techno": "Techno", "Trance": "Trance", "UK Garage": "UK Garage",
 }
 
@@ -392,8 +392,8 @@ def decide_action(
     if current in INDIAN and answer not in INDIAN and _INDIAN_VERSION_RE.search(title or ""):
         return "review", answer, "the title says it is an Indian-language version — it stays in the Indian crates"
     if not artist_was_placeholder:
-        for family, label in ((INDIAN, "Bollywood/Punjabi/Tamil/Indian Hip Hop"),
-                              (GLOBAL, "Pop/R&B/International Hip Hop/Latin")):
+        for family, label in ((INDIAN, "Bollywood/Punjabi/Tamil/Indian Hip Hop/Indie"),
+                              (GLOBAL, "Pop/R&B/International Hip Hop/Latin/Indie")):
             if current in family and answer in family:
                 return "review", answer, f"{label} boundary — a matter of taste, your call"
     if decision.verified and decision.confidence >= move_confidence:
@@ -1046,6 +1046,8 @@ def undo_manifest(
             if moved:
                 orig.parent.mkdir(parents=True, exist_ok=True)
                 move_fn(str(cur), str(orig))
+                from services.hand_moves import stamp
+                stamp(orig)                       # the undo put it back: an app move, nothing to learn
             if rec.get("old_genre") is not None or rec.get("old_artist") is not None:
                 tag_fn(str(orig), artist=rec.get("old_artist"), genre=rec.get("old_genre"))
             if moved:
@@ -1073,7 +1075,7 @@ def undo_manifest(
 CRATE_TO_GENRE = {"Bollywood": "Bollywood", "Punjabi": "Punjabi", "Tamil": "Tamil", "House": "House", "Techno": "Techno",
                   "Trance": "Trance", "Drum & Bass": "Drum and Bass", "UK Garage": "UK Garage", "Dubstep": "Dubstep",
                   "Grime": "Grime", "Indian Hip Hop": "Indian Hip Hop", "International Hip Hop": "Hip Hop",
-                  "R&B": "R&B", "Pop": "Pop", "Latin": "Latin"}
+                  "R&B": "R&B", "Pop": "Pop", "Latin": "Latin", "Indie": "Indie"}
 LEARN_MIN_TRACKS = 3
 LEARN_MIN_SHARE = 0.8
 

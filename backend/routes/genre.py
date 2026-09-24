@@ -22,9 +22,9 @@ genre_bp = Blueprint("genre", __name__)
 def gemini_quota():
     """Return AI classifier status (Groq-backed, effectively unlimited)."""
     try:
-        from services.gemini_service import remaining_quota, GEMINI_DAILY_BUDGET
+        from services.groq_service import remaining_quota, GROQ_DAILY_BUDGET
         remaining = remaining_quota()
-        return jsonify({"remaining": remaining, "total": GEMINI_DAILY_BUDGET, "exhausted": False})
+        return jsonify({"remaining": remaining, "total": GROQ_DAILY_BUDGET, "exhausted": False})
     except Exception as e:
         return jsonify({"remaining": 0, "total": 0, "exhausted": True, "error": str(e)})
 

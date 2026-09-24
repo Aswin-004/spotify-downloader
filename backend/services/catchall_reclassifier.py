@@ -18,10 +18,10 @@ Fallback chain, cheapest/most-certain first:
      cannot settle it) an AcoustID fingerprint. Answers only when the votes are strong and
      clearly ahead; otherwise abstains.
   7. Groq LLM genre classification from title+artist (last resort). Lives in
-     services/gemini_service.py, whose module/function/field names ("gemini_*")
+     services/groq_service.py, whose module/function/field names ("gemini_*")
      are stale from before that service was migrated to Groq — it calls the
      Groq API (config.GROQ_API_KEY / GROQ_MODEL) exclusively, not Gemini.
-     remaining_quota() is hardcoded to 9999 and GeminiQuotaExceeded is never
+     remaining_quota() is hardcoded to 9999 and GroqQuotaExceeded is never
      actually raised, since Groq has no equivalent daily-quota concept.
 """
 import threading
@@ -115,7 +115,7 @@ def classify_and_route_catchall_track(
             "evidence": str,      # step 4's one-line explanation, incl. the reason it abstained
         }
     """
-    from services.gemini_service import identify_audio, GeminiQuotaExceeded, remaining_quota as _remaining_quota
+    from services.groq_service import identify_audio, GroqQuotaExceeded, remaining_quota as _remaining_quota
     from services.genre_router import (
         normalize_genre, _library_path, resolve_genre_folder_with_confidence,
         normalize_artist_key as _nak, spotify_genres_available,
@@ -348,7 +348,7 @@ def classify_and_route_catchall_track(
             pass
         return out
 
-    except GeminiQuotaExceeded as e:
+    except GroqQuotaExceeded as e:
         logger.warning(f"[catchall-reclassify] quota exhausted: {e}")
         out["reason"] = str(e)
         out["quota_exhausted"] = True

@@ -705,7 +705,7 @@ def enrich_track_gemini(identity_key: str, file_path: str) -> bool:
     if not identity_key or not file_path:
         return False
     try:
-        from services.gemini_service import analyze_audio as _gemini_analyze
+        from services.groq_service import analyze_audio as _gemini_analyze
         _gemini_data = _gemini_analyze(file_path)
         if not _gemini_data:
             return False
@@ -721,8 +721,8 @@ def enrich_track_gemini(identity_key: str, file_path: str) -> bool:
         logger.warning(f"[tagger] Gemini enrichment skipped — identity_key not in library_index: {identity_key}")
         return False
     except Exception as e:
-        from services.gemini_service import GeminiQuotaExceeded
-        if isinstance(e, GeminiQuotaExceeded):
+        from services.groq_service import GroqQuotaExceeded
+        if isinstance(e, GroqQuotaExceeded):
             logger.info(f"[tagger] Gemini enrichment skipped (quota exhausted) for {identity_key}")
         else:
             logger.debug(f"[tagger] Gemini enrichment failed for {identity_key}: {e}")

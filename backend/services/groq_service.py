@@ -1,11 +1,10 @@
 """
-AI genre classification service — powered by Groq (model set via
+AI genre classification from TEXT (title + artist) — powered by Groq (model set via
 config.GROQ_MODEL / GROQ_MODEL env var — see config.py for which models are
 actually enabled on this account and why the current default was chosen).
 Reads ID3 tags from the file and sends title + artist to the model.
-Keeps the exact same public API as the old Gemini service so all callers
-(maintenance_worker, auto_downloader, tagger_service, backfill_gemini)
-work unchanged.
+The result keys are still called gemini_* because older library records store them under those names.
+To classify by LISTENING to the song (language, lyrics, vocals), use services/ai_listener.py.
 """
 import json
 import re
@@ -19,15 +18,15 @@ except ImportError:
 
 
 # ── Public constants — callers that import these still work ─────────────────
-class GeminiQuotaExceeded(Exception):
+class GroqQuotaExceeded(Exception):
     """Kept for backward compatibility — never raised with Groq."""
 
 
-GEMINI_DAILY_BUDGET = 9999  # effectively unlimited
+GROQ_DAILY_BUDGET = 9999  # effectively unlimited
 
 
 def remaining_quota() -> int:
-    return GEMINI_DAILY_BUDGET
+    return GROQ_DAILY_BUDGET
 
 
 # ── Groq client (lazy init) ──────────────────────────────────────────────────
@@ -59,18 +58,17 @@ def _read_tags(filepath: str) -> dict:
         return {"title": "", "artist": "", "genre": ""}
 
 
-_GENRE_LIST = (
-    "Bollywood, Punjabi, Tamil, House, Trance, Drum & Bass, "
-    "UK Garage, Dubstep, Techno, Grime, Electronic, Hip Hop, R&B, Pop, Latin, Afrobeats"
-)
+# One list of crates for every Groq caller: the one the listening classifier uses (services/ai_listener.py).
+from services.ai_listener import CRATES as _CRATES
+
+_GENRE_LIST = ", ".join(_CRATES)
 
 _SYSTEM = (
     "You are a music genre classifier for a DJ library. "
     "Return ONLY a valid JSON object — no markdown, no explanation. "
-    "CRITICAL RULES: (1) Only use 'Punjabi' for artists who explicitly make Punjabi/Bhangra music "
-    "from the Punjab region of India or Pakistan — do NOT use it as a default for any non-Western music. "
-    "(2) For African artists or African-influenced music, use 'Afrobeats'. "
-    "(3) For unknown world/global artists, default to 'Electronic' or 'R&B' rather than 'Punjabi'."
+    "The genre MUST be exactly one of the listed crate names. What each crate holds: "
+    + "; ".join(f"{name}: {desc}" for name, desc in _CRATES.items())
+    + ". Only use 'Punjabi' for songs sung in Punjabi; a non-film Hindi/Urdu singer-songwriter is 'Indie'."
 )
 
 
@@ -133,7 +131,7 @@ def _call_groq(title: str, artist: str, existing_genre: str = "") -> dict:
     raise RuntimeError("Groq rate limit: all retries exhausted")
 
 
-# ── Public API (identical signatures to old gemini_service) ──────────────────
+# ── Public API (identical signatures to old groq_service) ──────────────────
 
 def analyze_audio(filepath: str) -> dict:
     """Read ID3 tags, classify via Groq, return dict with gemini_* keys."""
@@ -156,7 +154,7 @@ def analyze_audio(filepath: str) -> dict:
             f"mood={result['gemini_mood']} energy={result['gemini_energy']}"
         )
         return result
-    except GeminiQuotaExceeded:
+    except GroqQuotaExceeded:
         raise
     except Exception as e:
         logger.warning(f"[ai] analyze_audio failed for {filepath}: {e}")
@@ -188,7 +186,7 @@ def identify_audio(filepath: str) -> dict:
             f"artist={result['artist']!r} genre={result['gemini_genre']}"
         )
         return result
-    except GeminiQuotaExceeded:
+    except GroqQuotaExceeded:
         raise
     except Exception as e:
         logger.warning(f"[ai] identify_audio failed for {filepath}: {e}")
