@@ -34,3 +34,8 @@ soundfile==0.12.1
 gunicorn>=21.2.0
 gevent>=24.2.1
 gevent-websocket>=0.10.1
+# Used by the code but missing from this list until 2026-09-24 (a fresh install failed without them):
+pyacoustid>=1.3.0        # AcoustID fingerprint lookups (services/fingerprint_service.py)
+scikit-learn>=1.5        # the audio genre model (services/audio_genre_model.py); brings joblib + numpy
+openpyxl>=3.1            # review spreadsheets written by library_resort.py / cleanup tools
+imageio-ffmpeg>=0.5      # a bundled ffmpeg: no separate ffmpeg install needed (downloader falls back to it)

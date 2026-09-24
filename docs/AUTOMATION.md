@@ -47,8 +47,8 @@ the library) is downloaded again, twice at most (`services/download_verifier.py`
 * You **do not know** the genre: add it to your normal ingest playlist. See "Unknown genres" below.
 * To force an immediate check, press **Sync now** in the app (it reads every playlist completely).
 
-Songs already in your library are never moved by a playlist; the downloader skips them. To move one, move it by
-hand (or use `library_resort.py`), then record it with `library_resort.py learn`.
+Songs already in your library are never moved by a playlist; the downloader skips them. To move one, just move it
+by hand: the app notices on its next check and learns from it (see "It learns from your moves" below).
 
 ## Unknown genres: what happens to a song nobody has heard of
 
@@ -59,8 +59,10 @@ The app decides in this order and stops at the first answer:
 3. **Verified evidence** (new): Last.fm, MusicBrainz and iTunes tags for *this song*, remixer and title hints,
    and tempo. Only an answer backed by a trusted source counts, and it must name a real crate.
    Set `INGEST_EVIDENCE_ROUTING=false` in `backend/.env` to switch this step off.
-4. A Groq guess from the song's title and artist (no audio is analysed; the code still calls this step "Gemini"
-   for historical reasons, but it only uses your Groq key). It is the weakest source, so it comes after everything above.
+4. **Groq listens** (`services/ai_listener.py`): two 25-second clips go to Groq Whisper, which hears the sung
+   language and lyrics (and whether anyone sings at all); then Groq picks one of your crates from the title, artist,
+   language, lyrics and tempo. It must be at least `AI_MIN_CONFIDENCE` sure (default 0.4) and name a real crate.
+   An Indian crate is not accepted for a song sung in another language unless its title is in an Indian script.
 5. **The Electronic catch-all.** The song is saved, tagged `routing_source=catchall`, and re-checked by the hourly
    job. If nothing knows the song it stays there: that is the honest answer, not a wrong folder.
 
@@ -73,8 +75,16 @@ own always wins ("DJ - Indian Hip Hop" files everything in it in that crate).
 Every song filed by step 1 or 3 carries a `routing_source` tag (`genre_playlist:House`, `evidence:lastfm_track+itunes`)
 so you can always see *why* a song is where it is.
 
-**Shrinking the catch-all over time.** When you sort a catch-all song (in the Library page, or by hand followed by
-`python library_resort.py scan` then `learn`), the app remembers that artist, and the next song by them files itself.
+**It learns from your moves.** Every song the app files carries its crate in a tag (`filed_crate`). On every
+check (~10 minutes) the watcher looks for songs sitting in a different crate folder than that tag says: you moved
+them (Explorer, Rekordbox, anything). For each one it remembers the artist → crate (the next song by them files
+itself), syncs the genre tag, and marks the song hand-placed so no tool ever moves it back. Placeholder artists
+("Unknown", "Indian" ...) are never learned. Log: `backend/reports/hand_moves.jsonl`. `HAND_MOVE_LEARNING=false`
+switches it off. (The first check after installing only records where every song is now; nothing is learned from it.)
+
+**Karaoke and instrumental uploads.** When the artist is known to belong in Bollywood, Punjabi, Tamil or Indian Hip
+Hop, each download is also played to Whisper: no lyrics and nothing that even sounds South Asian in three clips means
+a karaoke/instrumental upload, which is thrown away and the next YouTube result tried (twice at most).
 
 ## Is it working?
 

@@ -377,7 +377,7 @@ export default function Settings() {
           <Input
             value={draft.ingest_playlist_id}
             onChange={e => set('ingest_playlist_id', e.target.value)}
-            placeholder="6wP8mXlaYeFrbPzEAVSEf8"
+            placeholder="Playlist id: the part after /playlist/ in its link"
           />
           {cfg?.ingest_playlist_id && (
             <p className="text-10 mt-1" style={{ color: 'var(--text-muted)' }}>

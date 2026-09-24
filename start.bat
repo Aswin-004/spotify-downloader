@@ -4,11 +4,11 @@ color 0A
 
 echo.
 echo  =============================================
-echo   Spotify Meta Downloader — Starting up...
+echo   Spotify Meta Downloader - Starting up...
 echo  =============================================
 echo.
 
-REM ── Step 1: Build frontend ────────────────────────────────────────────────
+REM -- Step 1: Build frontend ------------------------------------------------
 REM Already running? Never start a second copy: two copies would each download every new song.
 netstat -ano | findstr /R /C:":5000 .*LISTENING" >nul 2>&1
 if %errorlevel% equ 0 (
@@ -16,6 +16,10 @@ if %errorlevel% equ 0 (
     start "" http://localhost:5000
     exit /b 0
 )
+
+REM Not set up yet? setup.bat does everything once (packages, settings, Spotify login).
+if not exist "%~dp0.venv\Scripts\python.exe" goto :needs_setup
+if not exist "%~dp0backend\.env" goto :needs_setup
 
 echo  [1/3] Building frontend...
 cd /d "%~dp0frontend-react"
@@ -36,7 +40,7 @@ if %errorlevel% neq 0 (
 echo  [1/3] Frontend built successfully.
 echo.
 
-REM ── Step 2: Start Redis + Celery worker (optional — app works without them) ─
+REM -- Step 2: Start Redis + Celery worker (optional - app works without them) -
 echo  [2/3] Starting Redis + Celery worker (optional)...
 cd /d "%~dp0backend"
 
@@ -47,7 +51,7 @@ if %errorlevel% equ 0 (
     timeout /t 2 /nobreak >nul
     echo  Redis started.
 ) else (
-    echo  Redis not found — skipping. Downloads will use thread mode instead.
+    echo  Redis not found - skipping. Downloads will use thread mode instead.
     echo  Install Redis for Windows: https://github.com/microsoftarchive/redis/releases
 )
 
@@ -62,7 +66,7 @@ if %errorlevel% equ 0 (
 )
 echo.
 
-REM ── Step 3: Start backend ─────────────────────────────────────────────────
+REM -- Step 3: Start backend -------------------------------------------------
 echo  [3/3] Starting backend on http://localhost:5000 ...
 
 REM Prefer venv Python so all installed packages are available
@@ -86,3 +90,9 @@ echo.
 %PYTHON% app.py
 
 pause
+exit /b 0
+
+:needs_setup
+echo  This copy is not set up yet. Running setup.bat first...
+call "%~dp0setup.bat"
+exit /b

@@ -2,6 +2,7 @@
 Configuration settings for Spotify Meta Downloader
 """
 import os
+import re
 import sys
 from dotenv import load_dotenv
 
@@ -21,6 +22,13 @@ _DEV_ORIGINS = [
     "http://127.0.0.1:5000",
 ]
 
+
+
+def _playlist_id(value: str) -> str:
+    """An id, a spotify:playlist: URI or an open.spotify.com link (with or without ?si=...) -> the id."""
+    value = (value or "").strip()
+    m = re.search(r"playlist[/:]([A-Za-z0-9]{22})", value)
+    return m.group(1) if m else value
 
 class Config:
     """Base configuration"""
@@ -59,7 +67,7 @@ class Config:
     LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "")
 
     # Playlist configuration (single ingest playlist)
-    INGEST_PLAYLIST_ID = os.getenv("INGEST_PLAYLIST_ID", "")
+    INGEST_PLAYLIST_ID = _playlist_id(os.getenv("INGEST_PLAYLIST_ID", ""))
 
     # OAuth — REDIRECT_URI must be updated in your Spotify Developer Dashboard
     REDIRECT_URI = os.getenv("REDIRECT_URI", "http://127.0.0.1:8888/callback")

@@ -8,7 +8,7 @@ organises them into genre-based folders. Built for DJs who want a clean, sorted 
 ## Features
 
 - **Auto-sync** — monitors a Spotify playlist and downloads new tracks automatically
-- **Smart genre routing** — a genre playlist you own → your artist lists and learned memory → verified evidence (Last.fm / MusicBrainz / iTunes) → a Groq guess → the catch-all folder (see `docs/AUTOMATION.md`)
+- **Smart genre routing** — your artist lists and what the app learned from your own moves → verified evidence (Last.fm / MusicBrainz / iTunes) → Groq *listens* to the song (language, lyrics) and picks a folder → the catch-all (see `docs/AUTOMATION.md`)
 - **Custom folder mapping** — point the app at your existing DJ folder structure
 - **Album artwork** — embeds Spotify cover art as ID3 APIC frames
 - **Celery + Redis** — optional async task queue with automatic fallback to threading
@@ -16,77 +16,41 @@ organises them into genre-based folders. Built for DJs who want a clean, sorted 
 
 ---
 
-## Prerequisites
+## Setup (Windows)
+
+**Full step-by-step guide: [docs/SETUP.md](docs/SETUP.md)** (free accounts to create, what to paste where).
+
+1. Create a Spotify developer app (Redirect URI `http://127.0.0.1:8888/callback`), a free MongoDB Atlas
+   database and a free Groq key; optionally Last.fm and AcoustID keys.
+2. Double-click **`setup.bat`**: installs Python/Node packages (and offers to install Python/Node themselves),
+   builds the web app, creates `backend/.env` for you to fill in, logs in to Spotify once and checks everything.
+3. Double-click **`start.bat`** and open **http://localhost:5000**.
+
+Check your setup any time: `..\.venv\Scripts\python.exe check_setup.py` from the `backend` folder.
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| Python | 3.10+ | |
-| Node.js | 18+ | For frontend build |
-| MongoDB | 6+ | Local or Atlas |
-| Redis | 7+ | Optional — for Celery |
-| fpcalc | latest | AcoustID fingerprinter — [download](https://acoustid.org/chromaprint) |
-
----
-
-## Setup
-
-**1. Clone and install Python dependencies**
-```bash
-cd backend
-pip install -r requirements.txt
-```
-
-**2. Install Node dependencies and build the frontend**
-```bash
-cd frontend-react
-npm install
-npm run build
-```
-
-**3. Configure environment**
-```bash
-cd backend
-copy .env.example .env   # Windows
-# Edit .env with your API keys (see below)
-```
-
-**4. Run the app**
-
-Double-click `start.bat` — it builds the frontend, starts Redis + Celery (if available), then launches the backend.
-
-Open **http://localhost:5000** in your browser.
+| Python | 3.11+ | installed by setup.bat if missing |
+| Node.js | 18+ | builds the web app; installed by setup.bat if missing |
+| MongoDB | Atlas M0 (free) or local 6+ | |
+| ffmpeg | — | bundled (`imageio-ffmpeg`), nothing to install |
+| fpcalc | optional | AcoustID fingerprinter: put `fpcalc.exe` in `backend/` |
+| Redis | optional | faster task queue; the app uses threads without it |
 
 ---
 
 ## API Keys
 
-| Key | Where to get | Free tier |
-|-----|-------------|-----------|
-| `SPOTIFY_CLIENT_ID` / `SECRET` | [developer.spotify.com](https://developer.spotify.com/dashboard) | Yes |
-| `GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) | Yes (last-resort genre guess) |
-| `LASTFM_API_KEY` | [last.fm/api](https://www.last.fm/api/account/create) | Yes |
-| `ACOUSTID_API_KEY` | [acoustid.org](https://acoustid.org/api-key) | Yes |
-| `DISCORD_WEBHOOK_URL` | Discord → Server Settings → Integrations → Webhooks | Optional |
+| Key | Where to get | |
+|-----|-------------|---|
+| `SPOTIFY_CLIENT_ID` / `SECRET` | [developer.spotify.com](https://developer.spotify.com/dashboard) | required |
+| `MONGODB_URI` | [mongodb.com/atlas](https://www.mongodb.com/cloud/atlas/register) | required |
+| `GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) | required: listens to unknown songs and picks their genre |
+| `LASTFM_API_KEY` | [last.fm/api](https://www.last.fm/api/account/create) | recommended |
+| `ACOUSTID_API_KEY` | [acoustid.org](https://acoustid.org/new-application) | recommended: rejects wrong-song / karaoke downloads |
+| `DISCORD_WEBHOOK_URL` | Discord → Server Settings → Integrations → Webhooks | optional |
 
-All keys go in `backend/.env` — copy `backend/.env.example` as a template.
-
-> **Security:** Never commit `backend/.env` to git. It is already in `.gitignore`.
-> Regenerate all keys before sharing the repo publicly.
-
----
-
-## Configuration
-
-```env
-# Where your music lives — genre subfolders are created automatically
-BASE_DOWNLOAD_DIR=C:\Users\You\DJ Music
-
-# Spotify playlist to auto-sync from
-INGEST_PLAYLIST_ID=your_playlist_id
-
-# How often to check for new tracks (milliseconds)
-CHECK_INTERVAL=60
-```
+All settings live in `backend/.env` (template: `backend/.env.example`). It is git-ignored: never commit or share it.
 
 ---
 
@@ -105,15 +69,14 @@ If you already have an organised folder structure:
 
 ```
 BASE_DOWNLOAD_DIR/
-├── House/
-├── Techno/
-├── Drum and Bass/
-├── Hip Hop/
-│   └── track.mp3
-├── Library/
-│   └── Electronic/        ← catch-all (genre not detected)
-└── NeedsReview/           ← low-confidence classifications
+└── Library/
+    ├── House/  Techno/  Trance/  Drum & Bass/  Dubstep/  UK Garage/
+    ├── Bollywood/  Punjabi/  Tamil/  Indie/  Indian Hip Hop/
+    ├── International Hip Hop/  R&B/  Pop/  Latin/
+    └── Electronic/        ← catch-all: nothing could tell the genre yet (re-checked hourly)
 ```
+
+Move a song to another folder yourself and the app learns that artist's folder (`docs/AUTOMATION.md`).
 
 ---
 

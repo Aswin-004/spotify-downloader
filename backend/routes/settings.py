@@ -37,7 +37,8 @@ def settings_save_app_config():
         if "ingest_playlist_id" in data:
             try:
                 import services.auto_downloader as _ad
-                _ad.INGEST_PLAYLIST_ID = updated.get("ingest_playlist_id", "")
+                from config import _playlist_id          # a pasted link works as well as a bare id
+                _ad.INGEST_PLAYLIST_ID = _playlist_id(updated.get("ingest_playlist_id", ""))
             except Exception as e:
                 hot_reload_ok = False
                 logger.warning(f"[settings] ingest_playlist_id saved but live reload failed: {e}")

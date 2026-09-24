@@ -1507,7 +1507,7 @@ def playlist_monitor():
     time.sleep(10)
     if not is_authenticated():
         logger.warning("[ingest] Playlist monitor SKIPPED - no OAuth token. "
-                       "Run 'python auto_downloader.py' to authorize.")
+                       "Run 'python spotify_login.py' (in the backend folder) once to log in.")
         return
     logger.info(f"[ingest] Playlist monitor started (checks every {effective_poll_interval()} s; "
                 "one Spotify request per check unless the playlist changed).")
@@ -1592,5 +1592,5 @@ if __name__ == "__main__":
         print("\nTroubleshooting:")
         print(f"  1. Add {REDIRECT_URI} as a Redirect URI in your Spotify Dashboard")
         print("  2. Make sure your Spotify app is not in 'development mode' restriction")
-        print("  3. Try again: python auto_downloader.py")
+        print("  3. Try again: python spotify_login.py")
         sys.exit(1)

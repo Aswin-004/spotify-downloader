@@ -57,7 +57,19 @@ except Exception:  # ImportError on Linux/Mac, OSError (DLL load failed) on Wind
     _acoustid = None
     _ACOUSTID_AVAILABLE = False
 
-_FPCALC_BINARY = os.getenv("FPCALC_PATH", "fpcalc")
+def _default_fpcalc() -> str:
+    """FPCALC_PATH if set, else fpcalc(.exe) dropped into the backend folder, else whatever is on PATH."""
+    configured = (os.getenv("FPCALC_PATH") or "").strip().strip('"')
+    if configured:
+        return configured
+    for name in ("fpcalc.exe", "fpcalc"):
+        local = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), name)
+        if os.path.isfile(local):
+            return local
+    return "fpcalc"
+
+
+_FPCALC_BINARY = _default_fpcalc()
 _ACOUSTID_API_KEY = os.getenv("ACOUSTID_API_KEY", "")
 _CONFIDENCE_THRESHOLD = 0.90   # below this → no acoustid match declared
 _AUDIO_HASH_BYTES = 2 * 1024 * 1024  # first 2 MB for sha256 (fast, stable)
