@@ -18,7 +18,7 @@ Covers, per the Phase 3.1 task spec's required-tests list (1-15):
   9.  deterministic output
   10-12. existing Phase 2 / Phase 3 / recommendation tests still pass
         (run separately via `python -m unittest discover`, not duplicated
-        here — see docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md "Testing")
+        here — see git show 5b579ea:docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md "Testing")
   13. unknown artist handling unchanged
   14. long-track (dj_mix) handling unchanged
   15. Spotify identity behavior unchanged (out of scope for this module —
@@ -308,7 +308,7 @@ class TestRegressionsUnchanged(unittest.TestCase):
 
 class TestReviewFixes(unittest.TestCase):
     """Regression tests for every issue found in the Phase 3.1 review
-    (docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md 'Review fixes' section)."""
+    (git show 5b579ea:docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md 'Review fixes' section)."""
 
     # ---- Fix 1: CHALLENGE BPM dims must use training_service's own threshold ----
 
@@ -489,7 +489,7 @@ class TestReviewFixes(unittest.TestCase):
 
 
 class TestFinalUXFix(unittest.TestCase):
-    """Regression tests for the Phase 3.1 final UX fix (docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md §14)."""
+    """Regression tests for the Phase 3.1 final UX fix (git show 5b579ea:docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md §14)."""
 
     _SUBJECTIVE_ONLY_PHRASES = (
         "sounds controlled", "sounded controlled",

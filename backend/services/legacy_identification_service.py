@@ -110,7 +110,7 @@ def _get_remix_flags(text: str) -> frozenset:
 
 
 # PHASE 1G — filename-convention edition-credit detection (see
-# docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md §4a / §15 item 2).
+# git show 5b579ea:docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md §4a / §15 item 2).
 # _REMIX_TOKEN_SET above was built for stripping tokens out of titles during
 # fuzzy-search normalization, so it only matches exact base forms ("mix",
 # not "mixed"). Filenames carry inflected/compound edition credits that
@@ -288,7 +288,7 @@ def _parse_filename(filepath: Path) -> ParsedFilename:
       "Song - Hamdi Remix.mp3"     → title="Song", edition="Hamdi Remix" (artist unknown)
       "Song.mp3"                   → artist=parent_folder_name, title="Song"
 
-    PHASE 1G fix (docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md §4a): the
+    PHASE 1G fix (git show 5b579ea:docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md §4a): the
     previous version of this function unconditionally treated the text
     before " - " as the artist and the text after as the title, which is
     backwards for the "Song - EditionCredit" convention used throughout
@@ -763,7 +763,7 @@ def identify_file(filepath: str | Path) -> LegacyIdentificationResult:
             # PHASE 1G: the "Song - EditionCredit" vs "Artist - Song"
             # convention could not be determined safely for this filename —
             # do not guess (this is exactly the ambiguity that used to
-            # silently corrupt title/artist; see docs/PHASE_1F_...md §4a).
+            # silently corrupt title/artist; see git show 5b579ea:docs/PHASE_1F_...md §4a).
             return _unidentified(
                 "ambiguous filename convention — cannot safely split "
                 "artist/title/edition without guessing",

@@ -8,7 +8,7 @@ load_dotenv(), or the calling process) having already populated the
 environment. Any standalone script that imported database.py directly
 without doing that first got no error: it silently pointed at an empty
 local MongoDB instead of the real one. This was hit repeatedly during
-Phase 1B/1C/1D library-repair work (see docs/PHASE_1E_RECOMMENDATION_HARDENING.md
+Phase 1B/1C/1D library-repair work (see git show 5b579ea:docs/PHASE_1E_RECOMMENDATION_HARDENING.md
 Issue 4) and worked around each time by manually exporting the env var
 before import — a workaround, not a fix.
 

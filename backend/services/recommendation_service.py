@@ -270,7 +270,7 @@ def _confidence_factor(confidence) -> float:
     """Map a key-detection confidence value to a trust multiplier in [0, 1]
     for the camelot-compatibility term.
 
-    SEMANTICS (Phase 1E clarification — see docs/PHASE_1E_RECOMMENDATION_HARDENING.md
+    SEMANTICS (Phase 1E clarification — see git show 5b579ea:docs/PHASE_1E_RECOMMENDATION_HARDENING.md
     Issue 3 for the full analysis): `confidence` is librosa's own Krumhansl-
     Schmuckler correlation strength for the key IT independently detected in
     bpm_key_service.detect_bpm_and_key() — it is NOT a confidence score for

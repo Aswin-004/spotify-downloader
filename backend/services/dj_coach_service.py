@@ -293,7 +293,7 @@ def _coaching_content(exercise_type: str, source: dict, target: dict, metrics: d
 # (source_track/target_track/metrics) — no new scoring, no recommendation
 # changes, no LLM, no ML.
 #
-# ACCURACY RULE (see docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md): this project's
+# ACCURACY RULE (see git show 5b579ea:docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md): this project's
 # library_index has no cue-point, intro/outro, breakdown, or phrase-number
 # data for any track. Every instruction below that would normally reference
 # a specific bar/beat/timestamp instead uses the generic, honest phrasing
@@ -695,7 +695,7 @@ def generate_daily_coaching_session(date_str: str = None, docs: list = None) -> 
         query; this module never queries Mongo directly.
 
     Returns a dict matching the Phase 3 API contract (see
-    docs/PHASE_3_DAILY_DJ_COACH.md): session_id, date, title, objective,
+    git show 5b579ea:docs/PHASE_3_DAILY_DJ_COACH.md): session_id, date, title, objective,
     difficulty, estimated_duration_minutes, exercises, coach_summary,
     future_feedback_supported (always False), generated_at, error.
 
@@ -710,7 +710,7 @@ def generate_daily_coaching_session(date_str: str = None, docs: list = None) -> 
     for ex in training_session["exercises"]:
         # PHASE 3.1 FINAL UX FIX 2: `instructions` still comes from
         # _coaching_content() (a short summary pointing at mix_plan — see
-        # FIX 4 in docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md §13). Its second
+        # FIX 4 in git show 5b579ea:docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md §13). Its second
         # return value (per-type success criteria) is intentionally
         # DISCARDED here and no longer used for the exercise's own
         # `success_criteria` field — that field is now the exact same list

@@ -13,7 +13,7 @@ What it does:
     incoming ID actually represents on Spotify and checks it against the
     document's own title/artist. A material disagreement BLOCKS the write
     and is reported for manual review instead of silently overwriting a
-    correct identity with a wrong one (docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md
+    correct identity with a wrong one (git show 5b579ea:docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md
     §4a/§7 — this exact blind-trust path is how one wrong ID3 tag reached
     MongoDB for "Pepas.mp3").
 

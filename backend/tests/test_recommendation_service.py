@@ -589,7 +589,7 @@ class TestConfidenceSemantics(unittest.TestCase):
     independently found, not a confidence score for whichever value is
     stored in `camelot` (which may instead come from an ID3 tag with
     different provenance — see _confidence_factor's docstring and
-    docs/PHASE_1E_RECOMMENDATION_HARDENING.md Issue 3). No scoring change:
+    git show 5b579ea:docs/PHASE_1E_RECOMMENDATION_HARDENING.md Issue 3). No scoring change:
     these tests confirm behavior is unchanged, not that it was altered."""
 
     def test_confidence_down_weights_camelot_regardless_of_its_source(self):

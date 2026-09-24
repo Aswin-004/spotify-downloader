@@ -579,7 +579,7 @@ def pass5_embed_artwork():
 
 
 # ── PASS 6 confidence gate (PHASE 1G) ──────────────────────────────────────────
-# docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md root-caused this pass's blind
+# git show 5b579ea:docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md root-caused this pass's blind
 # `items[0]`-with-no-gate acceptance as one of the two defects that let
 # unrelated songs collide on one Spotify ID. Reuses the existing, already-
 # tested scoring utility from legacy_identification_service.py (title/artist/

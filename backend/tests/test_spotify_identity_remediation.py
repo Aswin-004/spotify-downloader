@@ -1,6 +1,6 @@
 """
 Phase 1G — regression suite for the Spotify-ID mistagging fix
-(docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md / PHASE_1G dry-run).
+(git show 5b579ea:docs/PHASE_1F_SPOTIFY_IDENTITY_ROOT_CAUSE.md / PHASE_1G dry-run).
 
 Scope: MATCHING/PARSING/COMPATIBILITY LOGIC ONLY. No real network calls,
 no real Mongo, no real files — every candidate/doc below is a hand-built

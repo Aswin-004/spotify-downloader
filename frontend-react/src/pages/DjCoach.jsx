@@ -200,7 +200,7 @@ function ExerciseCard({ exercise, index }) {
               stay in the API response for backward compatibility (and
               exercise.success_criteria is now literally the same list as
               mix_plan.success_criteria, not an independently-duplicated
-              text — see docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md §14), they're
+              text — see git show 5b579ea:docs/PHASE_3_1_ACTIONABLE_MIX_PLAN.md §14), they're
               just not shown twice in the UI. */}
         </CardContent>
       </Card>

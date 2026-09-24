@@ -615,7 +615,7 @@ def generate_daily_session(date_str: str = None, docs: list = None) -> dict:
         None, performs exactly one read-only Mongo query (no writes ever).
 
     Returns a dict matching the Phase 2 session contract (see
-    docs/PHASE_2_DJ_TRAINING_ENGINE.md): session_id, date, title,
+    git show 5b579ea:docs/PHASE_2_DJ_TRAINING_ENGINE.md): session_id, date, title,
     difficulty, exercise_count, exercises, library_stats, generated_at,
     error. `exercise_count` is 5 only when all 5 types could be built;
     otherwise fewer, with `error` naming which type(s) failed and why —
