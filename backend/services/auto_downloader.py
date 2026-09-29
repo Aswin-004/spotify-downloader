@@ -20,6 +20,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import NamedTuple
 
 # Ensure backend/ is on sys.path so config/database/utils resolve
 # regardless of whether this file is run directly or imported as a module.
@@ -728,6 +729,66 @@ def _hip_hop_folder(artist, title, is_indian=None) -> str:
         return "Library/International Hip Hop"
 
 
+class Route(NamedTuple):
+    """Where one song goes and why. path is 'Library/<crate>' (forward slashes, no artist subfolder)."""
+    path: str
+    confidence: float
+    source: str                 # artist_memory | <router source> | evidence | ai | catchall
+    tag: str = ""               # written to the file's routing_source tag ('' = router/lists decided)
+    catchall: bool = False
+    spotify_confidence: float = 0.0
+
+
+def decide_route(*, artist, title, artist_id, sp, filepath, bpm_hint=None, duration_ms=None, threshold=0.5,
+                 memory_lookup=None, router=None, evidence=None, ai=None) -> Route:
+    """
+    The single routing decision for a downloaded song NOT pinned by a folder or a genre playlist.
+    First answer wins, in this order (docs/AUTOMATION.md):
+
+      1. Your lists: what the app learned from your moves (artist memory, conf >= 0.5), then the router's
+         override list / custom folders / knowledge base (and Spotify genres while Spotify still sends them).
+      2. Verified evidence vote (Last.fm + MusicBrainz + iTunes tags for THIS song, tempo...).
+      3. Groq listens to the song.
+      4. Electronic catch-all, re-checked hourly.
+
+    MusicBrainz used to be consulted FIRST at a fixed 0.9 confidence, so one loosely matched recording could
+    outrank your own artist lists. It now only takes part in step 2. The four collaborators are injectable
+    for tests; the defaults are the real services. Never raises.
+    """
+    try:
+        if memory_lookup is None:
+            from services.artist_memory_service import lookup_artist as memory_lookup
+        rec = memory_lookup(artist) or {}
+        if rec.get("confidence", 0) >= 0.5:
+            from services.genre_router import normalize_genre, _library_path
+            crate = normalize_genre(rec.get("genre", "")) or rec.get("genre", "")
+            if crate:
+                logger.info(f"[ingest] artist_memory: {title} → {crate} (conf={rec['confidence']:.2f})")
+                return Route(_library_path(crate), float(rec["confidence"]), "artist_memory")
+    except Exception as exc:
+        logger.debug(f"[ingest] artist_memory lookup skipped: {exc}")
+
+    spotify_conf = 0.0
+    try:
+        if router is None:
+            from services.genre_router import resolve_genre_folder_with_confidence as router
+        folder, spotify_conf, source = router(artist_id=artist_id, artist_name=artist, sp=sp)
+        if spotify_conf >= threshold:
+            return Route(folder, spotify_conf, source, spotify_confidence=spotify_conf)
+    except Exception as exc:
+        logger.warning(f"[ingest] router failed for {artist!r}: {exc}")
+
+    path, method = (evidence or _evidence_route)(artist, title, filepath, bpm_hint, duration_ms)
+    if path:
+        return Route(path, spotify_conf, "evidence", method, spotify_confidence=spotify_conf)
+    path, method = (ai or _ai_route)(artist, title, filepath, bpm_hint)
+    if path:
+        return Route(path, spotify_conf, "ai", method, spotify_confidence=spotify_conf)
+    logger.warning(f"[ingest] Electronic catch-all: {title} (router conf={spotify_conf:.2f}, no evidence, Groq unsure)")
+    return Route("Library/Electronic", spotify_conf, "catchall", catchall=True, spotify_confidence=spotify_conf)
+
+
+
 def _commit_reads(reads) -> None:
     """Everything `reads` returned has been handled: from now on an unchanged playlist is a one-request skip."""
     try:
@@ -1043,93 +1104,26 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
                     _route_tag = f"genre_playlist:{track_info['forced_genre']}"
                     logger.info(f"[ingest] Genre playlist: {title} → {_forced_folder}")
                 else:
-                    from services.genre_router import resolve_genre_folder_with_confidence
-                    # ── artist_memory: user-confirmed associations override Spotify/Groq ──
-                    _memory_routed = False
-                    try:
-                        from services.artist_memory_service import lookup_artist as _mem_lookup
-                        from services.genre_router import normalize_genre as _norm_g, _library_path as _lib_p
-                        _mem_rec = _mem_lookup(artist)
-                        if _mem_rec and _mem_rec.get("confidence", 0) >= 0.5:
-                            _mem_genre = _norm_g(_mem_rec.get("genre", "")) or _mem_rec.get("genre", "")
-                            if _mem_genre:
-                                _mem_lib_path = _lib_p(_mem_genre)
-                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, _mem_lib_path)
-                                genre_confidence = _mem_rec.get("confidence", 0.5)
-                                logger.info(
-                                    f"[ingest] artist_memory: {title} → {_mem_lib_path} "
-                                    f"(conf={genre_confidence:.2f}, src={_mem_rec.get('source', 'memory')})"
-                                )
-                                _memory_routed = True
-                    except Exception as _me:
-                        logger.debug(f"[ingest] artist_memory lookup skipped: {_me}")
-
-                    if not _memory_routed:
-                        # Try MusicBrainz genre first (conf=0.9 — most accurate)
-                        mb_genre = (result.get("tagging_report") or {}).get("genre", "")
-                        if mb_genre:
-                            mapped = map_genre_string(mb_genre)
-                            if mapped:
-                                # map_genre_string returns a Library/-prefixed path — flat, no artist subfolder.
-                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, mapped)
-                                genre_confidence = 0.9
-                                logger.info(f"[ingest] MB genre routing: {title} → {mapped} (conf=0.9)")
-                            else:
-                                # MB genre not in map — verified evidence, then Groq listening, then Electronic catch-all
-                                # (the variable keeps its old name; it now holds either fallback's answer)
-                                gemini_path, _fb_method = _fallback_genre(staged_filepath, _bpm_hint)
-                                if gemini_path:
-                                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
-                                    logger.info(f"[ingest] Fallback routing ({_fb_method}, MB miss): {title} → {gemini_path}")
-                                    _route_tag = _fb_method
-                                    _emit("download_auto_classified", {
-                                        "title": title, "artist": artist,
-                                        "folder": gemini_path, "method": _fb_method.split(":")[0],
-                                        "source": "ingest",
-                                    })
-                                else:
-                                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
-                                    _is_catchall = True
-                                    logger.info(f"[ingest] Electronic catch-all (MB miss, no evidence, Groq unsure): {title}")
-                        else:
-                            # Spotify artist genres with confidence scoring
-                            folder_structure, genre_confidence, genre_source = resolve_genre_folder_with_confidence(
-                                artist_id=track_info.get("artist_id", ""),
-                                artist_name=artist,
-                                sp=sp_service.sp,
-                            )
-                            if genre_confidence >= NEEDS_REVIEW_THRESHOLD:
-                                # CANONICAL-BASE: folder_structure is a Library/ path;
-                                # anchor to BASE_DOWNLOAD_DIR, not INGEST_FOLDER.
-                                final_folder = os.path.join(BASE_DOWNLOAD_DIR, folder_structure)
-                                logger.info(f"[ingest] Genre routing: {title} → {folder_structure} "
-                                            f"(conf={genre_confidence:.2f}, src={genre_source})")
-                            else:
-                                # Low-confidence — try verified evidence, then Groq listening, before the catch-all.
-                                # Never routes to NeedsReview for genre failures.
-                                gemini_path, _fb_method = _fallback_genre(staged_filepath, _bpm_hint)
-                                if gemini_path:
-                                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)
-                                    logger.info(
-                                        f"[ingest] Fallback routing ({_fb_method}): {title} → {gemini_path} "
-                                        f"(Spotify conf={genre_confidence:.2f} was too low)"
-                                    )
-                                    _route_tag = _fb_method
-                                    _emit("download_auto_classified", {
-                                        "title": title, "artist": artist,
-                                        "folder": gemini_path, "method": _fb_method.split(":")[0],
-                                        "spotify_confidence": genre_confidence,
-                                        "source": "ingest",
-                                    })
-                                else:
-                                    # No evidence and Groq unsure/unavailable → Electronic catch-all.
-                                    # Song is never lost — always lands somewhere in Library/.
-                                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")
-                                    _is_catchall = True
-                                    logger.warning(
-                                        f"[ingest] Electronic catch-all: {title} "
-                                        f"(Spotify conf={genre_confidence:.2f}, no evidence, Groq unsure)"
-                                    )
+                    # ONE decision function (decide_route, module level, unit-tested): your lists -> evidence vote
+                    # -> Groq listening -> Electronic catch-all. MusicBrainz is one voter inside the evidence
+                    # vote; it no longer outranks your override / knowledge-base lists.
+                    route = decide_route(
+                        artist=artist, title=title, artist_id=track_info.get("artist_id", ""),
+                        sp=sp_service.sp, filepath=staged_filepath, bpm_hint=_bpm_hint,
+                        duration_ms=track_info.get("duration_ms"), threshold=NEEDS_REVIEW_THRESHOLD,
+                    )
+                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, route.path)
+                    genre_confidence, genre_source = route.confidence, route.source
+                    _route_tag, _is_catchall = route.tag, route.catchall
+                    logger.info(f"[ingest] Routing: {title} → {route.path} "
+                                f"(src={route.source}, conf={route.confidence:.2f})")
+                    if route.tag and not route.catchall:
+                        _emit("download_auto_classified", {
+                            "title": title, "artist": artist,
+                            "folder": route.path, "method": route.tag.split(":")[0],
+                            "spotify_confidence": route.spotify_confidence,
+                            "source": "ingest",
+                        })
 
                 # Every routing branch above except the plain Electronic catch-all
                 # returns a "Library/..." forward-slash path (genre_router.py's

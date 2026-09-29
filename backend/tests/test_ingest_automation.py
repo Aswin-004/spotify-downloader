@@ -198,12 +198,16 @@ class TestWiringContracts(unittest.TestCase):
 
     def test_a_genre_playlist_outranks_artist_memory_and_the_router(self):
         forced = _INGEST.index("elif _forced_folder:")
-        self.assertLess(forced, _INGEST.index("_mem_lookup(artist)"))
-        self.assertLess(forced, _INGEST.index("resolve_genre_folder_with_confidence(\n"))
+        self.assertLess(forced, _INGEST.index("route = decide_route("))
         self.assertLess(_INGEST.index("if force_folder:\n                    # Manual override always wins"), forced)
 
     def test_evidence_is_tried_before_gemini_at_both_fallback_points(self):
-        self.assertEqual(_INGEST.count("_fallback_genre(staged_filepath, _bpm_hint)"), 2)
+        # decide_route() is the only place a song is routed: lists -> evidence -> Groq -> catch-all, in that order
+        fn = _SRC[_SRC.index("def decide_route("):_SRC.index("def _commit_reads")]
+        order = [fn.index(m) for m in ("memory_lookup(artist)", "router(artist_id=", "or _evidence_route)(", "or _ai_route)(",
+                                       'Route("Library/Electronic"')]
+        self.assertEqual(order, sorted(order))
+        self.assertNotIn("map_genre_string(mb_genre)", _INGEST)   # MusicBrainz no longer outranks your lists
         self.assertNotIn("= _gemini_genre_fallback(staged_filepath)", _INGEST)
 
     def test_how_a_song_was_filed_is_written_to_its_tags(self):

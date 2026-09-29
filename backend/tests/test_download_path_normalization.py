@@ -89,11 +89,7 @@ class DownloadPathNormalizationTestCase(unittest.TestCase):
             'final_folder = os.path.join(target_base, force_folder)',           # manual override
             'final_folder = os.path.join(BASE_DOWNLOAD_DIR, _forced_folder)',   # genre playlist (forced_genre)
             'final_folder = os.path.join(BASE_DOWNLOAD_DIR, _hip_hop_folder(artist, title))',  # hip hop origin split
-            '_mem_lib_path = _lib_p(_mem_genre)',                                # artist_memory
-            'final_folder = os.path.join(BASE_DOWNLOAD_DIR, mapped)',           # MB genre
-            'final_folder = os.path.join(BASE_DOWNLOAD_DIR, gemini_path)',      # Gemini fallback (both call sites)
-            'final_folder = os.path.join(BASE_DOWNLOAD_DIR, folder_structure)', # Spotify confidence
-            'final_folder = os.path.join(BASE_DOWNLOAD_DIR, "Library", "Electronic")',  # catch-all (both call sites)
+            'final_folder = os.path.join(BASE_DOWNLOAD_DIR, route.path)',       # decide_route(): memory / lists / evidence / Groq / catch-all
         ]
         idx_norm = self.method_src.index("final_folder = os.path.normpath(final_folder)")
         for marker in branch_markers:
