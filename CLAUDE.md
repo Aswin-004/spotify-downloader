@@ -49,6 +49,13 @@ This is Aswin's first CLI-agent session and goal includes learning to work with 
 7. yt-dlp is deliberately unpinned. Download 403s → upgrade yt-dlp first, not code.
 8. `services/groq_service.py` is a legacy name; it calls Groq, not Gemini.
 
+9. **Git etiquette (Aswin's explicit rules):** never add attribution / `Co-Authored-By` lines to commits. Before ANY push, audit every file in the change (list it, check for secrets/clutter/unrelated edits) and get Aswin's OK. Never push to `main`/`production` unasked. Commit only my own hunks; the working tree holds Aswin's uncommitted work.
+10. **Keep the workspace clean:** no logs, temp files, one-off scripts, reports or generated clutter left in the repo. Archive outside the repo or delete (recoverably).
+11. **Duplicates:** compare both copies and keep the one that is completely correct (full length, vocals AND music; some downloads are vocals-only or music-only); the other goes to the Recycle Bin (`services/recycle.py`), never permanent delete.
+12. **Bollywood and Punjabi stay separate crates**; never auto-move between them (taste call).
+13. **Never call `os.kill(pid, 0)` on Windows** — it terminates the process. Use `pipeline_guards._pid_alive`.
+14. Read `wiki/master-plan.md` for the roadmap (P0 done; P1 one-pipeline next) and `wiki/decisions.md` for Aswin's decisions.
+
 ## Working style
 - Match surrounding code; this repo has heavy explanatory comments on *why* — keep that habit for non-obvious changes.
 - Prefer small diffs. Add/adjust a test in `backend/tests/` for behavior changes.

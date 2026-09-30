@@ -1648,9 +1648,12 @@ class DownloaderService:
             if not os.path.abspath(filepath).startswith(os.path.abspath(self.download_dir)):
                 raise ValueError("Invalid file path")
             if os.path.exists(filepath):
-                os.remove(filepath)
-                logger.info(f"Deleted file: {filename}")
-                return {"success": True, "message": f"File deleted: {filename}"}
+                from services.recycle import remove_file   # recoverable: Recycle Bin, else quarantine folder
+                where = remove_file(filepath, self.download_dir)
+                if not where:
+                    raise OSError(f"could not remove {filename}")
+                logger.info(f"Removed file ({where}): {filename}")
+                return {"success": True, "message": f"File removed (recoverable from {where}): {filename}"}
             else:
                 raise FileNotFoundError(f"File not found: {filename}")
         except Exception as e:

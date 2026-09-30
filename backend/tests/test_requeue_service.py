@@ -173,7 +173,8 @@ class TestIngestIsWiredToTheQueue(unittest.TestCase):
         self.assertLess(fail, merge)
 
     def test_entries_leave_the_queue_on_success_and_on_duplicate_skip(self):
-        self.assertEqual(len(re.findall(r"_requeue_done\(tid, title, artist,", self.src)), 2)
+        # success + three duplicate skips (registry key, Spotify id found in a library file, downloader found it elsewhere)
+        self.assertEqual(len(re.findall(r"_requeue_done\(tid, title, artist,", self.src)), 4)
 
 
 if __name__ == "__main__":

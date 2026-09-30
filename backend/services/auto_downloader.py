@@ -21,6 +21,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import NamedTuple
+import tempfile
+from services import pipeline_guards
 
 # Ensure backend/ is on sys.path so config/database/utils resolve
 # regardless of whether this file is run directly or imported as a module.
@@ -104,6 +106,8 @@ AUTO_STATUS = {
 _registry_lock = threading.Lock()
 _failure_count_lock = threading.Lock()
 _downloaded_registry: set = set()
+_disk_index = pipeline_guards.DiskIdentityIndex()   # spotify_id -> library file, read from the files' own tags
+INGEST_LOCK_PATH = os.path.join(tempfile.gettempdir(), "spotifydl_ingest.lock")   # one run at a time, even across backend copies
 _in_progress_registry: set = set()  # keys currently being downloaded — TOCTOU guard
 _download_semaphore = threading.Semaphore(2)  # DISCONNECT FIX: limit concurrent yt-dlp processes
 
@@ -789,6 +793,19 @@ def decide_route(*, artist, title, artist_id, sp, filepath, bpm_hint=None, durat
 
 
 
+def _record_flag(tid, title, artist, verdict) -> None:
+    """Kept-but-suspicious downloads (length 8-30 s off Spotify's) are listed for the health report. Never raises."""
+    try:
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports", "flagged_downloads.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "spotify_id": tid, "title": title,
+                                 "artist": artist, "reason": verdict.reason, "diff_s": round(verdict.diff_s, 1)},
+                                ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.debug(f"[ingest] could not record flagged download: {exc}")
+
+
 def _commit_reads(reads) -> None:
     """Everything `reads` returned has been handled: from now on an unchanged playlist is a one-request skip."""
     try:
@@ -800,6 +817,16 @@ def _commit_reads(reads) -> None:
 
 
 def ingest_download(download_dir=None, force_folder=None, force_redownload=False, full_scan=False):
+    """One ingest run at a time. A second caller (the watcher AND "Sync now", or a second backend copy) skips
+    instead of racing the first: overlapping runs used to overwrite ingest_tracks.json and double-move files."""
+    with pipeline_guards.ingest_lock(INGEST_LOCK_PATH) as owned:
+        if not owned:
+            logger.info("[ingest] another ingest run is already active — skipping this one")
+            return
+        return _ingest_download_run(download_dir, force_folder, force_redownload, full_scan)
+
+
+def _ingest_download_run(download_dir=None, force_folder=None, force_redownload=False, full_scan=False):
     """Download new tracks from the ingest playlist with parallel workers.
 
     Args:
@@ -937,6 +964,10 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     with _registry_lock:
         _downloaded_registry = _build_file_registry(BASE_DOWNLOAD_DIR)
     logger.info(f"[ingest] Existing files across all folders: {len(_downloaded_registry)}")
+    try:
+        logger.info(f"[ingest] Spotify ids read from library tags: {_disk_index.scan(BASE_DOWNLOAD_DIR)}")
+    except Exception as _di_err:
+        logger.warning(f"[ingest] could not read library tags for the duplicate check: {_di_err}")
 
     total = len(new_tracks)
     completed_count = [0]  # mutable counter for threads
@@ -997,6 +1028,17 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
             track_key = _dik(tid, title, artist, track_info.get("duration_ms"))
         except Exception:
             track_key = normalize(sanitize_filename(title))  # legacy fallback
+
+        # --- Duplicate check 0: the library FILES already carry this Spotify id (any crate, any filename) ---
+        if not force_redownload and tid:
+            _dup_path = _disk_index.find(tid)
+            if _dup_path:
+                skip_count[0] += 1
+                logger.info(f"[ingest] Skipping (already in library as {os.path.basename(_dup_path)}): {title} - {artist}")
+                _emit("download_skipped", {"title": title, "artist": artist, "reason": "Already in library", "source": "ingest"})
+                saved_ids.add(tid)
+                _requeue_done(tid, title, artist, "a file with this Spotify id already exists in the library")
+                return
 
         # --- Duplicate check 1: file registry (atomic check-and-reserve) ---
         # FORCE REDOWNLOAD — skip the registry dedup so redownloads aren't swallowed
@@ -1061,13 +1103,34 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
             if result["status"] == "success":
                 staged_filepath = result.get("filepath") or os.path.join(staging_dir, result.get("filename", ""))
 
-                # Verify the file actually exists on disk before marking success
-                if not os.path.isfile(staged_filepath) or os.path.getsize(staged_filepath) < 1000:
-                    logger.error(f"[ingest] Download reported success but file missing/empty: {staged_filepath}")
+                # The downloader answers "success" with an EXISTING library file's path when it finds the same song
+                # in another folder. That is a duplicate, not a new download: never re-route or move that file.
+                if (not force_redownload and os.path.isfile(staged_filepath)
+                        and os.path.normcase(os.path.dirname(os.path.abspath(staged_filepath)))
+                        != os.path.normcase(os.path.abspath(staging_dir))):
+                    skip_count[0] += 1
+                    logger.info(f"[ingest] Skipping (downloader found it already in the library): {staged_filepath}")
+                    _emit("download_skipped", {"title": title, "artist": artist, "reason": "Already in library", "source": "ingest"})
+                    saved_ids.add(tid)
+                    _requeue_done(tid, title, artist, "the song is already in the library")
+                    return
+
+                # Validate before filing: readable mp3, real size, length within tolerance of Spotify's
+                _verdict = pipeline_guards.validate_download(staged_filepath, (track_info.get("duration_ms") or 0) / 1000.0)
+                if not _verdict.ok:
+                    logger.error(f"[ingest] Rejected download of {title} - {artist}: {_verdict.reason}")
+                    try:
+                        if os.path.isfile(staged_filepath):
+                            os.remove(staged_filepath)   # our own staging file, never a library file (checked above)
+                    except OSError as _rm_err:
+                        logger.warning(f"[ingest] could not remove rejected staging file: {_rm_err}")
                     fail_count[0] += 1
                     _record_failure(tid, title, artist, failure_counts)
-                    _emit("download_error", {"title": title, "artist": artist, "error": "File missing after download", "source": "ingest"})
+                    _emit("download_error", {"title": title, "artist": artist, "error": _verdict.reason, "source": "ingest"})
                     return
+                if _verdict.flagged:
+                    logger.warning(f"[ingest] Flagged download of {title} - {artist}: {_verdict.reason}")
+                    _record_flag(tid, title, artist, _verdict)
 
                 # PASS 2: Determine final folder using best available genre
                 # Tracks below NEEDS_REVIEW_THRESHOLD confidence land in
@@ -1437,17 +1500,22 @@ def ingest_download(download_dir=None, force_folder=None, force_redownload=False
     else:
         logger.info(f"[ingest] {fail_count[0]} failure(s) this cycle — the next check will look at the playlist again")
 
-    # Clean up Staging folder — move any leftover files to Uncategorized
+    # Clean up Staging: partial-download temp files (.loudnorm/.trimmed/.tmp/.partial) older than 30 minutes are
+    # removed. A leftover .mp3 is NEVER moved into the library any more (it used to land in Uncategorized, mixed with
+    # good files): it stays in Staging, is logged, and the health report lists it.
     try:
         staging = Path(STAGING_FOLDER)
         if staging.exists():
+            _cutoff = time.time() - 30 * 60
+            for _f in staging.iterdir():
+                if _f.is_file() and _f.suffix.lower() in (".tmp", ".partial", ".part", ".ytdl") or _f.name.lower().endswith(
+                        (".loudnorm.mp3", ".trimmed.mp3")):
+                    if _f.stat().st_mtime < _cutoff:
+                        _f.unlink()
             leftover = list(staging.glob("*.mp3"))
             if leftover:
-                logger.warning(f"[ingest] {len(leftover)} file(s) left in Staging/ — moving to Uncategorized/")
-                uncategorized = Path(target_base) / "Uncategorized"
-                uncategorized.mkdir(exist_ok=True)
-                for f in leftover:
-                    shutil.move(str(f), str(uncategorized / f.name))
+                logger.warning(f"[ingest] {len(leftover)} unplaced file(s) left in Staging/ (kept, not filed): "
+                               f"{[f.name for f in leftover[:5]]}")
     except Exception as e:
         logger.warning(f"[ingest] Staging cleanup failed: {e}")
     AUTO_STATUS["status"] = "completed"

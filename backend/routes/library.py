@@ -404,10 +404,25 @@ def move_and_remember():
 
 # ── Organise ──────────────────────────────────────────────────────────────────
 
+_ORGANIZE_CONFIRM = "MOVE-MY-LIBRARY"
+
+
+def _organize_refused(data):
+    """Batch-organise rewrites the folder layout of the WHOLE library (mode 'artist' moves every song out of its genre
+    folder into BASE/<Artist>/). It must be asked for on purpose, never by accident or by a default."""
+    if data.get("confirm") == _ORGANIZE_CONFIRM:
+        return None
+    return jsonify({"success": False,
+                    "error": ("Refused: this reorganises the whole library and can undo your genre folders. "
+                              f"Send {{\"confirm\": \"{_ORGANIZE_CONFIRM}\"}} and an explicit mode to proceed.")}), 400
+
 @library_bp.route("/api/library/organize", methods=["POST"])
 def library_organize():
     data = request.get_json(silent=True) or {}
-    mode = data.get("mode", "artist")
+    refused = _organize_refused(data)
+    if refused:
+        return refused
+    mode = data.get("mode", "")
     if mode not in ("artist", "genre", "artist_genre", "dj"):
         return jsonify({"success": False, "error": f"Invalid mode: {mode}"}), 400
     try:
@@ -422,7 +437,10 @@ def library_organize():
 @library_bp.route("/api/library/organize-recent", methods=["POST"])
 def library_organize_recent():
     data = request.get_json(silent=True) or {}
-    mode = data.get("mode", "artist")
+    refused = _organize_refused(data)
+    if refused:
+        return refused
+    mode = data.get("mode", "")
     if mode not in ("artist", "genre", "artist_genre"):
         return jsonify({"success": False, "error": f"Invalid mode: {mode}"}), 400
     try:
@@ -460,7 +478,7 @@ def list_duplicates():
 
 @library_bp.route("/api/duplicates/delete", methods=["POST"])
 def delete_duplicate():
-    """Permanently delete a file from NeedsReview/Duplicates/."""
+    """Remove a file from NeedsReview/Duplicates/ (Recycle Bin: recoverable)."""
     data = request.get_json() or {}
     filename = (data.get("filename") or "").strip()
     if not filename or "/" in filename or "\\" in filename or ".." in filename:
@@ -471,9 +489,12 @@ def delete_duplicate():
         return jsonify({"error": "Access denied"}), 403
     if not target.is_file():
         return jsonify({"error": "File not found"}), 404
-    target.unlink()
-    logger.info(f"[duplicates] Deleted: {filename}")
-    return jsonify({"deleted": True, "filename": filename}), 200
+    from services.recycle import remove_file
+    where = remove_file(str(target), BASE_DOWNLOAD_DIR)
+    if not where:
+        return jsonify({"error": "Could not remove the file"}), 500
+    logger.info(f"[duplicates] Removed to {where}: {filename}")
+    return jsonify({"deleted": True, "filename": filename, "recoverable": where}), 200
 
 
 @library_bp.route("/api/duplicates/keep", methods=["POST"])
