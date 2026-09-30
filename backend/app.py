@@ -781,25 +781,12 @@ def _download_direct_background(url, title, artist):
         # then verified Last.fm/MusicBrainz/iTunes evidence for this song, then the
         # Indian/International hip hop split) so a SoundCloud/Bandcamp paste lands in
         # the same crate a playlist-ingested copy of the same artist would.
-        from services.genre_router import resolve_genre_folder_with_confidence, NEEDS_REVIEW_DIR
-        from services.auto_downloader import _evidence_route, _hip_hop_folder
+        from services.auto_downloader import decide_route
 
-        genre_folder, genre_confidence, genre_method = resolve_genre_folder_with_confidence(
-            artist_id="", artist_name=dl_artist, sp=None,
-        )
-        if genre_folder.startswith(NEEDS_REVIEW_DIR) or genre_confidence < 0.5:
-            genre_folder = None
-            ev_path, ev_method = _evidence_route(dl_artist, dl_title, str(src_path))
-            if ev_path:
-                genre_folder, genre_method = ev_path, ev_method
-
-        if genre_folder and genre_folder.replace("\\", "/").rstrip("/").endswith("/International Hip Hop"):
-            genre_folder = _hip_hop_folder(dl_artist, dl_title)
-            genre_method = "hip_hop_origin"
-
-        is_catchall = not bool(genre_folder)
-        if not genre_folder:
-            genre_folder = 'Library/Electronic'
+        route = decide_route(artist=dl_artist, title=dl_title, artist_id="", sp=None, filepath=str(src_path))
+        genre_folder = route.path
+        genre_method = route.tag.split(":")[0] if route.tag else route.source
+        is_catchall = route.catchall
 
         from services.organizer_service import safe_move
         dest_dir   = os.path.join(BASE_DOWNLOAD_DIR, genre_folder)

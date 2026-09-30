@@ -743,8 +743,23 @@ class Route(NamedTuple):
     spotify_confidence: float = 0.0
 
 
-def decide_route(*, artist, title, artist_id, sp, filepath, bpm_hint=None, duration_ms=None, threshold=0.5,
-                 memory_lookup=None, router=None, evidence=None, ai=None) -> Route:
+def decide_route(*, hip_hop=None, **kwargs) -> Route:
+    """
+    THE routing decision for any song that is not pinned by a folder or a genre playlist — used by the playlist
+    ingest AND by direct-URL downloads. Lists -> evidence -> Groq -> catch-all (see _route_lists_evidence_ai),
+    then hip hop has two crates: whatever said 'hip hop' knew the GENRE but not where the artist is from, so the
+    Indian-vs-International call is made here, once, for every caller. `hip_hop` is injectable for tests.
+    """
+    route = _route_lists_evidence_ai(**kwargs)
+    if not route.catchall and route.path.replace("\\", "/").rstrip("/").endswith("/International Hip Hop"):
+        split = (hip_hop or _hip_hop_folder)(kwargs["artist"], kwargs["title"])
+        if split != route.path:
+            route = route._replace(path=split, tag=route.tag or "evidence:hip_hop_origin")
+    return route
+
+
+def _route_lists_evidence_ai(*, artist, title, artist_id, sp, filepath, bpm_hint=None, duration_ms=None, threshold=0.5,
+                             memory_lookup=None, router=None, evidence=None, ai=None) -> Route:
     """
     The single routing decision for a downloaded song NOT pinned by a folder or a genre playlist.
     First answer wins, in this order (docs/AUTOMATION.md):
@@ -1205,13 +1220,8 @@ def _ingest_download_run(download_dir=None, force_folder=None, force_redownload=
                 # showed up as orphans in repair_index.py --dry-run. normpath()
                 # collapses this to a clean native path without touching which
                 # file it points to.
-                # Hip hop has two crates. Whatever said "hip hop" (MusicBrainz, the router, the AI guess) knew the
-                # GENRE but not where the artist is from, so the Indian-vs-International call is made here. A crate
-                # you chose yourself (a pinned folder or a genre playlist) is never second-guessed.
-                if (not force_folder and not _forced_folder
-                        and str(final_folder).replace("\\", "/").rstrip("/").endswith("/International Hip Hop")):
-                    final_folder = os.path.join(BASE_DOWNLOAD_DIR, _hip_hop_folder(artist, title))
-                    _route_tag = _route_tag or "evidence:hip_hop_origin"
+                # (The Indian-vs-International hip hop split now happens inside decide_route(); a crate you chose
+                # yourself — a pinned folder or a genre playlist — never goes through it, so it is never second-guessed.)
 
                 final_folder = os.path.normpath(final_folder)
 

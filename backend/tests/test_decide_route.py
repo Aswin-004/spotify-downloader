@@ -68,5 +68,38 @@ class TestDecideRouteOrder(unittest.TestCase):
         self.assertEqual(r.path, "Library/House")
 
 
+class TestHipHopSplitLivesInDecideRoute(unittest.TestCase):
+    """Every caller (playlist ingest, direct-URL download) gets the Indian / International split from one place."""
+
+    def test_international_hip_hop_is_split_by_artist_origin(self):
+        r = _run(router=lambda **k: ("Library/International Hip Hop", 0.9, "spotify_genre"),
+                 hip_hop=lambda a, t: "Library/Indian Hip Hop")
+        self.assertEqual((r.path, r.tag), ("Library/Indian Hip Hop", "evidence:hip_hop_origin"))
+
+    def test_a_truly_international_artist_stays_international(self):
+        r = _run(router=lambda **k: ("Library/International Hip Hop", 0.9, "spotify_genre"),
+                 hip_hop=lambda a, t: "Library/International Hip Hop")
+        self.assertEqual((r.path, r.tag), ("Library/International Hip Hop", ""))
+
+    def test_the_split_keeps_an_existing_route_tag(self):
+        r = _run(evidence=lambda *a: ("Library/International Hip Hop", "evidence:lastfm_track"),
+                 hip_hop=lambda a, t: "Library/Indian Hip Hop")
+        self.assertEqual((r.path, r.tag), ("Library/Indian Hip Hop", "evidence:lastfm_track"))
+
+    def test_other_crates_never_reach_the_split(self):
+        r = _run(router=lambda **k: ("Library/House", 0.9, "spotify_genre"), hip_hop=_never)
+        self.assertEqual(r.path, "Library/House")
+
+    def test_the_catchall_is_never_split(self):
+        r = _run(hip_hop=_never)
+        self.assertTrue(r.catchall)
+
+    def test_direct_url_downloads_use_decide_route(self):
+        src = open(os.path.join(os.path.dirname(__file__), "..", "app.py"), encoding="utf-8").read()
+        body = src[src.index("def _download_direct_background"):src.index("def _download_background(url)")]
+        self.assertIn("decide_route(", body)
+        self.assertNotIn("resolve_genre_folder_with_confidence", body)   # no private copy of the routing chain
+
+
 if __name__ == "__main__":
     unittest.main()

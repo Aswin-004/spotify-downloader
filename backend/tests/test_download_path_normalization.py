@@ -88,7 +88,6 @@ class DownloadPathNormalizationTestCase(unittest.TestCase):
         branch_markers = [
             'final_folder = os.path.join(target_base, force_folder)',           # manual override
             'final_folder = os.path.join(BASE_DOWNLOAD_DIR, _forced_folder)',   # genre playlist (forced_genre)
-            'final_folder = os.path.join(BASE_DOWNLOAD_DIR, _hip_hop_folder(artist, title))',  # hip hop origin split
             'final_folder = os.path.join(BASE_DOWNLOAD_DIR, route.path)',       # decide_route(): memory / lists / evidence / Groq / catch-all
         ]
         idx_norm = self.method_src.index("final_folder = os.path.normpath(final_folder)")

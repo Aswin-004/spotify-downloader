@@ -165,10 +165,14 @@ class TestIngestStep(unittest.TestCase):
         self.assertEqual(ad._hip_hop_folder("A", "T", is_indian=boom), "Library/International Hip Hop")
 
     def test_the_split_never_overrides_a_folder_the_user_chose(self):
+        # The split lives inside decide_route(). A pinned folder (force_folder) and a genre playlist (_forced_folder)
+        # are handled BEFORE decide_route is ever called, so a crate the user chose is never second-guessed.
         src = open(ad.__file__, encoding="utf-8").read()
-        block = src[src.index("# Hip hop has two crates."):src.index("final_folder = os.path.normpath(final_folder)")]
-        self.assertIn("not force_folder and not _forced_folder", block)
-        self.assertIn('endswith("/International Hip Hop")', block)
+        body = src[src.index("def _ingest_download_run"):src.index("\ndef playlist_monitor")]
+        self.assertLess(body.index("if force_folder:\n"), body.index("route = decide_route("))
+        self.assertLess(body.index("elif _forced_folder:"), body.index("route = decide_route("))
+        self.assertEqual(body.count("route = decide_route("), 1)
+        self.assertNotIn("_hip_hop_folder(", body)        # no second, private copy of the split in ingest
 
 
 if __name__ == "__main__":
