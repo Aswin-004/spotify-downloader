@@ -755,6 +755,9 @@ def decide_route(*, hip_hop=None, **kwargs) -> Route:
         split = (hip_hop or _hip_hop_folder)(kwargs["artist"], kwargs["title"])
         if split != route.path:
             route = route._replace(path=split, tag=route.tag or "evidence:hip_hop_origin")
+    if route.path.replace("\\", "/").rstrip("/").endswith("/Trance"):
+        # Trance and Techno are ONE crate for this library (owner's decision); every list still says "Trance".
+        route = route._replace(path=route.path.replace("\\", "/").rstrip("/")[:-len("Trance")] + "Techno")
     return route
 
 

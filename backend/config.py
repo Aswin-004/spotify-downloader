@@ -665,8 +665,8 @@ class Config:
         "joe moses":            "Hip Hop",
         "devstacks":            "Hip Hop",
         # ── Grime additions ───────────────────────────────────────────────
-        "big kay smg":          "Grime",
-        "baggh-e smg":          "Grime",
+        "big kay smg":          "Punjabi",
+        "baggh-e smg":          "Punjabi",
         "embertalks":           "Grime",
         # ── Electronic / Dance additions ──────────────────────────────────
         "the cure":             "Electronic",
@@ -677,7 +677,7 @@ class Config:
         "nausica":              "Electronic",
         "moyjo":                "Electronic",
         "sllash & doppe":       "Electronic",
-        "dj burlak":            "Electronic",
+        "dj burlak":            "House",
         "bdt (kz)":             "Electronic",
         "kiko":                 "Electronic",
         # ── Latin additions ───────────────────────────────────────────────
@@ -711,7 +711,7 @@ class Config:
         "beat smuggler":          "Electronic",
         "khenya":                 "Electronic",
         "igmor":                  "Electronic",
-        "metty":                  "Electronic",
+        "metty":                  "House",
         "kyanq":                  "Electronic",
         "raaccso":                "Electronic",
         "thiarajxtt":             "Electronic",
@@ -722,10 +722,10 @@ class Config:
         # ── Grime additions ───────────────────────────────────────────────
         "nsg":                    "Grime",
         # ── Electronic additions (2026-05-25 run 4) ───────────────────────
-        "fede aliprandi":         "Electronic",
+        "fede aliprandi":         "House",
         "lomiiel":                "Electronic",
         "ritmes de kanderi":      "Electronic",
-        "rsquared":               "Electronic",
+        "rsquared":               "House",
         # ── Pop additions ─────────────────────────────────────────────────
         "don williams":           "Pop",
         "danny rhys":             "Pop",
@@ -748,18 +748,18 @@ class Config:
         "protoculture":           "Electronic",
         "cafe de anatolia":       "Electronic",
         "anton powers":           "Electronic",
-        "daniel rateuke":         "Electronic",
+        "daniel rateuke":         "House",
         "techno project":         "Techno",
         "azzecca":                "Electronic",
-        "dan tanev":              "Electronic",
+        "dan tanev":              "House",
         "andi vegas":             "Electronic",
         "sega sound team":        "Electronic",
-        "david lowe":             "Electronic",
-        "nando marttinez":        "Electronic",
+        "david lowe":             "House",
+        "nando marttinez":        "House",
         "dope (pt)":              "Electronic",
         "j. axel":                "Electronic",
-        "pato's groove":          "Electronic",
-        "diego bustamante":       "Electronic",
+        "pato's groove":          "House",
+        "diego bustamante":       "House",
         # ── Punjabi additions (2026-05-25 run 6) ──────────────────────────
         "sultaan":                "Punjabi",
         "pablo dutta":            "Punjabi",
@@ -771,7 +771,7 @@ class Config:
         "dennis lloyd":           "Pop",
         "the score":              "Pop",
         # ── Electronic additions (2026-05-25 run 6) ───────────────────────
-        "kastelo":                "Electronic",
+        "kastelo":                "House",
         # ── Pop additions (2026-05-25) ────────────────────────────────────
         "ellie goulding":         "Pop",
         "jung kook":              "Pop",
@@ -832,7 +832,7 @@ class Config:
         "lil wayne":              "Hip Hop",
         # ── Electronic (confirmed) ────────────────────────────────────────────
         "alan walker":            "Electronic",
-        "swedish house mafia":    "Electronic",
+        "swedish house mafia":    "House",
         "deadmau5":               "Electronic",
         "skrillex":               "Dubstep",
         "flume":                  "Electronic",

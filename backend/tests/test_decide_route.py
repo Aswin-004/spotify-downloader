@@ -58,8 +58,8 @@ class TestDecideRouteOrder(unittest.TestCase):
     def test_router_crash_is_contained_and_continues(self):
         def boom(**k):
             raise RuntimeError("mongo down")
-        r = _run(router=boom, evidence=lambda *a: ("Library/Trance", "evidence:x"))
-        self.assertEqual(r.path, "Library/Trance")
+        r = _run(router=boom, evidence=lambda *a: ("Library/House", "evidence:x"))
+        self.assertEqual(r.path, "Library/House")
 
     def test_memory_crash_is_contained_and_continues(self):
         def boom(a):
@@ -103,3 +103,19 @@ class TestHipHopSplitLivesInDecideRoute(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTranceIsTechno(unittest.TestCase):
+    """Owner's decision: Trance and Techno are one crate. Every list still says 'Trance'; the alias lives here."""
+
+    def test_router_trance_lands_in_techno(self):
+        r = _run(router=lambda **k: ("Library/Trance", 0.95, "artist_override"))
+        self.assertEqual(r.path, "Library/Techno")
+
+    def test_evidence_and_ai_trance_land_in_techno(self):
+        self.assertEqual(_run(evidence=lambda *a: ("Library/Trance", "evidence:x")).path, "Library/Techno")
+        self.assertEqual(_run(ai=lambda *a: ("Library/Trance", "ai:groq")).path, "Library/Techno")
+
+    def test_memory_trance_lands_in_techno(self):
+        r = _run(memory_lookup=lambda a: {"genre": "Trance", "confidence": 0.9}, router=_never, evidence=_never, ai=_never)
+        self.assertEqual(r.path, "Library/Techno")
