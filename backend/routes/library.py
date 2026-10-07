@@ -5,6 +5,7 @@ File browsing, artwork, audio preview, track tag editing, duplicate management,
 library organisation, and Rekordbox export.
 """
 import os
+import time
 from pathlib import Path
 from flask import Blueprint, jsonify, request, send_from_directory, Response
 
@@ -28,11 +29,41 @@ library_bp = Blueprint("library", __name__)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+_FILES_CACHE = {"sig": None, "at": 0.0, "files": []}
+_FILES_CACHE_MAX_AGE = 60.0     # seconds; folder signature below catches adds/moves/removes sooner
+
+
+def _library_signature():
+    """
+    Cheap fingerprint of the library: the modification time of every folder (a handful of stat calls).
+    NTFS bumps a folder's mtime when a file is added, removed or renamed in it, which is exactly when the
+    file list changes. Re-walking all ~2,800 files on EVERY /api/files request was the main reason the
+    Files page felt slow.
+    """
+    sig = []
+    for root, dirs, _files in os.walk(BASE_DOWNLOAD_DIR):
+        try:
+            sig.append((root, os.path.getmtime(root)))
+        except OSError:
+            pass
+    return tuple(sig)
+
+
 def _load_existing_files():
-    """Scan BASE_DOWNLOAD_DIR recursively for all .mp3 files."""
-    files = []
+    """Scan BASE_DOWNLOAD_DIR recursively for all .mp3 files (cached until a folder changes)."""
     if not os.path.isdir(BASE_DOWNLOAD_DIR):
-        return files
+        return []
+    sig = _library_signature()
+    now = time.time()
+    if _FILES_CACHE["sig"] == sig and now - _FILES_CACHE["at"] < _FILES_CACHE_MAX_AGE:
+        return list(_FILES_CACHE["files"])
+    files = _scan_existing_files()
+    _FILES_CACHE.update(sig=sig, at=now, files=files)
+    return list(files)
+
+
+def _scan_existing_files():
+    files = []
     for root, _dirs, filenames in os.walk(BASE_DOWNLOAD_DIR):
         for fname in filenames:
             if fname.lower().endswith(".mp3"):
@@ -121,6 +152,11 @@ def folder_tags():
 
 # ── Artwork + audio ───────────────────────────────────────────────────────────
 
+# A song with no cover answers 404 — but WITHOUT a cache header the browser re-asked for it every time its row
+# scrolled into view (~70 wasted requests per 10 minutes). Let the browser remember "no art" for an hour.
+_NO_ART = ("", 404, {"Cache-Control": "public, max-age=3600"})
+
+
 @library_bp.route("/api/artwork", methods=["GET"])
 def get_artwork():
     """Serve embedded album art (APIC frame) from an MP3 file."""
@@ -138,16 +174,19 @@ def get_artwork():
     try:
         from mutagen.id3 import ID3
         tags = ID3(full)
-        apic = tags.get("APIC:") or tags.get("APIC:Cover")
+        # Any picture frame, whatever its description ("APIC:", "APIC:Cover", "APIC:front"...): matching only
+        # two exact keys hid the art of every file tagged by another tool.
+        pics = tags.getall("APIC")
+        apic = next((p for p in pics if p.type == 3), pics[0] if pics else None)   # type 3 = front cover
         if not apic:
-            return "", 404
+            return _NO_ART
         return Response(
             apic.data,
             mimetype=apic.mime or "image/jpeg",
             headers={"Cache-Control": "public, max-age=86400"},
         )
     except Exception:
-        return "", 404
+        return _NO_ART
 
 
 @library_bp.route("/api/preview-track", methods=["GET"])

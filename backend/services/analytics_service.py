@@ -26,8 +26,21 @@ def _mb_cache():  # ANALYTICS
     return get_musicbrainz_cache_collection()  # ANALYTICS
 
 
+_OVERVIEW_CACHE = {"at": 0.0, "value": None}
+_OVERVIEW_TTL = 30.0   # seconds: five database counts (one a full distinct scan) per page load felt slow
+
+
 def get_overview_stats():  # ANALYTICS
-    """Return high-level dashboard statistics."""  # ANALYTICS
+    """Return high-level dashboard statistics (cached for _OVERVIEW_TTL seconds)."""
+    import time as _time
+    if _OVERVIEW_CACHE["value"] is not None and _time.time() - _OVERVIEW_CACHE["at"] < _OVERVIEW_TTL:
+        return dict(_OVERVIEW_CACHE["value"])
+    value = _compute_overview_stats()
+    _OVERVIEW_CACHE.update(at=_time.time(), value=value)
+    return dict(value)
+
+
+def _compute_overview_stats():  # ANALYTICS
     downloads = _downloads()  # ANALYTICS
     total = downloads.count_documents({})  # ANALYTICS
     tagged = downloads.count_documents({"tagging_report": {"$exists": True}})  # ANALYTICS
