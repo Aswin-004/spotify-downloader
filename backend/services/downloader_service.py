@@ -1282,6 +1282,15 @@ class DownloaderService:
         # ── CHANGED: 4-stage YouTube + SoundCloud fallback chain ───────
         stages = [
             (1, "Stage 1 (Official)", f"ytsearch10:{art} - {title} Official Audio", "exact",     "youtube"),
+            # "topic" surfaces the label-delivered album upload ("Artist - Topic") and film-song uploads whose
+            # length matches Spotify's; plain "Audio" searches mostly return shortened video edits (probe on 6
+            # failed songs, 2026-10-07: right-length candidates found for 5 of 6). Stage number 6 only labels the
+            # quality report; list position decides the order.
+            (6, "Stage 6 (Topic)",    f"ytsearch8:{art} {title} topic",             "approx",    "youtube"),
+            # The real YouTube Music "Songs" catalogue: album versions with Spotify-matching lengths (probe
+            # 2026-10-07: exact length for Nach Le Nach Le and Games, which no normal YouTube search found).
+            # Flat search results carry no length/artist, so _score_stage_candidates fills them in for the top hits.
+            (7, "Stage 7 (YT Music)", _ytmusic_songs_search_url(art, title),         "exact",     "youtube"),
             (2, "Stage 2 (Audio)",    f"ytsearch5:{art} - {title} Audio",           "approx",    "youtube"),
             (3, "Stage 3 (YT Music)", f"ytsearch5:{art} {title} youtube music",     "approx",    "youtube"),
             (4, "Stage 4 (Generic)",  f"ytsearch3:{title} {art}",                   "fallback",  "youtube"),
@@ -1292,15 +1301,6 @@ class DownloaderService:
         STAGE_CONFIDENT_ACCEPT_SCORE = 0.75
 
         # Candidates whose DOWNLOADED audio failed the AcoustID check (karaoke /
-            # "topic" surfaces the label-delivered album upload ("Artist - Topic") and film-song uploads whose
-            # length matches Spotify's; plain "Audio" searches mostly return shortened video edits (probe on 6
-            # failed songs, 2026-10-07: right-length candidates found for 5 of 6). Stage number 6 only labels the
-            # quality report; list position decides the order.
-            (6, "Stage 6 (Topic)",    f"ytsearch8:{art} {title} topic",             "approx",    "youtube"),
-            # The real YouTube Music "Songs" catalogue: album versions with Spotify-matching lengths (probe
-            # 2026-10-07: exact length for Nach Le Nach Le and Games, which no normal YouTube search found).
-            # Flat search results carry no length/artist, so _score_stage_candidates fills them in for the top hits.
-            (7, "Stage 7 (YT Music)", _ytmusic_songs_search_url(art, title),         "exact",     "youtube"),
         # wrong song). They are excluded from re-scoring so the next-best candidate
         # is tried instead of the same bad one being picked again.
         rejected_urls: set = set()
@@ -1457,6 +1457,9 @@ class DownloaderService:
         if not entries:
             raise Exception(f"[{source_name}] No search results")
 
+        if query.startswith(_YTMUSIC_SEARCH_PREFIX):
+            entries = self._enrich_ytmusic_entries(entries, source_name)
+
         logger.info(f"[{source_name}] Got {len(entries)} result(s), applying STRICT filters...")
 
         expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
@@ -1466,9 +1469,6 @@ class DownloaderService:
         for i, entry in enumerate(entries):
             if not entry:
                 continue
-
-        if query.startswith(_YTMUSIC_SEARCH_PREFIX):
-            entries = self._enrich_ytmusic_entries(entries, source_name)
 
             # QUALITY UPGRADE — pre-scoring blacklist filter
             yt_title_raw = entry.get("title", "")  # QUALITY UPGRADE
@@ -1511,17 +1511,7 @@ class DownloaderService:
 
         return best_candidate, best_score, selection_reason
 
-    def _verify_download(self, filename, actual_dir, spotify_title, artist, duration_ms, candidate):
-        """
-        Fingerprint the freshly downloaded file (AcoustID) and DISCARD it if the audio
-        is provably not the requested recording — a karaoke/instrumental re-recording,
-        a remix/live cut, or a different song. Title/duration scoring cannot see any
-        of those. Raises VerificationRejected after deleting the file; returns
-        normally for verified AND inconclusive results (no evidence never blocks a
-        download). The verdict is stored for the quality report.
-        See services/audio_verifier.py for the decision rules and safety design.
-        """
-    def _enrich_ytmusic_entries(self, entries, source_name, limit=5):
+    def _enrich_ytmusic_entries(self, entries, source_name, limit=8):   # 5 missed Games (I VM): search order varies
         """
         YouTube Music search results come back "flat": a title and an id, but no length and no artist. Fetch the
         metadata (NO download) for the top `limit` hits so the normal matcher can score them: length from the
@@ -1552,6 +1542,16 @@ class DownloaderService:
                 })
         return enriched
 
+    def _verify_download(self, filename, actual_dir, spotify_title, artist, duration_ms, candidate):
+        """
+        Fingerprint the freshly downloaded file (AcoustID) and DISCARD it if the audio
+        is provably not the requested recording — a karaoke/instrumental re-recording,
+        a remix/live cut, or a different song. Title/duration scoring cannot see any
+        of those. Raises VerificationRejected after deleting the file; returns
+        normally for verified AND inconclusive results (no evidence never blocks a
+        download). The verdict is stored for the quality report.
+        See services/audio_verifier.py for the decision rules and safety design.
+        """
         try:
             from services.audio_verifier import verify_recording, should_reject
         except Exception as exc:  # verifier unavailable — never block a download on it
@@ -1560,16 +1560,6 @@ class DownloaderService:
 
         filepath = os.path.abspath(os.path.join(actual_dir, filename))
         expected_secs = (duration_ms / 1000.0) if duration_ms and duration_ms > 0 else None
-        try:
-            result = verify_recording(filepath, spotify_title or "", artist or "", expected_secs)
-        except Exception as exc:  # verify_recording is designed never to raise; belt and braces
-            logger.warning(f"[verify] verifier crashed — skipping the audio check: {exc}")
-            return
-        self._last_audio_verification = result.to_dict()
-
-        if should_reject(result):
-            logger.warning(
-                f"[verify] REJECTED \"{candidate.get('title', '')}\" "
 
         # Length check FIRST (cheap, header only). The ingest validator rejects the same files later, but by then
         # this loop is over and the song just fails; raising here makes the next-best candidate get tried.
@@ -1593,6 +1583,16 @@ class DownloaderService:
 
                 raise VerificationRejected(candidate.get("url") or "", _WrongLength())
 
+        try:
+            result = verify_recording(filepath, spotify_title or "", artist or "", expected_secs)
+        except Exception as exc:  # verify_recording is designed never to raise; belt and braces
+            logger.warning(f"[verify] verifier crashed — skipping the audio check: {exc}")
+            return
+        self._last_audio_verification = result.to_dict()
+
+        if should_reject(result):
+            logger.warning(
+                f"[verify] REJECTED \"{candidate.get('title', '')}\" "
                 f"({candidate.get('uploader', '')}): {result.reason}"
             )
             try:
