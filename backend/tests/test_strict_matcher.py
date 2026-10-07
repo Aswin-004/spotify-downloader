@@ -376,9 +376,9 @@ class TestSearchStageSelection_DownloaderLevel(unittest.TestCase):
         )
 
         # Stage 2 hit the confident-accept bar (0.75) — it must win, and the
-        # loop must stop there (stages 3/4/5 never queried).
+        # loop must stop there (stages 3/4/5 never queried). The Topic and YT Music stages sit between 1 and 2.
         self.assertEqual(result, "FAKE_DOWNLOADED::Strong Confident Match")
-        self.assertEqual(call_log, ["Stage 1 (Official)", "Stage 2 (Audio)"])
+        self.assertEqual(call_log, ["Stage 1 (Official)", "Stage 6 (Topic)", "Stage 7 (YT Music)", "Stage 2 (Audio)"])
         self.assertEqual(len(self.finalize_calls), 1)
         self.assertEqual(self.finalize_calls[0][0]["title"], "Strong Confident Match")
 
@@ -408,6 +408,47 @@ class TestSearchStageSelection_DownloaderLevel(unittest.TestCase):
         self.assertEqual(len(self.finalize_calls), 1)
         self.assertEqual(self.finalize_calls[0][0]["title"], "Best Marginal")
 
+    def test_confident_topic_hit_stops_the_search_before_the_audio_stage(self):
+        stage_results = {"Stage 6 (Topic)": (candidate("Right Length Album Upload", 200), 0.9, "confident")}
+        call_log = []
+
+        def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None, exclude_urls=None):
+            call_log.append(source_name)
+            return stage_results.get(source_name, (None, 0.0, "no results"))
+
+        self.svc._score_stage_candidates = fake_score
+        self.svc._verify_download = lambda *a, **k: None
+        result = self.svc._download_from_youtube(
+            search_query="x", output_filename="out.mp3",
+            duration_ms=200_000, spotify_title="Right Length Album Upload", artist="Someone",
+        )
+        self.assertEqual(result, "FAKE_DOWNLOADED::Right Length Album Upload")
+        self.assertEqual(call_log, ["Stage 1 (Official)", "Stage 6 (Topic)"])
+
+    def test_wrong_length_download_is_discarded_and_next_candidate_is_tried(self):
+        from services.downloader_service import VerificationRejected
+
+        class _R:
+            reason = "57s shorter than Spotify's 337s"
+
+        bad, good = candidate("Short Film Edit", 280), candidate("Full Album Version", 337)
+        bad["url"], good["url"] = "https://y/bad", "https://y/good"
+
+        def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None, exclude_urls=None):
+            return (good if "https://y/bad" in (exclude_urls or set()) else bad), 0.9, "confident"
+
+        def fake_verify(filename, actual_dir, spotify_title, artist, duration_ms, cand):
+            if cand["url"] == "https://y/bad":
+                raise VerificationRejected(cand["url"], _R())
+
+        self.svc._score_stage_candidates = fake_score
+        self.svc._verify_download = fake_verify
+        result = self.svc._download_from_youtube(
+            search_query="x", output_filename="out.mp3",
+            duration_ms=337_000, spotify_title="Ek Ladki", artist="Someone",
+        )
+        self.assertEqual(result, "FAKE_DOWNLOADED::Full Album Version")
+
     def test_no_acceptable_candidate_across_all_stages_raises(self):
         def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None, exclude_urls=None):
             return None, 0.0, "nothing usable"
@@ -420,6 +461,48 @@ class TestSearchStageSelection_DownloaderLevel(unittest.TestCase):
                 duration_ms=200_000, spotify_title="Anything", artist="Someone",
             )
         self.assertEqual(self.finalize_calls, [])
+
+
+class TestYouTubeMusicStage(unittest.TestCase):
+    def test_search_url_targets_the_songs_tab_and_quotes_the_query(self):
+        from services.downloader_service import _ytmusic_songs_search_url, _YTMUSIC_SEARCH_PREFIX, _YTMUSIC_SONGS_FILTER
+        url = _ytmusic_songs_search_url("I VM", "Games & Co")
+        self.assertTrue(url.startswith(_YTMUSIC_SEARCH_PREFIX))
+        self.assertIn("q=I%20VM%20Games%20%26%20Co", url)
+        self.assertTrue(url.endswith("sp=" + _YTMUSIC_SONGS_FILTER))
+
+    def test_flat_hits_are_enriched_with_length_artist_and_plain_youtube_url(self):
+        from unittest import mock
+        svc = DownloaderService()
+        metas = {
+            "aaa": {"duration": 283, "artist": "Sukhwinder Singh", "track": "Nach Le Nach Le", "title": "x"},
+            "bbb": None,                                # unreadable -> dropped, never guessed
+            "ccc": {"duration": 0, "artist": "Nobody"},  # no length -> dropped
+        }
+
+        class FakeYDL:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def extract_info(self, url, download=False):
+                vid = url.rsplit("=", 1)[1]
+                if metas[vid] is None:
+                    raise RuntimeError("unavailable")
+                return metas[vid]
+
+        flat = [{"id": "aaa", "title": "Nach Le Nach Le"}, {"id": "bbb", "title": "b"}, {"id": "ccc", "title": "c"}, None, {"title": "no id"}]
+        with mock.patch("services.downloader_service.yt_dlp.YoutubeDL", FakeYDL):
+            out = svc._enrich_ytmusic_entries(flat, "Stage 7")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["duration"], 283)
+        self.assertEqual(out[0]["uploader"], "Sukhwinder Singh")
+        self.assertEqual(out[0]["webpage_url"], "https://www.youtube.com/watch?v=aaa")
+
+    def test_enriched_hit_with_exact_length_scores_as_a_confident_match(self):
+        score, rejections = score_candidate("Nach Le Nach Le", 283, "Nach Le Nach Le", "Sukhwinder Singh", 283,
+                                            uploader="Sukhwinder Singh")
+        self.assertEqual(rejections, [])
+        self.assertGreaterEqual(score, 0.75)
 
 
 if __name__ == "__main__":
@@ -507,5 +590,33 @@ class TestKaraokeChannelAndVariantGaps(unittest.TestCase):
         score, rejections = score_candidate(
             "Discovery", 200, "Discovery", "Daft Punk", 200, uploader="Discovery Music Group",
         )
+        self.assertEqual(rejections, [])
+        self.assertGreater(score, 0.5)
+
+
+class TestDurationLimitMatchesValidator(unittest.TestCase):
+    """The search stage must never pick a candidate the post-download validator will refuse."""
+
+    def test_limit_follows_validator_for_short_songs(self):
+        from services.strict_matcher import hard_duration_limit
+        from services.pipeline_guards import duration_tolerances
+        self.assertEqual(hard_duration_limit(146), duration_tolerances(146)[1])   # 30 s, not 60 s
+
+    def test_limit_never_exceeds_old_flat_ceiling(self):
+        from services.strict_matcher import hard_duration_limit
+        self.assertEqual(hard_duration_limit(900), HARD_DURATION_LIMIT_SEC)       # 15% of 900 s = 135 s -> capped at 60
+
+    def test_unknown_expected_duration_keeps_flat_ceiling(self):
+        from services.strict_matcher import hard_duration_limit
+        self.assertEqual(hard_duration_limit(None), HARD_DURATION_LIMIT_SEC)
+
+    def test_candidate_31s_off_a_146s_song_is_rejected_before_download(self):
+        # Real case from 2026-10-07 ("With You - Chloe"): passed the old 60 s gate, failed the validator.
+        score, rejections = score_candidate("Chloe - With You", 177, "With You", "Chloe", 146, uploader="Chloe")
+        self.assertEqual(score, 0.0)
+        self.assertIn("too far", " ".join(rejections))
+
+    def test_candidate_within_limit_still_accepted(self):
+        score, rejections = score_candidate("Chloe - With You", 148, "With You", "Chloe", 146, uploader="Chloe")
         self.assertEqual(rejections, [])
         self.assertGreater(score, 0.5)

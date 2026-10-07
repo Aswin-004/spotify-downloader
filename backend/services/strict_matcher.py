@@ -443,7 +443,22 @@ def final_duration_check(actual_sec: Optional[int], expected_sec: Optional[int])
     """
     if not actual_sec or not expected_sec:
         return True  # Can't check — allow
-    return abs(actual_sec - expected_sec) <= HARD_DURATION_LIMIT_SEC
+    return abs(actual_sec - expected_sec) <= hard_duration_limit(expected_sec)
+
+
+def hard_duration_limit(expected_sec: Optional[float]) -> float:
+    """
+    Largest length difference (s) a candidate may have and still be worth downloading.
+
+    Why: this gate used to be a flat 60 s while pipeline_guards.validate_download rejects a FILE more than
+    max(30 s, 15%) off Spotify's length. A candidate 31-60 s off passed here, was downloaded, and was then
+    thrown away by the validator, so the song failed and the next-best candidate was never tried (this is why
+    ~30 songs kept failing on 2026-10-07). One shared rule now: never download what the validator will refuse.
+    """
+    if not expected_sec:
+        return HARD_DURATION_LIMIT_SEC
+    from services.pipeline_guards import duration_tolerances  # lazy: keeps this module import-light
+    return min(HARD_DURATION_LIMIT_SEC, duration_tolerances(expected_sec)[1])
 
 
 def score_candidate(
@@ -533,9 +548,9 @@ def score_candidate(
             diff = abs(actual_duration_sec - expected_duration_sec)
             rejections.append(
                 f"Duration {actual_duration_sec}s too far from expected "
-                f"{expected_duration_sec}s (diff={diff}s, limit={HARD_DURATION_LIMIT_SEC}s)"
+                f"{expected_duration_sec}s (diff={diff}s, limit={hard_duration_limit(expected_duration_sec):.0f}s)"
             )
-            log_rejection(f"duration diff {diff}s > {HARD_DURATION_LIMIT_SEC}s", yt_title)
+            log_rejection(f"duration diff {diff}s > {hard_duration_limit(expected_duration_sec):.0f}s", yt_title)
             return 0.0, rejections
 
     # ── STEP 1 + 3: Clean titles and compute fuzzy scores ──

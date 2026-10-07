@@ -438,6 +438,15 @@ def _build_quality_report(  # QUALITY UPGRADE
     }
 
 
+_YTMUSIC_SEARCH_PREFIX = "https://music.youtube.com/search?"
+_YTMUSIC_SONGS_FILTER = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"   # YouTube Music's "Songs" tab
+
+
+def _ytmusic_songs_search_url(artist: str, title: str) -> str:
+    from urllib.parse import quote
+    return f"{_YTMUSIC_SEARCH_PREFIX}q={quote(f'{artist} {title}'.strip())}&sp={_YTMUSIC_SONGS_FILTER}"
+
+
 class VerificationRejected(Exception):
     """A downloaded file's audio fingerprint proved it is NOT the requested recording
     (karaoke / instrumental / another song). The file has already been discarded."""
@@ -1283,6 +1292,15 @@ class DownloaderService:
         STAGE_CONFIDENT_ACCEPT_SCORE = 0.75
 
         # Candidates whose DOWNLOADED audio failed the AcoustID check (karaoke /
+            # "topic" surfaces the label-delivered album upload ("Artist - Topic") and film-song uploads whose
+            # length matches Spotify's; plain "Audio" searches mostly return shortened video edits (probe on 6
+            # failed songs, 2026-10-07: right-length candidates found for 5 of 6). Stage number 6 only labels the
+            # quality report; list position decides the order.
+            (6, "Stage 6 (Topic)",    f"ytsearch8:{art} {title} topic",             "approx",    "youtube"),
+            # The real YouTube Music "Songs" catalogue: album versions with Spotify-matching lengths (probe
+            # 2026-10-07: exact length for Nach Le Nach Le and Games, which no normal YouTube search found).
+            # Flat search results carry no length/artist, so _score_stage_candidates fills them in for the top hits.
+            (7, "Stage 7 (YT Music)", _ytmusic_songs_search_url(art, title),         "exact",     "youtube"),
         # wrong song). They are excluded from re-scoring so the next-best candidate
         # is tried instead of the same bad one being picked again.
         rejected_urls: set = set()
@@ -1449,6 +1467,9 @@ class DownloaderService:
             if not entry:
                 continue
 
+        if query.startswith(_YTMUSIC_SEARCH_PREFIX):
+            entries = self._enrich_ytmusic_entries(entries, source_name)
+
             # QUALITY UPGRADE — pre-scoring blacklist filter
             yt_title_raw = entry.get("title", "")  # QUALITY UPGRADE
             if is_blacklisted(yt_title_raw, spotify_title or ""):  # QUALITY UPGRADE
@@ -1500,6 +1521,37 @@ class DownloaderService:
         download). The verdict is stored for the quality report.
         See services/audio_verifier.py for the decision rules and safety design.
         """
+    def _enrich_ytmusic_entries(self, entries, source_name, limit=5):
+        """
+        YouTube Music search results come back "flat": a title and an id, but no length and no artist. Fetch the
+        metadata (NO download) for the top `limit` hits so the normal matcher can score them: length from the
+        page, artist from the music metadata, and the plain youtube.com watch URL for the actual download.
+        Hits whose metadata cannot be read are dropped, never guessed.
+        """
+        enriched = []
+        opts = {'quiet': True, 'no_warnings': True, 'skip_download': True, 'socket_timeout': 15}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            for entry in [e for e in entries if e][:limit]:
+                vid = entry.get("id") or ""
+                if not vid:
+                    continue
+                try:
+                    meta = ydl.extract_info(f"https://music.youtube.com/watch?v={vid}", download=False)
+                except Exception as exc:
+                    logger.info(f"[{source_name}] metadata unavailable for {vid}: {str(exc)[:80]}")
+                    continue
+                if not meta or not meta.get("duration"):
+                    continue
+                enriched.append({
+                    "id": vid,
+                    "title": meta.get("track") or meta.get("title") or entry.get("title", ""),
+                    "duration": meta.get("duration"),
+                    "webpage_url": f"https://www.youtube.com/watch?v={vid}",
+                    "uploader": meta.get("artist") or meta.get("uploader") or "",
+                    "channel_is_verified": False,
+                })
+        return enriched
+
         try:
             from services.audio_verifier import verify_recording, should_reject
         except Exception as exc:  # verifier unavailable — never block a download on it
@@ -1518,6 +1570,29 @@ class DownloaderService:
         if should_reject(result):
             logger.warning(
                 f"[verify] REJECTED \"{candidate.get('title', '')}\" "
+
+        # Length check FIRST (cheap, header only). The ingest validator rejects the same files later, but by then
+        # this loop is over and the song just fails; raising here makes the next-best candidate get tried.
+        # diff_s != 0 means a real length rejection (other validator verdicts, e.g. non-mp3, are not ours to judge).
+        if expected_secs:
+            from services.pipeline_guards import validate_download
+            verdict = validate_download(filepath, expected_secs)
+            if not verdict.ok and verdict.diff_s:
+                logger.warning(f"[verify] REJECTED \"{candidate.get('title', '')}\" "
+                               f"({candidate.get('uploader', '')}): {verdict.reason}")
+                try:
+                    _retry_file_op(os.remove, filepath)
+                except Exception as rm_err:
+                    logger.warning(f"[verify] Could not delete rejected file {filepath}: {rm_err}")
+
+                class _WrongLength:          # the shape VerificationRejected's handlers read
+                    reason = verdict.reason
+
+                    def to_dict(self):
+                        return {"status": "rejected", "reason": verdict.reason}
+
+                raise VerificationRejected(candidate.get("url") or "", _WrongLength())
+
                 f"({candidate.get('uploader', '')}): {result.reason}"
             )
             try:
