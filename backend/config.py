@@ -380,7 +380,7 @@ class Config:
         # ── Electronic ───────────────────────────────────────────────────
         "kalera":               "Electronic",
         "kaléra":               "Electronic",
-        "ian asher":            "Electronic",
+        "ian asher":            "House",
         "skrillex":             "Dubstep",
         "hamdi":                "Dubstep",
         "upsidedown":           "Electronic",
@@ -622,6 +622,7 @@ class Config:
         "moderat":              "Electronic",
         # ── Afrobeats additions ────────────────────────────────────────────
         "shimza":               "Afrobeats",
+        "rafael":               "House",  # house/indie-dance DJ (Defected, Hot Creations, Three Six Zero); exact match, so pop artist AJ Rafael is unaffected
         "magic system":         "Afrobeats",
         "master kg":            "Afrobeats",
         "davido":               "Afrobeats",
@@ -650,7 +651,7 @@ class Config:
         "monica":               "R&B",
         # ── Remixers / producers with confirmed genre ─────────────────────
         "becker & vermont":     "Punjabi",
-        "marten lou":           "Punjabi",
+        "marten lou":           "House",   # deep/melodic house DJ (was wrongly Punjabi)
         # ── Punjabi additions (2026-05-25) ────────────────────────────────
         "bilal saeed":          "Punjabi",
         "prem dhillon":         "Punjabi",
