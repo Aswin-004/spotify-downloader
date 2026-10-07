@@ -272,6 +272,36 @@ def _acoustid_lookup_recordings(fingerprint: str, duration: float, api_key: str)
     return data.get("results") or []
 
 
+_FORGIVABLE_EDIT_TOKENS = frozenset({"edit", "radio"})
+
+
+def forgive_stock_edit_label(result: VerifyResult, expected_title: str,
+                             local_s: Optional[float], expected_s: Optional[float]) -> VerifyResult:
+    """
+    MusicBrainz often titles the ordinary single "Song (edit)" or "Song (radio edit)". Fingerprinting then calls
+    the official upload a "suspect version" and the download is thrown away (MEDUZA "Phone", 2026-10-07: the
+    official channel's upload, same length as Spotify's, rejected 9 times). The label alone proves nothing; the
+    LENGTH does: a genuinely different edit is not the same length as the Spotify release. So an 'edit'/'radio'
+    flag is forgiven when the file is within the normal accept tolerance of Spotify's length. Remix, live,
+    acoustic, karaoke, extended etc. are never forgiven here.
+    """
+    if result.status != "suspect_version" or not local_s or not expected_s:
+        return result
+    try:
+        from services.strict_matcher import version_mismatch
+        from services.pipeline_guards import duration_tolerances
+        flagged = version_mismatch(result.matched_title or "", expected_title)
+        if not flagged or not flagged <= _FORGIVABLE_EDIT_TOKENS:
+            return result
+        if abs(float(local_s) - float(expected_s)) > duration_tolerances(float(expected_s))[0]:
+            return result
+    except Exception:
+        return result
+    return VerifyResult("verified", result.confidence, result.matched_title, result.matched_artists,
+                        f"fingerprint matches; '{result.matched_title}' is only an edit label and the length "
+                        f"matches Spotify's ({float(local_s):.0f}s vs {float(expected_s):.0f}s)")
+
+
 def verify_recording(
     filepath: str,
     expected_title: str,
@@ -309,6 +339,7 @@ def verify_recording(
         return VerifyResult("inconclusive", reason=f"AcoustID lookup failed: {exc}")
 
     result = evaluate_lookup(results, expected_title, expected_artist)
+    result = forgive_stock_edit_label(result, expected_title, duration, expected_duration_sec)
     logger.info(
         f"[audio_verifier] {os.path.basename(filepath)} vs '{expected_title}' / '{expected_artist}' "
         f"-> {result.status} ({result.confidence:.2f}) {result.reason}"

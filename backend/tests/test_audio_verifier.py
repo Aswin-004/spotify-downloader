@@ -198,3 +198,42 @@ class TestVerifyRecordingIO(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestForgiveStockEditLabel(unittest.TestCase):
+    """MusicBrainz 'Song (edit)' on the ordinary single must not sink a file whose length matches Spotify's."""
+
+    @staticmethod
+    def _suspect(title, reason="x"):
+        return av.VerifyResult("suspect_version", 0.97, title, ["MEDUZA"], reason)
+
+    def test_edit_label_with_matching_length_is_verified(self):
+        r = av.forgive_stock_edit_label(self._suspect("Phone (edit)"), "Phone", 176.0, 177.0)
+        self.assertEqual(r.status, "verified")
+        self.assertFalse(r.is_bad)
+
+    def test_edit_label_with_different_length_stays_suspect(self):
+        r = av.forgive_stock_edit_label(self._suspect("Phone (edit)"), "Phone", 130.0, 177.0)
+        self.assertEqual(r.status, "suspect_version")
+
+    def test_remix_is_never_forgiven_even_at_same_length(self):
+        r = av.forgive_stock_edit_label(self._suspect("Phone (Kustaa Remix)"), "Phone", 177.0, 177.0)
+        self.assertEqual(r.status, "suspect_version")
+
+    def test_live_and_extended_are_never_forgiven(self):
+        for title in ("Phone (Live)", "Phone (Extended Mix)", "Phone (edit) (live)"):
+            r = av.forgive_stock_edit_label(self._suspect(title), "Phone", 177.0, 177.0)
+            self.assertEqual(r.status, "suspect_version", title)
+
+    def test_unknown_lengths_change_nothing(self):
+        for local, expected in ((None, 177.0), (177.0, None), (0, 177.0)):
+            r = av.forgive_stock_edit_label(self._suspect("Phone (edit)"), "Phone", local, expected)
+            self.assertEqual(r.status, "suspect_version")
+
+    def test_other_verdicts_pass_through_untouched(self):
+        mismatch = av.VerifyResult("mismatch", 0.95, "Other", ["Someone"], "different song")
+        self.assertIs(av.forgive_stock_edit_label(mismatch, "Phone", 177.0, 177.0), mismatch)
+
+    def test_requested_edit_in_spotify_title_is_not_a_mismatch_anyway(self):
+        r = av.VerifyResult("verified", 0.95, "Phone (edit)", ["MEDUZA"], "ok")
+        self.assertIs(av.forgive_stock_edit_label(r, "Phone (Edit)", 177.0, 177.0), r)
