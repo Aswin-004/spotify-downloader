@@ -123,15 +123,26 @@ class Classify(unittest.TestCase):
 
 class IngestAiRoute(unittest.TestCase):
     def test_confident_crate_is_used(self):
-        fake = lambda *a, **k: {"crate": "Indie", "confidence": 0.8}
-        self.assertEqual(ad._ai_route("rohh", "Qasme", "f.mp3", classify=fake), ("Library/Indie", "ai:groq"))
+        fake = lambda *a, **k: {"crate": "Punjabi", "confidence": 0.8}
+        self.assertEqual(ad._ai_route("rohh", "Qasme", "f.mp3", classify=fake), ("Library/Punjabi", "ai:groq"))
+
+    def test_crates_the_listener_is_blind_to_need_a_second_source(self):
+        # measured 2026-10-08: its House/Techno/UK Garage/Drum & Bass/Pop/Indie answers were mostly wrong
+        for crate in ("House", "Techno", "UK Garage", "Drum & Bass", "Pop", "Indie", "Bollywood"):
+            fake = lambda *a, _c=crate, **k: {"crate": _c, "confidence": 0.95}
+            self.assertEqual(ad._ai_route("a", "t", "f", classify=fake), ("", ""), crate)
+
+    def test_trusted_crate_list_can_be_overridden(self):
+        fake = lambda *a, **k: {"crate": "House", "confidence": 0.9}
+        with mock.patch.dict(os.environ, {"AI_ALONE_CRATES": "House, Dubstep"}):
+            self.assertEqual(ad._ai_route("a", "t", "f", classify=fake), ("Library/House", "ai:groq"))
 
     def test_unsure_electronic_or_nothing_stays_in_the_catch_all(self):
         for answer in ({"crate": "Indie", "confidence": 0.2}, {"crate": "Electronic", "confidence": 0.9}, {}):
             self.assertEqual(ad._ai_route("a", "t", "f", classify=lambda *a, **k: answer), ("", ""), answer)
 
     def test_floor_is_configurable(self):
-        fake = lambda *a, **k: {"crate": "House", "confidence": 0.5}
+        fake = lambda *a, **k: {"crate": "Tamil", "confidence": 0.5}
         with mock.patch.dict(os.environ, {"AI_MIN_CONFIDENCE": "0.6"}):
             self.assertEqual(ad._ai_route("a", "t", "f", classify=fake), ("", ""))
 

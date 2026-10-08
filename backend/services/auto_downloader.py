@@ -699,7 +699,8 @@ def _ai_route(artist, title, filepath, bpm=None, classify=None):
     """
     Groq listens to the song (Whisper: language, lyrics, vocals) and picks one of your crates
     (services/ai_listener.py). Returns ('Library/<crate>', 'ai:groq') or ('', '') when Groq is unavailable,
-    unsure (confidence below AI_MIN_CONFIDENCE, default 0.4) or says Electronic — the catch-all keeps its
+    unsure (confidence below AI_MIN_CONFIDENCE, default 0.4), says Electronic or names a crate it is blind to
+    (House/Techno/UK Garage/Drum & Bass/Pop/Indie/Bollywood: ai_listener.trusted_alone) — the catch-all keeps its
     routing_source=catchall tag then, so the hourly job looks at it again. `classify` is injectable for tests.
     """
     try:
@@ -709,12 +710,13 @@ def _ai_route(artist, title, filepath, bpm=None, classify=None):
     except Exception as exc:
         logger.debug(f"[ingest] AI routing unavailable: {exc}")
         return "", ""
-    crate = (answer or {}).get("crate", "")
     try:
         floor = float(os.getenv("AI_MIN_CONFIDENCE", "0.4"))
     except ValueError:
         floor = 0.4
-    if not crate or crate == "Electronic" or answer.get("confidence", 0) < floor:
+    from services.ai_listener import trusted_alone
+    crate = trusted_alone(answer, floor)             # only the crates the listener is right about (measured)
+    if not crate or crate == "Electronic":
         return "", ""
     return f"Library/{crate}", "ai:groq"
 

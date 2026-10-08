@@ -191,6 +191,25 @@ INDIC_LANGUAGES = frozenset({"Hindi", "Urdu", "Punjabi", "Panjabi", "Tamil", "Te
 # because only there does Whisper's language detection separate singing from a backing track.
 INDIC_VOCAL_CRATES = frozenset({"Bollywood", "Punjabi", "Tamil", "Indian Hip Hop"})
 
+# Crates the listener may file a song into ON ITS OWN. Measured 2026-10-08 on 84 songs from Aswin's library
+# (6 per crate): the listener alone was right 51% of the time. Its answers were right for these crates
+# (Dubstep 5/5, Tamil 4/4, Indian Hip Hop 3/3, Latin 3/3, R&B 2/2, Punjabi 4/5) and mostly wrong for the rest
+# (a "House" answer was right 5 times in 25; Techno, UK Garage and Drum & Bass were never right, they came
+# back as House/Pop/Indie). Its stated confidence did not tell right from wrong (>=0.8: 59%). So for any other
+# crate its answer is only a hint: the song stays in the Electronic catch-all, which the hourly job re-checks.
+# AI_ALONE_CRATES="A,B,C" overrides the list.
+_ALONE_DEFAULT = ("Dubstep", "Tamil", "Indian Hip Hop", "Latin", "R&B", "Punjabi")
+
+
+def trusted_alone(answer: Optional[dict], floor: float = 0.4) -> str:
+    """The crate to file by the listener's word alone, or '' (no answer, too unsure, or a crate it is blind to)."""
+    crate = (answer or {}).get("crate", "")
+    if not crate or (answer or {}).get("confidence", 0) < floor:
+        return ""
+    allowed = os.getenv("AI_ALONE_CRATES", "")
+    allowed = {c.strip().lower() for c in allowed.split(",") if c.strip()} or {c.lower() for c in _ALONE_DEFAULT}
+    return crate if crate.lower() in allowed else ""
+
 
 def is_instrumental(path: str, **kw) -> bool:
     """

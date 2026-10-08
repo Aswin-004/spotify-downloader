@@ -90,8 +90,9 @@ def _ai_catchall_route(fp, artist_name, title, tags):
             floor = float(os.getenv("AI_MIN_CONFIDENCE", "0.4"))
         except ValueError:
             floor = 0.4
-        crate = (answer or {}).get("crate", "")
-        if crate and crate != "Electronic" and answer.get("confidence", 0) >= floor:
+        from services.ai_listener import trusted_alone
+        crate = trusted_alone(answer, floor)         # only the crates the listener is right about (see ai_listener)
+        if crate and crate != "Electronic":
             return f"Library/{crate}", "ai:groq"
     except Exception as exc:
         logger.debug(f"[maintenance] Groq listening unavailable for {getattr(fp, 'name', fp)}: {exc}")
