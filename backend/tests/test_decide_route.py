@@ -8,6 +8,7 @@ import os
 import sys
 import unittest
 
+os.environ.setdefault("NEIGHBOUR_ROUTING", "false")   # unit tests must not scan the real library
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from services.auto_downloader import decide_route  # noqa: E402

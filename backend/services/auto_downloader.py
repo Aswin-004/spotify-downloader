@@ -762,16 +762,17 @@ def decide_route(*, hip_hop=None, **kwargs) -> Route:
 
 
 def _route_lists_evidence_ai(*, artist, title, artist_id, sp, filepath, bpm_hint=None, duration_ms=None, threshold=0.5,
-                             memory_lookup=None, router=None, evidence=None, ai=None) -> Route:
+                             memory_lookup=None, router=None, evidence=None, ai=None, neighbours=None) -> Route:
     """
     The single routing decision for a downloaded song NOT pinned by a folder or a genre playlist.
     First answer wins, in this order (docs/AUTOMATION.md):
 
       1. Your lists: what the app learned from your moves (artist memory, conf >= 0.5), then the router's
          override list / custom folders / knowledge base (and Spotify genres while Spotify still sends them).
-      2. Verified evidence vote (Last.fm + MusicBrainz + iTunes tags for THIS song, tempo...).
-      3. Groq listens to the song.
-      4. Electronic catch-all, re-checked hourly.
+      2. Where the artist's OTHER songs already live (>= 3 filed, >= 80% in one crate: 97% right on your library).
+      3. Verified evidence vote (Last.fm + MusicBrainz + iTunes tags for THIS song, tempo...).
+      4. Groq listens to the song.
+      5. Electronic catch-all, re-checked hourly.
 
     MusicBrainz used to be consulted FIRST at a fixed 0.9 confidence, so one loosely matched recording could
     outrank your own artist lists. It now only takes part in step 2. The four collaborators are injectable
@@ -799,6 +800,17 @@ def _route_lists_evidence_ai(*, artist, title, artist_id, sp, filepath, bpm_hint
             return Route(folder, spotify_conf, source, spotify_confidence=spotify_conf)
     except Exception as exc:
         logger.warning(f"[ingest] router failed for {artist!r}: {exc}")
+
+    try:
+        if neighbours is None:
+            from services.library_neighbours import neighbour_crate as neighbours
+        crate = neighbours(artist)
+        if crate:
+            from services.genre_router import _library_path
+            logger.info(f"[ingest] neighbours: {title} → {crate} (the artist's other songs live there)")
+            return Route(_library_path(crate), 0.9, "neighbours", "neighbours", spotify_confidence=spotify_conf)
+    except Exception as exc:
+        logger.debug(f"[ingest] neighbour lookup skipped: {exc}")
 
     path, method = (evidence or _evidence_route)(artist, title, filepath, bpm_hint, duration_ms)
     if path:
