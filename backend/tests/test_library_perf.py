@@ -49,9 +49,31 @@ class TestArtwork(unittest.TestCase):
             self.assertEqual(r.status_code, 200, desc)
             self.assertEqual(r.data, b"\xff\xd8jpeg")
 
-    def test_path_outside_the_library_is_still_refused(self):
-        r = _client().get("/api/artwork", query_string={"path": os.path.join(self.base, "..", "x.mp3")})
-        self.assertIn(r.status_code, (403, 404))
+    def test_path_outside_the_library_is_refused_even_when_the_file_exists(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        target = os.path.join(outside.name, "secret.mp3")
+        open(target, "wb").close()
+        tags = ID3()
+        tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="", data=b"SECRET"))
+        tags.save(target)
+        r = _client().get("/api/artwork", query_string={"path": target})
+        self.assertEqual(r.status_code, 403)
+        self.assertNotIn(b"SECRET", r.data)
+
+    def test_unreadable_file_is_not_cached_as_having_no_art(self):
+        open(os.path.join(self.base, "locked.mp3"), "wb").close()
+        with mock.patch("mutagen.id3.ID3", side_effect=PermissionError("locked")):
+            r = _client().get("/api/artwork", query_string={"path": "locked.mp3"})
+        self.assertEqual(r.status_code, 404)
+        self.assertNotIn("max-age", r.headers.get("Cache-Control", ""))
+
+    def test_file_with_no_tag_header_is_cacheable_no_art(self):
+        with open(os.path.join(self.base, "plain.mp3"), "wb") as f:
+            f.write(b"not an mp3 at all")
+        r = _client().get("/api/artwork", query_string={"path": "plain.mp3"})
+        self.assertEqual(r.status_code, 404)
+        self.assertIn("max-age=3600", r.headers.get("Cache-Control", ""))
 
 
 class TestFilesCache(unittest.TestCase):

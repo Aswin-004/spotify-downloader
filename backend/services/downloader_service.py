@@ -38,6 +38,7 @@ from services.strict_matcher import (
     clean_title,
     duration_match,
     final_duration_check,
+    hard_duration_limit,
     log_rejection,
     log_acceptance,
     string_similarity,
@@ -1306,6 +1307,11 @@ class DownloaderService:
         rejected_urls: set = set()
         MAX_VERIFY_REJECTS = 3
         verify_rejects = 0
+        # Wrong-LENGTH downloads (shortened video edits etc.) are counted apart from fingerprint rejections: they are
+        # common, cheap to recognise, and must not use up the 3-try fingerprint budget before the Topic and YouTube
+        # Music stages have even run (found in review 2026-10-08). The cap only bounds wasted downloads.
+        MAX_LENGTH_REJECTS = 8
+        length_rejects = 0
 
         # Best marginal (min_score <= score < confident bar) candidate seen
         # across all stages so far: {"candidate", "score", "stage_num",
@@ -1363,6 +1369,14 @@ class DownloaderService:
                     break  # done with this stage, no need to retry — got a scored result
                 except VerificationRejected as vr:
                     rejected_urls.add(vr.candidate_url)
+                    if getattr(vr.result, "is_length", False):
+                        length_rejects += 1
+                        logger.warning(f"{stage_name}: wrong-length download ({length_rejects}/{MAX_LENGTH_REJECTS}) — "
+                                       f"{vr.result.reason}. Trying the next best candidate.")
+                        if length_rejects >= MAX_LENGTH_REJECTS:
+                            raise Exception(f"No candidate with the right length for: {title} — {art} "
+                                            f"(last: {vr.result.reason})")
+                        continue
                     verify_rejects += 1
                     logger.warning(
                         f"{stage_name}: top candidate failed AUDIO verification "
@@ -1577,6 +1591,7 @@ class DownloaderService:
 
                 class _WrongLength:          # the shape VerificationRejected's handlers read
                     reason = verdict.reason
+                    is_length = True         # counted apart from fingerprint rejections
 
                     def to_dict(self):
                         return {"status": "rejected", "reason": verdict.reason}
@@ -1663,7 +1678,7 @@ class DownloaderService:
                 diff = abs(best_duration - int(expected_secs))
                 raise Exception(
                     f"[{source_name}] Final validation failed: duration diff {diff}s > "
-                    f"{HARD_DURATION_LIMIT_SEC}s for \"{candidate.get('title', '')}\""
+                    f"{hard_duration_limit(int(expected_secs)):.0f}s for \"{candidate.get('title', '')}\""
                 )
         elif expected_secs and not best_duration:
             # Candidate duration is unknown (common for SoundCloud scsearch results

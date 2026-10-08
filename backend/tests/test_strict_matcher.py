@@ -505,6 +505,78 @@ class TestYouTubeMusicStage(unittest.TestCase):
         self.assertGreaterEqual(score, 0.75)
 
 
+class TestLengthRejectionsDoNotUseTheFingerprintBudget(unittest.TestCase):
+    """Review 2026-10-08: three wrong-length downloads used to abort a song before later stages ran."""
+
+    def setUp(self):
+        self.svc = DownloaderService()
+        self.svc._finalize_and_download = lambda c, *a, **k: "FAKE::" + c["title"]
+
+    def test_four_wrong_length_candidates_then_a_good_one_still_succeeds(self):
+        from services.downloader_service import VerificationRejected
+
+        class _Len:
+            reason = "57s shorter than Spotify's"
+            is_length = True
+
+        urls = ["https://y/short%d" % i for i in range(4)]
+        cands = {}
+        for i, u in enumerate(urls):
+            c = candidate("Short %d" % i, 280)
+            c["url"] = u
+            cands[u] = c
+        good = candidate("Full Version", 337)
+        good["url"] = "https://y/good"
+
+        def fake_score(query, source_name, duration_ms=None, spotify_title=None, artist=None, exclude_urls=None):
+            for u in urls:
+                if u not in (exclude_urls or set()):
+                    return cands[u], 0.9, "confident"
+            return good, 0.9, "confident"
+
+        def fake_verify(filename, actual_dir, spotify_title, artist, duration_ms, cand):
+            if cand["url"] in cands:
+                raise VerificationRejected(cand["url"], _Len())
+
+        self.svc._score_stage_candidates = fake_score
+        self.svc._verify_download = fake_verify
+        out = self.svc._download_from_youtube(search_query="x", output_filename="o.mp3", duration_ms=337_000,
+                                              spotify_title="Ek Ladki", artist="Someone")
+        self.assertEqual(out, "FAKE::Full Version")
+
+    def test_real_verify_download_removes_the_short_file_and_raises(self):
+        import tempfile
+        from unittest import mock
+        from services.downloader_service import VerificationRejected
+        from services.pipeline_guards import Verdict
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "x.mp3")
+            with open(p, "wb") as f:
+                f.write(b"fake")
+            bad = Verdict(False, False, "57s shorter than Spotify's 337s", 280.0, -57.0)
+            with mock.patch("services.pipeline_guards.validate_download", return_value=bad):
+                with self.assertRaises(VerificationRejected) as cm:
+                    self.svc._verify_download("x.mp3", d, "Ek Ladki", "Someone", 337_000, {"title": "t", "url": "u"})
+            self.assertTrue(getattr(cm.exception.result, "is_length", False))
+            self.assertFalse(os.path.exists(p))
+
+    def test_non_length_verdict_does_not_reject_on_length(self):
+        import tempfile
+        from unittest import mock
+        from services.pipeline_guards import Verdict
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "x.mp3")
+            with open(p, "wb") as f:
+                f.write(b"fake")
+            unreadable = Verdict(False, False, "not a readable mp3 (X)")      # diff_s == 0: not a length problem
+            from services.audio_verifier import VerifyResult
+            with mock.patch("services.pipeline_guards.validate_download", return_value=unreadable), \
+                 mock.patch("services.audio_verifier.verify_recording", return_value=VerifyResult("inconclusive")) as fp:
+                self.svc._verify_download("x.mp3", d, "T", "A", 200_000, {"title": "t", "url": "u"})   # must not raise
+            fp.assert_called_once()                                           # it moved on to the fingerprint step
+            self.assertTrue(os.path.exists(p))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
@@ -600,7 +672,8 @@ class TestDurationLimitMatchesValidator(unittest.TestCase):
     def test_limit_follows_validator_for_short_songs(self):
         from services.strict_matcher import hard_duration_limit
         from services.pipeline_guards import duration_tolerances
-        self.assertEqual(hard_duration_limit(146), duration_tolerances(146)[1])   # 30 s, not 60 s
+        self.assertEqual(hard_duration_limit(146), 30)                    # 30 s, not the old flat 60 s
+        self.assertEqual(hard_duration_limit(146), duration_tolerances(146)[1])
 
     def test_limit_never_exceeds_old_flat_ceiling(self):
         from services.strict_matcher import hard_duration_limit

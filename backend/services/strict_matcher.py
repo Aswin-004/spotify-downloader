@@ -439,7 +439,7 @@ def duration_match(actual_duration_sec: int, expected_duration_sec: int) -> Tupl
 def final_duration_check(actual_sec: Optional[int], expected_sec: Optional[int]) -> bool:
     """
     Step 10: Final hard validation before download.
-    Reject if duration difference exceeds HARD_DURATION_LIMIT_SEC (90s).
+    Reject if the difference exceeds hard_duration_limit() (30-60 s, tied to the validator's tolerance).
     """
     if not actual_sec or not expected_sec:
         return True  # Can't check — allow

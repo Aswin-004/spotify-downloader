@@ -71,11 +71,15 @@ def _scan_existing_files():
                 rel_folder = os.path.relpath(root, BASE_DOWNLOAD_DIR)
                 if rel_folder == ".":
                     rel_folder = ""
+                try:
+                    mtime = os.path.getmtime(full)
+                except OSError:          # a staging file can vanish between the walk and the stat
+                    continue
                 files.append({
                     "name": fname,
                     "folder": rel_folder,
                     "path": full,
-                    "mtime": os.path.getmtime(full),
+                    "mtime": mtime,
                 })
     files.sort(key=lambda f: f["mtime"], reverse=True)
     return files
@@ -172,8 +176,11 @@ def get_artwork():
     if not os.path.isfile(full):
         return "", 404
     try:
-        from mutagen.id3 import ID3
-        tags = ID3(full)
+        from mutagen.id3 import ID3, ID3NoHeaderError
+        try:
+            tags = ID3(full)
+        except ID3NoHeaderError:
+            return _NO_ART                       # a file with no tags at all really has no cover
         # Any picture frame, whatever its description ("APIC:", "APIC:Cover", "APIC:front"...): matching only
         # two exact keys hid the art of every file tagged by another tool.
         pics = tags.getall("APIC")
@@ -186,7 +193,7 @@ def get_artwork():
             headers={"Cache-Control": "public, max-age=86400"},
         )
     except Exception:
-        return _NO_ART
+        return "", 404                           # unreadable right now (locked, mid-write): do NOT let the browser cache it
 
 
 @library_bp.route("/api/preview-track", methods=["GET"])
